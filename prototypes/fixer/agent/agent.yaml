@@ -1,0 +1,19 @@
+name: fixer-proto
+version: 0.0.1
+kind: llm
+description: Prototype fixer for ADR 0001; fixes one reported defect in a sandboxed work tree.
+model: claude-sonnet-5-5 # verified by prototypes/fixer/test_fixer_live.py
+effort: xhigh
+system_prompt: system.md
+schemas: schemas.py
+input_model: FixInput
+output_model: FixReport
+tools:
+  allow: [fs.list_files, fs.read_file, fs.write_file, shell.run]
+  deny: []
+limits:
+  max_tool_turns: 25
+  timeout_s: 600
+  max_output_tokens: 8192
+evals:
+  min_pass_rate: 0.75
