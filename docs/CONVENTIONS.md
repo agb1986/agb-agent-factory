@@ -26,7 +26,7 @@ Each section states one rule and gives a minimal example. A ticket that has to i
 | --- | --- |
 | `agents/<name>/` | One agent: `agent.yaml`, `system.md` (LLM only), `schemas.py` (LLM only), `evals/cases.yaml` |
 | `registry/` | Manifest loading, semver resolution, `LLMSpec` and `JevSpec` |
-| `runtime/` | `runner.py` (LLM), `jev_runner.py` (Jev), `gates.py`, `trace.py`, `pricing.py` |
+| `runtime/` | `runner.py` (LLM) with `hooks.py` and `errors.py`, `jev_runner.py` (Jev), `gates.py`, `trace.py`, `pricing.py` |
 | `tools/` | Registry of scoped tool implementations, read-only by default |
 | `pipelines/` | `review_panel.py`, `fix_loop.py` |
 | `evals/` | Eval runner and calibration data |
@@ -57,14 +57,14 @@ An LLM agent reasons, may call scoped tools, and returns a Pydantic model throug
 | `schemas` | Path to the module that defines the input and output models, relative to the manifest's directory |
 | `input_model`, `output_model` | Names of Pydantic model classes in `schemas` |
 | `tools.allow`, `tools.deny` | Dotted tool names; see [Tools](#tools) |
-| `limits.max_tool_turns` | Most tool-use turns in one run |
-| `limits.timeout_s` | Wall-clock limit for one run, in seconds |
+| `limits.max_tool_turns` | Most tool-use turns in one run. A turn is one assistant message that stops with `tool_use`, however many calls it holds |
+| `limits.timeout_s` | Wall-clock limit for one run, in seconds, and the timeout of each request |
 | `limits.max_output_tokens` | `max_tokens` for each request |
 | `evals.min_pass_rate` | Eval pass rate the publish gate requires, from 0 to 1 |
 
 Unknown keys are an error, so a typo never falls back to a default. Later tickets add fields and document them here: an optional `guard` agent address (#23), and `limits.max_retries` and `limits.max_tokens_total` (#25).
 
-The resolver validates a manifest as it loads it. `name` is lowercase words joined by hyphens and equals the agent's directory name. Tool names must match the dotted form, and a name in both `allow` and `deny` is an error; an absent `tools` block means no tools. `system_prompt` and `schemas` must be relative paths that stay inside the agent directory and name files that exist. `schemas.py` is imported by file path, and `input_model` and `output_model` must name Pydantic models in it. Whether a tool name is known to `tools/registry.py` is not checked yet; #5 adds that check when it wires the two together. The `JevSpec` placeholder in `registry/spec.py` accepts the keys listed under `kind: jev` and validates only the shared fields until #16 completes it.
+The resolver validates a manifest as it loads it. `name` is lowercase words joined by hyphens and equals the agent's directory name. Tool names must match the dotted form, and a name in both `allow` and `deny` is an error; an absent `tools` block means no tools. `system_prompt` and `schemas` must be relative paths that stay inside the agent directory and name files that exist. `schemas.py` is imported by file path, and `input_model` and `output_model` must name Pydantic models in it. The resolver does not check that a tool name is known to `tools/registry.py`; the runner does when a run starts, and an unknown name raises `UnknownToolError` (exit 3). The `JevSpec` placeholder in `registry/spec.py` accepts the keys listed under `kind: jev` and validates only the shared fields until #16 completes it.
 
 ```yaml
 name: code-reviewer
@@ -169,9 +169,11 @@ Any change to a prompt, schema or question bumps the version in the same commit.
 
 An LLM agent returns exactly its output model, through structured outputs (`output_config.format`). The runtime validates the result with Pydantic:
 
-- On a validation error, it sends the error back to the model once and asks again.
-- A second failure raises `AgentError` carrying the transcript so far. Nothing falls back silently.
-- The stop reasons `refusal` and `max_tokens` raise their own typed errors and are not retried as validation failures. For a refusal, the error carries `stop_details.category`.
+- The answer is the text of the final assistant message, the one that stops with `end_turn` or `stop_sequence`.
+- On a validation error, it sends the field paths and messages back to the model once, without the values, and asks for the corrected JSON object.
+- A second failure raises `OutputValidationError`, an `AgentError` carrying the transcript so far. Nothing falls back silently.
+- The stop reasons `refusal` and `max_tokens` raise their own typed errors and are not retried as validation failures. A refusal raises `RefusalError`, which carries `stop_details.category`. `max_tokens` and `model_context_window_exceeded` raise `OutputTruncatedError`, which carries the stop reason.
+- `pause_turn` continues the loop. Any other stop reason raises `ModelAPIError`, and so does a loop that ends without a final answer. That includes `compaction`, since the runner does not enable compaction.
 - There is no `submit_result` tool and no forced `tool_choice`. Current models answer `tool_choice` of type `any` or `tool` with a 400, and they also reject an assistant prefill.
 
 Let the SDK build `format` from the Pydantic model rather than hand-writing the schema:
@@ -190,9 +192,16 @@ Never send `temperature`, `top_p` or `top_k`; current models reject them with a 
 Every request sends:
 
 - `thinking: {"type": "adaptive"}`;
-- `output_config.effort` from the manifest. Always set it explicitly, because the default differs between models.
+- `output_config.effort` from the manifest. Always set it explicitly, because the default differs between models;
+- `max_tokens` from `limits.max_output_tokens`;
+- the system prompt as one text block with `cache_control: {"type": "ephemeral"}`. A prompt shorter than the model's minimum cacheable prefix is sent but not cached.
 
-`runtime/runner.py` builds every request in one place, and its tests assert that the forbidden keys never appear.
+`build_request` in `runtime/runner.py` builds every request in one place, and its tests assert that the keys in `FORBIDDEN_REQUEST_KEYS` never appear. Besides the sampling keys, that set holds `tool_choice` and the SDK runner's `max_iterations`, because the runner counts tool turns itself against `limits.max_tool_turns`. Thinking blocks go back to the model unchanged, signatures included.
+
+Two arguments go to the SDK's tool runner rather than onto the wire:
+
+- `thread=False`, so every turn sends the full history. The runner holds no server-side thread, and its transcript alone can replay a conversation.
+- `timeout=limits.timeout_s`, for each request. The runner also checks a deadline of `limits.timeout_s` after each turn, and either one raises `AgentTimeoutError`. The SDK's default of two retries can repeat a request that timed out, so a run can overshoot `timeout_s` before it fails; `limits.max_retries` (#25) will bound that.
 
 ```json
 {
@@ -212,14 +221,36 @@ Manifests name tools with dots: `<group>.<action>`, lowercase, with no double un
 Allow and deny rules:
 
 - `tools.allow` is the complete set of tools an agent gets.
-- `tools.deny` is checked again at call time. A call to a denied or unlisted tool is refused with an error tool result and never runs.
-- At load time, an unknown name in either list is an error, and so is a name that appears in both.
+- The runner gives the SDK only the allowed tools, so a call to a denied, unlisted or made-up tool gets the SDK's not-found error tool result and never runs.
+- A name that appears in both lists is an error at load time. An unknown name in either list is an error when a run starts.
 - Tools are read-only. A tool that writes may be allowed only for an agent that runs inside the sandbox (#24), behind the action guard (#23).
 - A tool reads only inside the repository root it is given. A path that escapes the root, whether through `..`, an absolute path or a symlink, is rejected with a typed error. Subprocesses run from an argument list, never through a shell, and output is capped with a truncation marker.
 
 A tool implementation is a function `impl(repo_path, **arguments, max_bytes=MAX_OUTPUT_BYTES) -> str`. The definition in `TOOLS` lists only the arguments the model supplies; the runner passes `repo_path` itself and never forwards a model-supplied `max_bytes`. `repo_path` must be the top of a git work tree. A path is resolved against the real disk and must stay inside it, but an absolute or `..` path that ends up inside is accepted. Output beyond `MAX_OUTPUT_BYTES` (64 KiB) is cut on a character boundary and ends with one line, `[truncated: N bytes dropped, limit M bytes]`. Every failure is a `ToolError` subclass from `tools/_common.py`, so the runner can turn one clause into an error tool result, and its exit code follows the usual bases (`PathEscapeError` and `ToolInputError` 2, `ToolNotFoundError` and `UnknownToolError` 3, a missing `git` or `rg` 4). `tools.dotted_name(wire)` raises `UnknownToolError` for a name the model made up.
 
-The runner calls a hook around every tool execution; #5 documents its protocol (`before_tool`, `after_tool`, `ToolDecision`) here.
+The runner calls a hook around every tool execution. The protocol is `ToolHook` in `runtime/hooks.py`, and `run(..., hook=...)` takes a new one per run; the default, `AllowAll`, allows everything.
+
+- For each call the runner builds a `ToolCall` with the dotted `name`, the model's `arguments` and the calling `agent` address, and asks `before_tool(call)`. It returns `ToolDecision.allow()` or `ToolDecision.deny(message)`.
+- A denied call never runs. Its message goes back to the model as an error tool result, and `after_tool` is not called. A denial never ends a run by itself.
+- An allowed call has its arguments checked against the tool's schema and then runs. The hook sees `after_tool(call, ToolResult(content, is_error))` with what went back to the model.
+- A `ToolError` from a tool goes back to the model as an error result, `message (hint: ...)`. `ToolUnavailableError` (a missing `git` or `rg`) ends the run instead, since the model cannot work around it.
+- A hook that must end the run, such as the action guard (#23), raises a `FactoryError` from `before_tool`. `run` re-raises it unchanged once the turn is over. Any other exception from a hook or a tool ends the run with `ToolCrashError`, the original exception as its `__cause__`.
+- Once a run is ending, any further calls in the same turn get the error result `not run: the run is ending`.
+
+```python
+class CountDenials:
+    def __init__(self) -> None:
+        self.denied = 0
+
+    def before_tool(self, call: ToolCall) -> ToolDecision:
+        if call.name == "rg.search":
+            self.denied += 1
+            return ToolDecision.deny("rg.search is off for this run")
+        return ToolDecision.allow()
+
+    def after_tool(self, call: ToolCall, result: ToolResult) -> None:
+        return None
+```
 
 ```yaml
 tools:
@@ -268,6 +299,8 @@ Decision(skip=False, escalate=True, route=("code-reviewer", "security-reviewer")
 
 Every agent run, successful or not, writes exactly one row to the DuckDB trace store. The default path is `data/traces.duckdb`, overridden by an argument or by `FACTORY_TRACE_DB` (#6).
 
+The LLM runner writes the row in a `finally` block, so a failed run still records its usage and `error` as `<ErrorClass>: <message>`. Usage is summed over every response, the validation retry included. Two checks come before the run starts and write no row, because there is nothing valid to record: a payload that fails the input model, and a missing `repo_path` for an agent that allows tools. Both raise `UsageError`.
+
 | Column | Type | Meaning |
 | --- | --- | --- |
 | `run_id` | VARCHAR | UUID of this run |
@@ -293,7 +326,7 @@ A `Trace` holds one DuckDB connection for its lifetime and opens it on first use
 
 - Store keys with `agb sys secrets set <NAME>`, which writes them to a mode-600 `secrets.env`.
 - The factory never reads that file. Whoever starts the factory exports the key: the shell, CI, or the `agb factory` wrapper (#30).
-- A missing key raises `AuthOrConfigError` (exit 4) with a hint that names the variable, never its value.
+- A missing key raises `AuthOrConfigError` (exit 4) with a hint that names the variable, never its value. So does a key the API rejects with a 401 or 403, with the same hint.
 - No secret goes into the repository, a test, a config file, a container image, a trace row, a log line or an error message.
 - Tests that need a live key carry the `live` marker; `tests/conftest.py` skips them when `ANTHROPIC_API_KEY` is unset. #17 extends that hook so Jev live tests skip without the Jev key.
 
@@ -357,6 +390,18 @@ A failure the user or agent should see is a `FactoryError` with a one-line `mess
 | `AuthOrConfigError` | 4 |
 
 Later typed errors subclass one of these. A resolver miss (`AgentNotFound`, `VersionNotFound`) is a `NotFoundError`; a missing key is an `AuthOrConfigError`; `AgentError`, `JevError`, `GuardError` and `BudgetExceeded` are `FactoryError`s.
+
+`runtime/errors.py` holds the failures of an LLM run. Each is an `AgentError` (exit 1) with the agent's `name@version` address as `agent` and the messages so far as `transcript`, in the shape the Messages API takes, thinking signatures kept:
+
+| Error | Raised when | Extra attribute |
+| --- | --- | --- |
+| `OutputValidationError` | The answer failed the output model twice | |
+| `RefusalError` | The model stopped with `refusal` | `category` |
+| `OutputTruncatedError` | A reply hit `max_tokens` or the context window | `stop_reason` |
+| `TurnLimitError` | The model asked for more than `limits.max_tool_turns` tool turns | `limit` |
+| `AgentTimeoutError` | A request timed out, or the run passed `limits.timeout_s` | `timeout_s` |
+| `ToolCrashError` | A tool or hook raised something other than a `ToolError` or `FactoryError` | `tool` |
+| `ModelAPIError` | Any other API error, an unexpected stop reason, or no final answer | |
 
 The CLI's root handler in `main()` maps any exception raised by a command with `exit_code()` and, under `--json`, renders it with `error_envelope()`; without `--json` it prints the message and, if there is one, `hint: <hint>` to stderr. An invalid manifest, or a file it points to, raises `ManifestError`, an `AuthOrConfigError` (exit 4) whose one-line message starts with the manifest path and names the field.
 
