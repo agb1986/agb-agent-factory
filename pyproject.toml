@@ -36,7 +36,7 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 # Flat layout: `factory/` sits at the repository root next to `registry/`, `runtime/` and the rest.
 module-root = ""
-module-name = ["factory", "registry", "runtime", "tools"]
+module-name = ["evals", "factory", "registry", "runtime", "tools"]
 
 [tool.ruff]
 line-length = 100
@@ -56,5 +56,5 @@ markers = [
 
 [tool.coverage.run]
 # `fixtures/` is measured too, but its source trees are data, not code under test.
-source = ["factory", "fixtures", "registry", "runtime", "tools"]
+source = ["evals", "factory", "fixtures", "registry", "runtime", "tools"]
 omit = ["fixtures/src/*", "fixtures/handmade/*", "fixtures/repos/*"]
