@@ -47,6 +47,27 @@ def build_parser() -> argparse.ArgumentParser:
     publish_parser.add_argument(
         "--workers", type=int, default=4, help="cases to run at once (default: %(default)s)"
     )
+    review_parser = sub.add_parser(
+        "review",
+        help="review a change with the reviewer panel and the judge",
+        epilog="example: factory review ./repo --base main --head feature --json",
+    )
+    review_parser.add_argument("repo_path", help="path of the git repository to review")
+    review_parser.add_argument("--base", required=True, help="git ref the change starts from")
+    review_parser.add_argument("--head", required=True, help="git ref under review")
+    review_parser.add_argument(
+        "--json", action="store_true", help="print one JSON document on stdout instead of text"
+    )
+    review_parser.add_argument(
+        "--reviewers",
+        type=lambda value: value.split(","),
+        help="comma-separated reviewers to run (default: every reviewer of the panel)",
+    )
+    review_parser.add_argument(
+        "--allow-unpublished",
+        action="store_true",
+        help="also use agent versions that have not passed `factory publish-check`",
+    )
     return parser
 
 
@@ -69,6 +90,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _eval(args.agent, as_json=args.json, workers=args.workers)
         if args.command == "publish-check":
             return _publish_check(args.agent, as_json=args.json, workers=args.workers)
+        if args.command == "review":
+            return _review(args)
     except Exception as exc:  # noqa: BLE001 - the root handler maps every failure to a code
         return _fail(exc, as_json=getattr(args, "json", False))
     parser.print_usage(sys.stderr)
@@ -98,6 +121,20 @@ def _publish_check(agent: str, *, as_json: bool, workers: int) -> int:
     from registry.published import command  # imported here: it pulls in the Anthropic SDK
 
     return command(agent, as_json=as_json, workers=workers)
+
+
+def _review(args: argparse.Namespace) -> int:
+    """Run the review panel on a change; the text or JSON report goes to stdout."""
+    from pipelines.review_panel import command  # imported here: it pulls in the Anthropic SDK
+
+    return command(
+        args.repo_path,
+        base=args.base,
+        head=args.head,
+        as_json=args.json,
+        reviewers=args.reviewers,
+        allow_unpublished=args.allow_unpublished,
+    )
 
 
 def _fail(exc: Exception, *, as_json: bool) -> int:
