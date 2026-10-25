@@ -84,3 +84,16 @@ class ToolCrashError(AgentError):
 
 class ModelAPIError(AgentError):
     """The Messages API returned an error other than an authentication or permission failure."""
+
+
+class TokenLimitError(AgentError):
+    """The run used more tokens than the manifest's `limits.max_tokens_total`.
+
+    `limit` is the cap and `used` the tokens counted when the run stopped. The transcript is the
+    partial one, up to and including the turn that passed the cap.
+    """
+
+    def __init__(self, message: str, *, limit: int, used: int, **kwargs: Any) -> None:
+        super().__init__(message, **kwargs)
+        self.limit = limit
+        self.used = used
