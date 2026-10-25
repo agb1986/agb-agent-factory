@@ -7,7 +7,7 @@ Refresh the files with `pytest tests/test_golden_cli.py --update-golden`; see `t
 
 import json
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -226,3 +226,45 @@ def test_triage_json(
     (fixture,) = build(["mixed"], dest=tmp_path / "repos")
     argv = ["triage", str(fixture.path), "--base", "base", "--head", "head"]
     golden("triage", _run([*argv, "--allow-unpublished", "--json"], capsys))
+
+
+# --- cost
+
+COST_T0 = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
+# A day of work: two pipelines, an eval run, a publish run and a loose, unpriced run.
+COST_RUNS: list[tuple[str, str, str | None, float | None, str | None]] = [
+    ("r1", "code-reviewer@1.2.0", "pipe-1", 0.012345, None),
+    ("r2", "perf-reviewer@0.3.0", "pipe-1", 0.0231, None),
+    ("r3", "judge@1.0.0", "pipe-1", 0.004, None),
+    ("r4", "code-reviewer@1.2.0", "pipe-2", 0.0119, None),
+    ("r5", "code-reviewer@1.2.0", None, 0.3, "eval:code-reviewer@1.2.0"),
+    ("r6", "code-reviewer@1.2.0", None, 0.2, "eval:code-reviewer@1.2.0"),
+    ("r7", "fixer@0.1.0", None, 0.45, "publish:fixer@0.1.0"),
+    ("r8", "diff-triage@0.1.0", None, None, None),
+]
+
+
+def test_cost_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    golden: Golden,
+) -> None:
+    path = tmp_path / "traces.duckdb"
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(path))
+    with Trace(path) as trace:
+        for minute, (run_id, agent_ref, pipeline, cost, tag) in enumerate(COST_RUNS, start=1):
+            trace.record(
+                TraceRow(
+                    run_id=run_id,
+                    pipeline_run_id=pipeline,
+                    agent_ref=agent_ref,
+                    kind="llm",
+                    started_at=COST_T0 + timedelta(minutes=minute),
+                    duration_ms=900,
+                    input_json={},
+                    cost_usd=cost,
+                    tag=tag,
+                )
+            )
+    golden("cost", _run(["cost", "--since", "2026-10-20", "--json"], capsys))
