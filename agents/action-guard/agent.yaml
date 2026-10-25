@@ -1,0 +1,19 @@
+name: action-guard
+version: 0.1.0
+kind: llm
+description: Decides whether one tool call that changes something is safe to run inside the worktree.
+model: claude-haiku-5-5 # verified by tests/live/test_action_guard_live.py
+effort: low
+system_prompt: system.md
+schemas: schemas.py
+input_model: GuardInput
+output_model: GuardOutput
+tools:
+  allow: []
+  deny: []
+limits:
+  max_tool_turns: 1
+  timeout_s: 30
+  max_output_tokens: 1000
+evals:
+  min_pass_rate: 0.75
