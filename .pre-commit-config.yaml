@@ -20,3 +20,10 @@ repos:
         types: [python]
         pass_filenames: false
         require_serial: true
+      - id: version-bump
+        name: agent version bump
+        entry: uv run python scripts/check_version_bump.py
+        language: system
+        files: ^agents/
+        pass_filenames: false
+        require_serial: true
