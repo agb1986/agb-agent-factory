@@ -288,6 +288,8 @@ A fixture is a directory `fixtures/src/<name>/` holding a `base/` tree, a `head/
 
 `defects.yaml` lists the planted defects: `id`, `file`, `line_start`, `line_end` (1-based, inclusive, in the head tree), `severity` (`info`, `minor`, `major` or `blocker`, as in a finding), `category` (a lowercase slug; so far `logic`, `style`, `security`, `performance`, `testing`), `title`, `description` and a `snippet` that must appear inside the window. The list is empty for a fixture a reviewer should pass without findings. The build fails when a window has drifted off its code. Source trees are linted and type-checked with the rest of the repository, so a planted defect must be one ruff and ty accept.
 
+A reviewer that works on one kind of defect names the categories it may use in its own `system.md`; `Finding.category` stays a free string and gains no enum. The performance reviewer uses `algorithmic-complexity`, `n-plus-one`, `missing-index`, `unbounded-memory`, `blocking-call` and, when none of those fits, `performance`, so a fixture planted for it takes its `category` from that list (`performance` is also what the older `n-plus-one` fixture records). Because the reviewers run in the same eval harness, a perf fixture's defect is graded on file, line window and severity, not on the category string.
+
 ```yaml
 fixture: off-by-one
 summary: Running-sum rewrite that drops the last window.
