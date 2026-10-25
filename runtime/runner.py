@@ -110,9 +110,10 @@ def run(
     `UsageError` before anything is sent or traced. `repo_path` is the repository root the tools
     read; it is required when the agent allows any tool, and leaving it out is a `UsageError`
     that is not traced either. `hook` sees every tool call (default `AllowAll`); pass a new one
-    per run. `client` defaults to one built from `ANTHROPIC_API_KEY`, and a missing key raises
-    `AuthOrConfigError`. `pipeline_run_id` and `tag` (for example `eval:code-reviewer@1.2.0`) land
-    in the trace row.
+    per run. When the spec has a `guard`, the action guard (`runtime.guard`) wraps `hook`: `hook`
+    decides first, and a call it allows then goes to the guard. `client` defaults to one built
+    from `ANTHROPIC_API_KEY`, and a missing key raises `AuthOrConfigError`. `pipeline_run_id` and
+    `tag` (for example `eval:code-reviewer@1.2.0`) land in the trace row.
 
     Past those two checks, exactly one row is written to `trace`, whether the run succeeds or
     fails. Raises the `runtime.errors.AgentError` subclasses for failures of the run itself,
@@ -126,6 +127,19 @@ def run(
             hint="pass repo_path, the top of the git work tree the tools read",
         )
     run_id = str(uuid.uuid4())
+    if spec.guard is not None:
+        from runtime.guard import build_guard_hook  # guard imports this module
+
+        hook = build_guard_hook(
+            spec,
+            trace,
+            parent_run_id=run_id,
+            repo_path=repo_path,
+            pipeline_run_id=pipeline_run_id,
+            tag=tag,
+            inner=hook,
+            client=client,
+        )
     started_at = datetime.now(UTC)
     start = time.monotonic()
     state = _RunState(
