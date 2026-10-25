@@ -31,6 +31,7 @@ from registry.common_schemas import ReviewInput, ReviewOutput
 from registry.jev_spec import JevOutput, JevSpec
 from registry.resolver import resolve
 from registry.spec import LLMSpec
+from runtime.budget import DEFAULT_BUDGET_USD, Budget, BudgetExceeded
 from runtime.gates import ROUTE_ONLY, Decision, decide, jev_error
 from runtime.jev_runner import run_jev
 from runtime.runner import API_KEY_ENV, run
@@ -319,14 +320,17 @@ def run_triage(
     pipeline_run_id: str,
     *,
     jev_runner: JevRunner = run_jev,
+    budget: Budget | None = None,
 ) -> TriageResult:
     """Ask the Jev agent `spec` about `diff` and turn its answers into a `Decision`.
 
-    The Jev call writes its own trace row with the real cost under `pipeline_run_id`. This function
-    adds one more, tagged `triage:decision`, with the decision and the probabilities. The input
-    counts as truncated when the tool cut the diff or the Jev runner cut the text it sent. Any
-    exception from the call, such as a missing key or a failed request, gives the escalating
-    `jev_error` decision and the caller carries on; it is not raised.
+    The Jev call writes its own trace row with the real cost under `pipeline_run_id`, and charges
+    that cost to `budget` when one is given. This function adds one more row, tagged
+    `triage:decision`, with the decision and the probabilities. The input counts as truncated when
+    the tool cut the diff or the Jev runner cut the text it sent. Any exception from the call, such
+    as a missing key or a failed request, gives the escalating `jev_error` decision and the caller
+    carries on; it is not raised. `BudgetExceeded` is the one exception: it propagates, because a
+    panel that is out of money must stop rather than go on to the reviewers.
     """
     started_at = datetime.now(UTC)
     start = time.monotonic()
@@ -341,7 +345,10 @@ def run_triage(
             {"files": "\n".join(files), "diff": diff},
             capture,
             pipeline_run_id=pipeline_run_id,
+            budget=budget,
         )
+    except BudgetExceeded:
+        raise
     except Exception as exc:  # noqa: BLE001 - a failed triage escalates, it does not stop the panel
         error = f"{type(exc).__name__}: {exc}"
     if output is None:
@@ -391,6 +398,7 @@ def run_panel(
     runner: Runner = run,
     jev_runner: JevRunner = run_jev,
     pipeline_run_id: str | None = None,
+    budget: Budget | None = None,
 ) -> PanelResult:
     """Review the change from `base` to `head` of the repository at `repo_path`.
 
@@ -399,7 +407,9 @@ def run_panel(
     holds the decision is information only and every selected reviewer runs. The reviewers run in
     a thread pool, and each `runner` call gets the same `pipeline_run_id`, as does the judge's, so
     the trace holds one row per agent under that id. A reviewer that raises is reported in the
-    judge's input as failed, and the panel goes on, as it does when triage fails. Raises
+    judge's input as failed, and the panel goes on, as it does when triage fails, except one that
+    ran out of budget: every run, triage's and the judge's too, is charged to `budget` (default:
+    `DEFAULT_BUDGET_USD`) and the first to pass it ends the panel with `BudgetExceeded`. Raises
     `ToolNotFoundError` for an unknown repository or ref, `FactoryError` (exit 1) when every
     reviewer failed, and whatever the judge's run raises.
     """
@@ -408,8 +418,9 @@ def run_panel(
     start = time.monotonic()
     run_id = pipeline_run_id or new_pipeline_run_id()
     diff = show_diff(repo_path, base, head, max_bytes=MAX_OUTPUT_BYTES)
+    budget = budget or Budget(DEFAULT_BUDGET_USD)
     triaged = (
-        run_triage(panel.triage, diff, trace, run_id, jev_runner=jev_runner)
+        run_triage(panel.triage, diff, trace, run_id, jev_runner=jev_runner, budget=budget)
         if panel.triage is not None
         else DISABLED
     )
@@ -418,8 +429,12 @@ def run_panel(
 
     def review(spec: LLMSpec) -> ReviewerResult:
         try:
-            output = runner(spec, payload, shared, repo_path=repo_path, pipeline_run_id=run_id)
+            output = runner(
+                spec, payload, shared, repo_path=repo_path, pipeline_run_id=run_id, budget=budget
+            )
             return ReviewerResult(spec, ReviewOutput.model_validate(output.model_dump()), None)
+        except BudgetExceeded:
+            raise
         except Exception as exc:  # noqa: BLE001 - a failed reviewer is reported, not fatal
             return ReviewerResult(spec, None, f"{type(exc).__name__}: {exc}")
 
@@ -446,6 +461,7 @@ def run_panel(
         shared,
         repo_path=repo_path,
         pipeline_run_id=run_id,
+        budget=budget,
     )
     return PanelResult(
         pipeline_run_id=run_id,
@@ -470,6 +486,7 @@ def command(
     reviewers: Sequence[str] | None = None,
     allow_unpublished: bool = False,
     no_triage: bool = False,
+    budget_usd: float | None = None,
 ) -> int:
     """Run `factory review`: review `base..head` of `repo_path` with the panel and report it.
 
@@ -478,7 +495,8 @@ def command(
 
     Prose goes to stderr under `as_json`, where stdout gets exactly one JSON document, also when
     the change does not ship. Without it the text report goes to stdout. Returns 0 when the change
-    ships and 1 when it does not.
+    ships and 1 when it does not. `budget_usd` caps the spend of the whole run (default:
+    `DEFAULT_BUDGET_USD`); passing it raises `BudgetExceeded`, exit 1, with the spend so far.
     """
     panel = resolve_panel(reviewers, allow_unpublished=allow_unpublished, triage=not no_triage)
     if not os.environ.get(API_KEY_ENV):
@@ -486,8 +504,11 @@ def command(
             f"{API_KEY_ENV} is not set",
             hint=f"store it with `agb sys secrets set {API_KEY_ENV}` and export it",
         )
+    budget = Budget(DEFAULT_BUDGET_USD if budget_usd is None else budget_usd)
     with Trace() as trace:
-        result = run_panel(panel, repo_path, base, head, trace, runner=run, jev_runner=run_jev)
+        result = run_panel(
+            panel, repo_path, base, head, trace, runner=run, jev_runner=run_jev, budget=budget
+        )
     if as_json:
         print(result.text(), file=sys.stderr)
         print(json.dumps(result.to_json()))

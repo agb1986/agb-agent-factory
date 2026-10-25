@@ -18,6 +18,7 @@ from factory.exit import ExitCode, UsageError
 from fixtures.build import FixtureNotFound
 from registry.resolver import AGENTS_DIR, resolve
 from registry.spec import LLMSpec
+from runtime.budget import DEFAULT_BUDGET_USD, Budget, BudgetExceeded
 from runtime.errors import RefusalError
 from runtime.trace import Trace
 
@@ -249,6 +250,31 @@ def test_a_usage_error_from_the_runner_ends_the_eval(
     answers = GOOD | {"off-by-one": UsageError("bad payload")}
     with pytest.raises(UsageError):
         _evaluate(spec, cases, trace, fixture_paths, FakeRunner(spec, answers), workers=1)
+
+
+def test_a_budget_error_from_the_runner_ends_the_eval_instead_of_failing_the_case(
+    spec: LLMSpec, cases: list[Case], trace: Trace, fixture_paths: dict[str, Path]
+) -> None:
+    answers = GOOD | {"off-by-one": BudgetExceeded(1.0, 1.1)}
+    with pytest.raises(BudgetExceeded):
+        _evaluate(spec, cases, trace, fixture_paths, FakeRunner(spec, answers), workers=1)
+
+
+def test_every_case_is_charged_to_one_budget(
+    spec: LLMSpec, cases: list[Case], trace: Trace, fixture_paths: dict[str, Path]
+) -> None:
+    runner = FakeRunner(spec)
+    budget = Budget(2.0)
+    _evaluate(spec, cases, trace, fixture_paths, runner, budget=budget)
+    assert {id(call["budget"]) for call in runner.calls} == {id(budget)}
+
+
+def test_the_default_budget_is_the_pipeline_default(
+    spec: LLMSpec, cases: list[Case], trace: Trace, fixture_paths: dict[str, Path]
+) -> None:
+    runner = FakeRunner(spec)
+    _evaluate(spec, cases, trace, fixture_paths, runner)
+    assert runner.calls[0]["budget"].usd == DEFAULT_BUDGET_USD
 
 
 # --- refusals before any model call
