@@ -16,6 +16,7 @@ from factory.exit import AuthOrConfigError, ExitCode, FactoryError, UsageError
 from registry import JevSpec
 from registry.resolver import resolve
 from runtime import jev_runner, jev_transport
+from runtime.budget import Budget, BudgetExceeded
 from runtime.jev_runner import (
     API_KEY_ENV,
     MAX_ATTEMPTS,
@@ -752,3 +753,45 @@ def test_an_end_to_end_run_through_the_sdk_transport(
     assert output.model_dump()["reviewers"]["answer"] == "code-perf"
     (row,) = rows(trace)
     assert row["input_tokens"] == 50 and row["decision_json"]["model"] == MODEL
+
+
+# --- the budget ----------------------------------------------------------------------------------
+
+ONE_RUN_USD = cost_usd(MODEL, TokenUsage(input_tokens=120)) or 0.0
+
+
+def test_a_run_is_charged_to_the_budget(triage: JevSpec, trace: Trace) -> None:
+    budget = Budget(1.0)
+    go(triage, FakeTransport(response()), trace, budget=budget)
+    assert budget.spent == pytest.approx(ONE_RUN_USD)
+
+
+def test_the_run_that_passes_the_budget_raises_after_its_row_is_written(
+    triage: JevSpec, trace: Trace
+) -> None:
+    budget = Budget(ONE_RUN_USD * 1.5)
+    go(triage, FakeTransport(response()), trace, budget=budget)
+    with pytest.raises(BudgetExceeded):
+        go(triage, FakeTransport(response()), trace, budget=budget)
+    assert len(rows(trace)) == 2
+
+
+def test_a_spent_budget_refuses_the_run_before_the_request(triage: JevSpec, trace: Trace) -> None:
+    budget = Budget(0.5)
+    budget.add(0.5)
+    transport = FakeTransport(response())
+    with pytest.raises(BudgetExceeded):
+        go(triage, transport, trace, budget=budget)
+    assert transport.calls == []
+    assert rows(trace) == []
+
+
+def test_a_failed_run_is_charged_and_keeps_its_own_error(triage: JevSpec, trace: Trace) -> None:
+    budget = Budget(1.0)
+    with pytest.raises(JevError):
+        go(triage, FakeTransport(status_error(400)), trace, budget=budget)
+    assert budget.spent == cost_usd(MODEL, TokenUsage())
+
+
+def test_the_attempt_count_is_the_module_constant() -> None:
+    assert MAX_ATTEMPTS == 3
