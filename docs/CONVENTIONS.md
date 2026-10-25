@@ -63,6 +63,8 @@ An LLM agent reasons, may call scoped tools, and returns a Pydantic model throug
 
 Unknown keys are an error, so a typo never falls back to a default. Later tickets add fields and document them here: an optional `guard` agent address (#23), and `limits.max_retries` and `limits.max_tokens_total` (#25).
 
+The resolver validates a manifest as it loads it. `name` is lowercase words joined by hyphens and equals the agent's directory name. Tool names must match the dotted form, and a name in both `allow` and `deny` is an error; an absent `tools` block means no tools. `system_prompt` and `schemas` must be relative paths that stay inside the agent directory and name files that exist. `schemas.py` is imported by file path, and `input_model` and `output_model` must name Pydantic models in it. Whether a tool name is known to `tools/registry.py` is not checked yet; #5 adds that check when it wires the two together. The `JevSpec` placeholder in `registry/spec.py` accepts the keys listed under `kind: jev` and validates only the shared fields until #16 completes it.
+
 ```yaml
 name: code-reviewer
 version: 1.2.0
@@ -153,6 +155,8 @@ Pipelines and manifests refer to an agent as `name@^MAJOR.MINOR`. The resolver t
 - `^0.m` means `>=0.m.0,<0.(m+1).0`, because before 1.0 a minor bump may break callers. `^0.3` matches 0.3.0 and 0.3.7, but not 0.4.0.
 - Pre-release versions never match.
 - When nothing matches, the resolver raises a `NotFoundError` (exit 3) that lists the versions it found.
+
+`^MAJOR.MINOR` is the only range form; `1.2`, `~1.2`, `^1` and `^1.2.3` raise `InvalidRange` (exit 2). `resolve(name, range)` returns an `LLMSpec` or `JevSpec`. For an LLM agent the attributes #5 reads are `model`, `effort`, `tools.allow`, `tools.deny`, `limits.*`, `system_prompt_file`, and the loaded classes `input_class` and `output_class`; `input_model` and `output_model` stay the class names from the manifest. A missing agent raises `AgentNotFound`; a range with no match raises `VersionNotFound`, whose `available` attribute and hint list the versions found.
 
 A resolved agent is written `name@MAJOR.MINOR.PATCH`, for example `code-reviewer@1.2.0`. That is the form in trace rows and tags.
 
@@ -291,6 +295,8 @@ Every command has the form `factory <verb> [args] [--json]`.
 - On an error under `--json`, stdout stays empty and stderr ends with the envelope from `error_envelope()` on one line. Without `--json`, stderr gets the message and, if there is one, the hint.
 - Usage errors that argparse catches itself print its usage message instead, and still exit 2.
 
+`factory list` prints one `name@version<TAB>kind` line per version found, lowest version first within each agent, and under `--json` the document `{"agents": [{"name", "version", "kind"}]}`.
+
 ```console
 $ factory list --json
 {"agents": [{"name": "code-reviewer", "version": "1.2.0", "kind": "llm"}]}
@@ -329,9 +335,11 @@ A failure the user or agent should see is a `FactoryError` with a one-line `mess
 | `NotFoundError` | 3 |
 | `AuthOrConfigError` | 4 |
 
-Later typed errors subclass one of these. A resolver miss is a `NotFoundError`; a missing key is an `AuthOrConfigError`; `AgentError`, `JevError`, `GuardError` and `BudgetExceeded` are `FactoryError`s.
+Later typed errors subclass one of these. A resolver miss (`AgentNotFound`, `VersionNotFound`) is a `NotFoundError`; a missing key is an `AuthOrConfigError`; `AgentError`, `JevError`, `GuardError` and `BudgetExceeded` are `FactoryError`s.
 
-The CLI's root handler maps any exception with `exit_code()` and, under `--json`, renders it with `error_envelope()`. No command can raise yet, so the handler is not wired; the first command that can (most likely `factory list --json` in #4) adds it to `main()`. `known_exceptions()` lists the foreign types that have a code:
+The CLI's root handler in `main()` maps any exception raised by a command with `exit_code()` and, under `--json`, renders it with `error_envelope()`; without `--json` it prints the message and, if there is one, `hint: <hint>` to stderr. An invalid manifest, or a file it points to, raises `ManifestError`, an `AuthOrConfigError` (exit 4) whose one-line message starts with the manifest path and names the field.
+
+`known_exceptions()` lists the foreign types that have a code:
 
 - `argparse.ArgumentError` exits 2.
 - `anthropic.AuthenticationError` and `anthropic.PermissionDeniedError` exit 4.
