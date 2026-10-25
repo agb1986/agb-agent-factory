@@ -55,11 +55,17 @@ class ToolsSpec(_Model):
 
 
 class LimitsSpec(_Model):
-    """The `limits` block: hard caps on one run. All three are required and positive."""
+    """The `limits` block: hard caps on one run.
+
+    The first three are required and positive. `max_tokens_total` is an optional cap on all the
+    tokens a run spends, input and output together; the manifest declares it and the retry and
+    budget work (#25) enforces it, so the runner does not read it yet.
+    """
 
     max_tool_turns: int = Field(gt=0)
     timeout_s: int = Field(gt=0)
     max_output_tokens: int = Field(gt=0)
+    max_tokens_total: int | None = Field(default=None, gt=0)
 
 
 class WeightsSpec(_Model):
@@ -121,6 +127,8 @@ class LLMSpec(AgentSpecBase):
     `scoring` is optional and only an agent whose output carries scores, such as the judge, sets it.
     `guard` is optional and names the action-guard agent, as `name@^MAJOR.MINOR`, that must allow
     each of this agent's tool calls that is not read-only; see `runtime.guard`.
+    `sandbox` says the agent runs where it may write files and run commands: only then does the
+    tool registry hand out the sandbox-only tools (`fs.write_file`, `shell.run`).
     """
 
     kind: Literal["llm"]
@@ -134,6 +142,7 @@ class LLMSpec(AgentSpecBase):
     limits: LimitsSpec
     scoring: ScoringSpec | None = None
     guard: AgentRange | None = None
+    sandbox: bool = False
 
     _input_class: type[BaseModel] | None = PrivateAttr(default=None)
     _output_class: type[BaseModel] | None = PrivateAttr(default=None)

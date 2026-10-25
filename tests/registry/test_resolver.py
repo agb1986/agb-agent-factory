@@ -95,6 +95,34 @@ def test_resolve_exposes_attributes_and_loaded_classes(
     assert spec.system_prompt_file.read_text() == "You review diffs.\n"
 
 
+def test_sandbox_and_total_token_cap_default_to_off(
+    make_agent: MakeAgent, agents_dir: Path
+) -> None:
+    make_agent("reviewer", "1.2.0")
+    spec = resolve("reviewer", "^1.2", agents_dir)
+    assert isinstance(spec, LLMSpec)
+    assert spec.sandbox is False
+    assert spec.limits.max_tokens_total is None
+
+
+def test_sandbox_and_total_token_cap_are_read(make_agent: MakeAgent, agents_dir: Path) -> None:
+    make_agent(
+        "fixer",
+        "1.0.0",
+        edit=lambda t: (
+            t.replace(
+                "  max_output_tokens: 1024\n",
+                "  max_output_tokens: 1024\n  max_tokens_total: 9000\n",
+            )
+            + "sandbox: true\n"
+        ),
+    )
+    spec = resolve("fixer", "^1.0", agents_dir)
+    assert isinstance(spec, LLMSpec)
+    assert spec.sandbox is True
+    assert spec.limits.max_tokens_total == 9000
+
+
 def test_unloaded_spec_has_no_classes(make_agent: MakeAgent) -> None:
     path = make_agent("reviewer", "1.2.0")
     spec = resolve("reviewer", "^1.2", path.parent.parent)
@@ -267,6 +295,8 @@ def test_path_is_not_a_manifest_key(make_agent: MakeAgent, agents_dir: Path) -> 
         ("min_pass_rate: 0.75", "min_pass_rate: 1.5", "evals.min_pass_rate"),
         ("timeout_s: 60", "timeout_s: 0", "limits.timeout_s"),
         ("  max_tool_turns: 4\n", "", "limits.max_tool_turns"),
+        ("timeout_s: 60", "timeout_s: 60\n  max_tokens_total: 0", "limits.max_tokens_total"),
+        ("effort: high\n", "effort: high\nsandbox: maybe\n", "sandbox"),
         ("effort: high\n", "", "effort"),
         ("deny: []", "deny: [git.read_file]", "tools"),
         ("allow: [git.read_file]", "allow: [git__read_file]", "tools.allow.0"),
