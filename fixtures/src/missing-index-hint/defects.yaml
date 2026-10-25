@@ -1,0 +1,17 @@
+fixture: missing-index-hint
+summary: >-
+  Adds the handle_unread request handler, which filters notifications by user_id. The migration
+  that creates the table indexes only the primary key.
+defects:
+  - id: unindexed-user-id-lookup
+    file: notifications/handlers.py
+    line_start: 17
+    line_end: 20
+    severity: major
+    category: missing-index
+    title: Per-request query filters on an unindexed column
+    snippet: "WHERE user_id = ?"
+    description: >-
+      The handler runs on every page load and filters on user_id, but migrations/0001 creates no
+      index on it, so each request scans the whole table. Add a migration with
+      CREATE INDEX notifications_user_id ON notifications (user_id, read_at).

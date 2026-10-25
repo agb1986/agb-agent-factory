@@ -1,0 +1,18 @@
+fixture: quadratic-loop
+summary: >-
+  Adds duplicate_ids, which compares every id with every later id in a nested loop. A set finds
+  the repeats in one pass.
+defects:
+  - id: nested-loop-over-same-list
+    file: dedupe/ids.py
+    line_start: 20
+    line_end: 23
+    severity: major
+    category: algorithmic-complexity
+    title: Quadratic duplicate search over the same list
+    snippet: "for second in ids[index + 1 :]:"
+    description: >-
+      Each id is compared with every later id, and the `not in duplicates` test scans a list as
+      well, so the cost grows with the square of the batch size. A batch of 200,000 ids means
+      about 2 * 10^10 comparisons on every upload. A `seen` set and a `duplicates` dict do the same
+      work in one pass.
