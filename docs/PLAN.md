@@ -43,16 +43,16 @@ Python 3.14 managed by uv. `anthropic`, `pydantic>=2`, `pyyaml`, `packaging`, `d
 
 ## Phases
 
-| Phase | Milestone | Scope |
-| --- | --- | --- |
-| 1 Scaffold | Phase 1 | Conventions, package, tools registry, resolver, Tool Runner runtime, trace with cost, first reviewer end to end |
-| 2 Evals | Phase 2 | Eval runner, fixture repositories with planted defects, publish gate |
-| 3 Review panel | Phase 3 | Judge, security and performance reviewers, parallel panel pipeline |
-| 4 Jev gate | Phase 4 | Timeboxed spike, `JevSpec`, `jev_runner.py`, gates, triage route-only, judge gate, calibration and shadow mode |
-| 5 Fix loop | Phase 5 | Fixer runtime decision, test-writer and fixer agents, action guard, sandboxed fix loop |
-| 6 Harden | Phase 6 | Retries and cost guard, async, test harness and CI, deployment, release hygiene, `agb factory` wrapper |
+| Phase | Milestone | Issues | Scope |
+|---|---|---|---|
+| 1 Scaffold | Phase 1 | #1 to #7 | Conventions, package, tools registry, resolver, Tool Runner runtime, trace with cost, first reviewer end to end |
+| 2 Evals | Phase 2 | #8 to #10 | Eval runner, fixture repositories with planted defects, publish gate |
+| 3 Review panel | Phase 3 | #11 to #14 | Judge, security and performance reviewers, parallel panel pipeline |
+| 4 Jev gate | Phase 4 | #15 to #20 | Timeboxed spike, `JevSpec`, `jev_runner.py`, gates, triage route-only, judge gate, calibration and shadow mode |
+| 5 Fix loop | Phase 5 | #21 to #24 | Fixer runtime decision, test-writer and fixer agents, action guard, sandboxed fix loop |
+| 6 Harden | Phase 6 | #25 to #30 | Retries and cost guard, async, test harness and CI, deployment, release hygiene, `agb factory` wrapper |
 
-Issue numbers per phase are in the milestone views on GitHub.
+Each milestone on GitHub lists its issues; the ranges above are the initial set and later issues are added to the milestone, not to this table.
 
 ## Definition of done for an agent
 
