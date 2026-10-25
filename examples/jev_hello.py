@@ -4,7 +4,7 @@
 # ///
 """Ask Jev one Noul question and print p. Export TYPESAFE_API_KEY, then `uv run` this file."""
 
-from typesafe_sdk import Noul, TypeSafeClient  # ty: ignore[unresolved-import]
+from typesafe_sdk import Noul, TypeSafeClient
 
 with TypeSafeClient(model="jev-1.14.0") as client:  # reads TYPESAFE_API_KEY
     response = client.system_one(

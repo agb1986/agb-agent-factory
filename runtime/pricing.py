@@ -1,6 +1,6 @@
 """Per-model token prices and the cost of one run.
 
-Prices are configuration, not code: edit `PRICES` when Anthropic changes them, and update the
+Prices are configuration, not code: edit `PRICES` when a vendor (Anthropic, TypeSafe for Jev) changes them, and update the
 "checked" date on the entry. A model without an entry costs `None`, never zero, so a missing price
 shows up in the trace as a null `cost_usd` instead of a free run.
 
@@ -56,6 +56,8 @@ _PRICES: dict[str, ModelPrice] = {
     "claude-sonnet-5-5": ModelPrice(input=2.0, output=10.0, cache_read=0.20, cache_write=2.5),
     # checked 2026-10-25, prompts of 100K tokens or fewer
     "claude-haiku-5-5": ModelPrice(input=0.10, output=0.50, cache_read=0.01, cache_write=0.125),
+    # checked 2026-10-25; Jev bills input tokens only and has no cache
+    "jev-1.14.0": ModelPrice(input=0.042, output=0.0, cache_read=0.0, cache_write=0.0),
 }
 
 PRICES = MappingProxyType(_PRICES)

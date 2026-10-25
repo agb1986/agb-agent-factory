@@ -13,14 +13,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Empty until the phase 4 spike (#15) names the Jev transport.
-jev = []
+jev = ["typesafe-sdk==0.7.5"]
 
 [project.scripts]
 factory = "factory.cli:main"
 
 [dependency-groups]
 dev = [
+    # The Jev extra, so `uv sync` can type-check and test `runtime/jev_transport.py`.
+    "agb-agent-factory[jev]",
     "pre-commit",
     "pytest",
     "pytest-cov",
@@ -50,6 +51,7 @@ testpaths = ["tests"]
 addopts = "-ra"
 markers = [
     "live: needs a live ANTHROPIC_API_KEY; skipped when the key is absent",
+    "live_jev: needs a live TYPESAFE_API_KEY; skipped when the key is absent",
 ]
 
 [tool.coverage.run]
