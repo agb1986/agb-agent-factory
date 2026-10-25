@@ -24,7 +24,7 @@ jobs:
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
 
-      # The sandbox tests skip without this image, which would skip live runs of test-writer and fixer.
+      # The live test-writer and fixer runs need Docker and this image.
       - name: Build the sandbox image
         run: docker build -t factory-sandbox:0.1 -f tools/sandbox.Dockerfile tools
 
