@@ -1,0 +1,34 @@
+{
+  "pipeline_run_id": "pipeline-run-1",
+  "base": "base",
+  "head": "head",
+  "status": "ok",
+  "ref": "diff-triage@0.1.0",
+  "decision": {
+    "skip": false,
+    "escalate": false,
+    "route": [
+      "code-reviewer",
+      "security-reviewer"
+    ],
+    "reason": "reviewers=code-security"
+  },
+  "probabilities": {
+    "needs_review": {
+      "p": 0.8
+    },
+    "reviewers": {
+      "answer": "code-security",
+      "probs": {
+        "code": 0.1,
+        "code-security": 0.7,
+        "code-perf": 0.1,
+        "all": 0.1
+      },
+      "confidence": 0.9
+    }
+  },
+  "truncated": false,
+  "route_only": true,
+  "error": null
+}
