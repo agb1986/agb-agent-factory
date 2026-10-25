@@ -38,6 +38,7 @@ from registry.jev_spec import JevSpec
 from registry.resolver import AgentNotFound, resolve
 from registry.resolver import list_agents as _list_agents
 from registry.spec import LLMSpec
+from runtime.budget import DEFAULT_BUDGET_USD, Budget, BudgetExceeded
 from runtime.runner import run
 from runtime.trace import Trace, TraceRow
 
@@ -175,6 +176,7 @@ def evaluate(
     workers: int = DEFAULT_WORKERS,
     eval_run_id: str | None = None,
     fixture_paths: Mapping[str, Path] | None = None,
+    budget: Budget | None = None,
 ) -> EvalReport:
     """Run `cases` against `spec` and return the report.
 
@@ -183,11 +185,13 @@ def evaluate(
     defaults to an `LLMJudge` on `trace`. `fixture_paths` maps fixture names to built repositories;
     by default every fixture the cases use is built into a temporary directory first, so a missing
     one is a `FixtureNotFound` before any model is called. The input model's `repo_path` field, when
-    it has one, is set to the fixture's path.
+    it has one, is set to the fixture's path. Every `runner` call is charged to `budget` (default:
+    a new `Budget(DEFAULT_BUDGET_USD)`); the grader's `LLMJudge` calls are not. A case that runs
+    out of budget is not a failed case: the evaluation ends with `BudgetExceeded`.
 
     Raises `UsageError` for `workers` below 1 or a JevSpec, `NotImplementedError` for a `jev`
-    grader, `AuthOrConfigError` for a missing or rejected key, and `FixtureNotFound` or
-    `BuildError` from the fixture build.
+    grader, `AuthOrConfigError` for a missing or rejected key, `BudgetExceeded`, and
+    `FixtureNotFound` or `BuildError` from the fixture build.
     """
     if workers < 1:
         raise UsageError(f"--workers must be at least 1, not {workers}")
@@ -196,6 +200,7 @@ def evaluate(
     for case in cases:
         ensure_supported(case.grader)
     eval_run_id = eval_run_id or str(uuid.uuid4())
+    budget = budget or Budget(DEFAULT_BUDGET_USD)
     tag = f"eval:{spec.address}"
     start = time.monotonic()
     shared = _SharedTrace(trace)
@@ -214,6 +219,7 @@ def evaluate(
                 workers,
                 eval_run_id,
                 tag,
+                budget,
             )
     finally:
         if llm_judge is not None:
@@ -250,9 +256,12 @@ def _run_all(
     workers: int,
     eval_run_id: str,
     tag: str,
+    budget: Budget,
 ) -> list[CaseResult]:
     def one(case: Case) -> CaseResult:
-        return _run_case(spec, case, paths[case.fixture], trace, runner, judge, eval_run_id, tag)
+        return _run_case(
+            spec, case, paths[case.fixture], trace, runner, judge, eval_run_id, tag, budget
+        )
 
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="eval") as pool:
         futures = [pool.submit(one, case) for case in cases]
@@ -272,6 +281,7 @@ def _run_case(
     judge: Judge,
     eval_run_id: str,
     tag: str,
+    budget: Budget,
 ) -> CaseResult:
     start = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="factory-eval-case-") as scratch:
@@ -282,10 +292,16 @@ def _run_case(
             payload["repo_path"] = str(repo_path)
         try:
             output = runner(
-                spec, payload, trace, repo_path=repo_path, pipeline_run_id=eval_run_id, tag=tag
+                spec,
+                payload,
+                trace,
+                repo_path=repo_path,
+                pipeline_run_id=eval_run_id,
+                tag=tag,
+                budget=budget,
             )
             graded = grade(case, output.model_dump(mode="json"), judge, repo_path)
-        except AuthOrConfigError, UsageError:
+        except AuthOrConfigError, BudgetExceeded, UsageError:
             raise
         except FactoryError as exc:
             message = f"{type(exc).__name__}: {exc.message}"

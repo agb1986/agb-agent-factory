@@ -26,6 +26,7 @@ from pipelines.review_panel import (
 )
 from registry.jev_spec import JevOutput, JevSpec
 from registry.spec import LLMSpec
+from runtime.budget import DEFAULT_BUDGET_USD, Budget, BudgetExceeded
 from runtime.errors import RefusalError
 from runtime.trace import Trace, TraceRow
 from tools import ToolNotFoundError
@@ -499,4 +500,65 @@ def test_a_missing_key_exits_4(
     monkeypatch.delenv("ANTHROPIC_API_KEY")
     assert main(_review_args(repo)) == ExitCode.AUTH_OR_CONFIG
     assert "ANTHROPIC_API_KEY" in capsys.readouterr().err
+    assert cli["runner"].calls == []
+
+
+# --- the budget
+
+
+def test_every_run_shares_one_budget(panel: Panel, repo: Path, trace: Trace) -> None:
+    runner = FakeRunner()
+    budget = Budget(3.0)
+    _run(panel, repo, trace, runner, budget=budget)
+    assert {id(call["budget"]) for call in runner.calls} == {id(budget)}
+
+
+def test_the_default_budget_is_the_pipeline_default(panel: Panel, repo: Path, trace: Trace) -> None:
+    runner = FakeRunner()
+    _run(panel, repo, trace, runner)
+    (budget,) = {id(call["budget"]): call["budget"] for call in runner.calls}.values()
+    assert budget.usd == DEFAULT_BUDGET_USD
+
+
+def test_a_reviewer_that_hits_the_budget_ends_the_panel(
+    panel: Panel, repo: Path, trace: Trace
+) -> None:
+    runner = FakeRunner(failing={"security-reviewer": BudgetExceeded(1.0, 1.2)})
+    with pytest.raises(BudgetExceeded):
+        _run(panel, repo, trace, runner, budget=Budget(1.0))
+    assert JUDGE[0] not in {call["spec"].name for call in runner.calls}
+
+
+def test_a_judge_that_hits_the_budget_ends_the_panel(
+    panel: Panel, repo: Path, trace: Trace
+) -> None:
+    runner = FakeRunner(failing={"judge": BudgetExceeded(1.0, 1.2)})
+    with pytest.raises(BudgetExceeded):
+        _run(panel, repo, trace, runner, budget=Budget(1.0))
+
+
+def test_budget_usd_sets_the_cap_of_the_whole_review(
+    cli: dict[str, FakeRunner], repo: Path
+) -> None:
+    assert main(_review_args(repo, "--budget-usd", "0.75")) == ExitCode.OK
+    budgets = {id(call["budget"]): call["budget"] for call in cli["runner"].calls}
+    (budget,) = budgets.values()
+    assert budget.usd == 0.75
+
+
+def test_a_review_over_budget_exits_1_with_the_spend(
+    capsys: pytest.CaptureFixture[str], cli: dict[str, FakeRunner], repo: Path
+) -> None:
+    cli["runner"].failing["judge"] = BudgetExceeded(0.5, 0.6)
+    assert main(_review_args(repo, "--budget-usd", "0.5")) == ExitCode.ERROR
+    captured = capsys.readouterr()
+    assert "budget of $0.5000 exceeded" in captured.err
+    assert captured.out == ""
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_a_budget_that_is_not_positive_exits_2_before_anything_runs(
+    capsys: pytest.CaptureFixture[str], cli: dict[str, FakeRunner], repo: Path, value: str
+) -> None:
+    assert main(_review_args(repo, "--budget-usd", value)) == ExitCode.USAGE
     assert cli["runner"].calls == []
