@@ -1,0 +1,16 @@
+fixture: n-plus-one
+summary: >-
+  Adds orders_with_customer_names, which runs one customer query for every order instead of
+  joining the two tables.
+defects:
+  - id: customer-query-in-loop
+    file: orders/db.py
+    line_start: 43
+    line_end: 45
+    severity: major
+    category: performance
+    title: One customer query per order
+    snippet: "SELECT name FROM customers WHERE id = ?"
+    description: >-
+      The loop issues a query for each order, so N orders cost N + 1 queries. A single JOIN of
+      orders and customers returns the same rows in one query.

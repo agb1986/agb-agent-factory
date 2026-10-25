@@ -1,0 +1,3 @@
+fixture: test-only
+summary: Adds two test cases to tests/test_store.py. No production code changes.
+defects: []

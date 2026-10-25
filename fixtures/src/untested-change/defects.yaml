@@ -1,0 +1,16 @@
+fixture: untested-change
+summary: >-
+  Adds the public function apply_discount in a new module. The function is correct, but nothing
+  tests it.
+defects:
+  - id: apply-discount-untested
+    file: pricing/discount.py
+    line_start: 4
+    line_end: 8
+    severity: minor
+    category: testing
+    title: New public function has no test
+    snippet: "def apply_discount"
+    description: >-
+      apply_discount has a validation branch and a rounding rule, and no test covers either. A
+      test file for pricing/discount.py is missing.

@@ -1,0 +1,16 @@
+fixture: sql-injection
+summary: >-
+  Adds find_by_name, which builds its query with an f-string. Every other query in the module is
+  parameterised.
+defects:
+  - id: name-interpolated-into-sql
+    file: accounts/db.py
+    line_start: 30
+    line_end: 31
+    severity: blocker
+    category: security
+    title: SQL injection through the name argument
+    snippet: "WHERE name = '{name}'"
+    description: >-
+      The caller-supplied name is formatted into the SQL text. A name such as ' OR '1'='1 returns
+      every user. Use a placeholder: WHERE name = ?, with (name,) as the parameters.

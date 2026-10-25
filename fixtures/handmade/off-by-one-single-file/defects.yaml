@@ -1,0 +1,16 @@
+fixture: off-by-one-single-file
+summary: >-
+  Rewrites last_n as a loop. The start index is one too high, so the first item of the tail is
+  dropped. There are no tests.
+defects:
+  - id: tail-start-too-high
+    file: last_n.py
+    line_start: 7
+    line_end: 8
+    severity: major
+    category: logic
+    title: Loop starts one item late
+    snippet: "+ 1, len(items)"
+    description: >-
+      The range starts at max(len(items) - n, 0) + 1, so last_n([1, 2, 3, 4], 2) returns [4]
+      instead of [3, 4].
