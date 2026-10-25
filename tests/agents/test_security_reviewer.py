@@ -206,6 +206,12 @@ def test_prompt_sends_the_model_to_rg_for_call_sites(spec: LLMSpec) -> None:
     assert "before you decide whether a sink is reachable" in text
 
 
+def test_prompt_takes_line_numbers_from_rg_when_it_can(spec: LLMSpec) -> None:
+    text = spec.system_prompt_file.read_text(encoding="utf-8")
+    assert "take the line from the `path:line:text` result" in text
+    assert "count by hand" in text
+
+
 def test_the_planted_categories_are_in_the_fixed_list() -> None:
     fixtures = discover()
     for name in ("hardcoded-secret", "path-traversal"):
