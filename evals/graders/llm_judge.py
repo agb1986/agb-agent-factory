@@ -53,6 +53,12 @@ Some agents judge a panel of reviews instead of reviewing. Their answer has `sco
 then has no verdict. Read `merged_findings` as the findings and the rationale as the summary, and \
 check that the scores agree with them.
 
+Some agents write tests or fix code instead of reviewing. Their answer has `files_changed`, \
+`commands_run` and a `summary`, and `expected` has no verdict. The sandbox already ran the tests \
+and checked what changed, so do not re-judge the code: judge only whether the summary and the \
+per-file summaries truthfully describe the work and agree with `commands_run`, and read every \
+`criteria` against them.
+
 When `expected` has `criteria`, the answer passes only if it meets every one of them.
 
 Set `pass` to true only when the answer is a good review for the expectation. Set `score` between \
@@ -112,7 +118,7 @@ class LLMJudge:
     def __call__(self, expected: Expected, actual: Mapping[str, Any]) -> JudgeVerdict:
         """Return the judge's verdict on `actual`, tracing the call whether it succeeds or not."""
         payload = {
-            "expected": expected.model_dump(mode="json", exclude_none=True),
+            "expected": expected.model_dump(mode="json", exclude_none=True, exclude={"run"}),
             "actual": dict(actual),
         }
         started_at = datetime.now(UTC)

@@ -164,6 +164,25 @@ def test_each_case_runs_through_the_runner_with_the_tag_and_the_fixture_path(
     }
 
 
+def test_a_sandbox_agent_runs_on_a_private_copy_of_the_fixture(
+    spec: LLMSpec, cases: list[Case], trace: Trace, fixture_paths: dict[str, Path]
+) -> None:
+    class Writer(FakeRunner):
+        def __call__(
+            self, spec: LLMSpec, payload: Mapping[str, Any], trace: Trace, **kw: Any
+        ) -> BaseModel:
+            (Path(kw["repo_path"]) / "scribble.txt").write_text("x")
+            return super().__call__(spec, payload, trace, **kw)
+
+    sandboxed = spec.model_copy(update={"sandbox": True})
+    runner = Writer(sandboxed)
+    _evaluate(sandboxed, cases, trace, fixture_paths, runner, workers=1)
+    seen = [Path(call["repo_path"]) for call in runner.calls]
+    assert all(path not in fixture_paths.values() for path in seen)
+    assert all(not (path / "scribble.txt").exists() for path in fixture_paths.values())
+    assert [call["payload"]["repo_path"] for call in runner.calls] == [str(p) for p in seen]
+
+
 def test_cases_run_on_a_pool_sized_by_workers_and_keep_file_order(
     spec: LLMSpec, cases: list[Case], trace: Trace, fixture_paths: dict[str, Path]
 ) -> None:
