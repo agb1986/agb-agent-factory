@@ -79,6 +79,13 @@ TOOLS: dict[str, Tool] = {
     ),
 }  # fmt: skip
 
+READ_ONLY: frozenset[str] = frozenset({"git.read_file", "git.show_diff", "rg.search"})
+"""Names of the tools in `TOOLS` that change nothing. The action guard (`runtime.guard`) skips them.
+
+A tool that is not listed here, and a name that is not in `TOOLS` at all, counts as one that writes.
+A tool that writes is added to `TOOLS` and left out of this set.
+"""
+
 
 def wire_name(dotted: str) -> str:
     """Return the API tool name for the dotted `dotted`, replacing each dot with `__`.
