@@ -10,13 +10,22 @@ failed validation is retried once with the errors; a second failure ends the run
 (Request fields) hold in one place. Every way a run can fail raises a typed error from
 `runtime.errors`, or `AuthOrConfigError` for the API key, and every run whose payload validated
 writes exactly one trace row, on success or failure.
+
+Limits. `limits.max_retries` bounds how often a request is sent again after a 429, a 529, a 5xx or
+a connection failure: the SDK client is built with `max_retries=0` and the runner does the retrying
+itself, so the manifest alone decides. Each wait doubles from `BACKOFF_S` up to `MAX_BACKOFF_S`, or
+is the server's `Retry-After` (capped the same way), and a wait that would pass the run's
+`limits.timeout_s` deadline is not started. A request that times out is not sent again. The count
+restarts whenever a reply arrives, so a long tool conversation is not cut short by earlier hiccups.
+`limits.max_tokens_total` bounds the tokens of all turns together and raises `TokenLimitError`.
+A `Budget` passed to `run` is checked before the run, after every turn, and charged at the end.
 """
 
 import json
 import os
 import time
 import uuid
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -31,12 +40,14 @@ from pydantic import BaseModel, ValidationError
 
 from factory.exit import AuthOrConfigError, FactoryError, UsageError
 from registry.spec import LLMSpec
+from runtime.budget import Budget
 from runtime.errors import (
     AgentTimeoutError,
     ModelAPIError,
     OutputTruncatedError,
     OutputValidationError,
     RefusalError,
+    TokenLimitError,
     ToolCrashError,
     TurnLimitError,
 )
@@ -53,6 +64,12 @@ FORBIDDEN_REQUEST_KEYS = frozenset(
     {"temperature", "top_p", "top_k", "tool_choice", "max_iterations"}
 )
 """Top-level keys `build_request` never sets. A thinking budget is never set either."""
+
+BACKOFF_S = 0.5
+"""Seconds to wait before the first resend of a request; each later wait doubles."""
+
+MAX_BACKOFF_S = 8.0
+"""The longest the runner waits between sends, `Retry-After` included."""
 
 _KEY_HINT = f"store it with `agb sys secrets set {API_KEY_ENV}` and export it"
 
@@ -102,6 +119,8 @@ def run(
     hook: ToolHook | None = None,
     client: anthropic.Anthropic | None = None,
     tag: str | None = None,
+    budget: Budget | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> BaseModel:
     """Run the LLM agent `spec` on `payload` and return an instance of its output model.
 
@@ -113,12 +132,15 @@ def run(
     per run. When the spec has a `guard`, the action guard (`runtime.guard`) wraps `hook`: `hook`
     decides first, and a call it allows then goes to the guard. `client` defaults to one built
     from `ANTHROPIC_API_KEY`, and a missing key raises `AuthOrConfigError`. `pipeline_run_id` and
-    `tag` (for example `eval:code-reviewer@1.2.0`) land in the trace row.
+    `tag` (for example `eval:code-reviewer@1.2.0`) land in the trace row. `budget` is the
+    pipeline's dollar cap (see `runtime.budget`); `sleep` waits out a retry backoff and is a
+    parameter so tests need not wait.
 
     Past those two checks, exactly one row is written to `trace`, whether the run succeeds or
     fails. Raises the `runtime.errors.AgentError` subclasses for failures of the run itself,
-    `AuthOrConfigError` for a missing or rejected key, `ToolError` for a bad tool list, and any
-    `FactoryError` a hook raises, unchanged.
+    `AuthOrConfigError` for a missing or rejected key, `ToolError` for a bad tool list,
+    `BudgetExceeded` when the budget has run out or the run would pass it, and any `FactoryError`
+    a hook raises, unchanged. A run refused up front by an empty budget writes no row.
     """
     payload_json = _validate_payload(spec, payload)
     if spec.tools.allow and repo_path is None:
@@ -126,6 +148,8 @@ def run(
             f"{spec.address} allows tools, so it needs a repository root",
             hint="pass repo_path, the top of the git work tree the tools read",
         )
+    if budget is not None:
+        budget.check()
     run_id = str(uuid.uuid4())
     if spec.guard is not None:
         from runtime.guard import build_guard_hook  # guard imports this module
@@ -139,6 +163,7 @@ def run(
             tag=tag,
             inner=hook,
             client=client,
+            budget=budget,
         )
     started_at = datetime.now(UTC)
     start = time.monotonic()
@@ -147,6 +172,8 @@ def run(
         hook=hook if hook is not None else AllowAll(),
         repo_path=repo_path,
         deadline=start + spec.limits.timeout_s,
+        budget=budget,
+        sleep=sleep,
     )
     output: BaseModel | None = None
     error: BaseException | None = None
@@ -158,6 +185,7 @@ def run(
         raise
     finally:
         usage = state.usage
+        cost = cost_usd(spec.model, usage)
         trace.record(
             TraceRow(
                 run_id=run_id,
@@ -171,12 +199,18 @@ def run(
                 output_tokens=usage.output_tokens,
                 cache_read_tokens=usage.cache_read_tokens,
                 cache_write_tokens=usage.cache_write_tokens,
-                cost_usd=cost_usd(spec.model, usage),
+                cost_usd=cost,
                 output_json=None if output is None else output.model_dump(mode="json"),
                 error=None if error is None else f"{type(error).__name__}: {error}",
                 tag=tag,
             )
         )
+        if budget is not None:
+            # A failed run only adds its cost, so the budget never hides the error that ended it.
+            if error is None:
+                budget.charge(cost)
+            else:
+                budget.add(cost)
 
 
 class _RunStopped(Exception):
@@ -196,6 +230,9 @@ class _RunState:
     turns: int = 0
     abort: FactoryError | None = None
     crash: tuple[str, Exception] | None = None
+    budget: Budget | None = None
+    sleep: Callable[[float], None] = time.sleep
+    messages: int = 0
 
     @property
     def stopping(self) -> bool:
@@ -234,6 +271,33 @@ class _RunState:
                 agent=self.spec.address,
                 transcript=self.transcript,
             ) from exc
+
+    def check_limits(self) -> None:
+        """Raise `TokenLimitError` or `BudgetExceeded` if the run so far passes either cap."""
+        limit = self.spec.limits.max_tokens_total
+        if limit is not None:
+            used = self.tokens_used
+            if used > limit:
+                raise TokenLimitError(
+                    f"{self.spec.address} used {used} tokens, past limits.max_tokens_total ({limit})",
+                    limit=limit,
+                    used=used,
+                    agent=self.spec.address,
+                    transcript=self.transcript,
+                )
+        if self.budget is not None:
+            self.budget.check(cost_usd(self.spec.model, self.usage) or 0.0)
+
+    @property
+    def tokens_used(self) -> int:
+        """Tokens of all turns so far: input, output, and the cache reads and writes."""
+        usage = self.usage
+        return (
+            (usage.input_tokens or 0)
+            + (usage.output_tokens or 0)
+            + (usage.cache_read_tokens or 0)
+            + (usage.cache_write_tokens or 0)
+        )
 
     def check_deadline(self) -> None:
         if time.monotonic() > self.deadline:
@@ -369,7 +433,7 @@ def _run(
     if client is None:
         if not os.environ.get(API_KEY_ENV):
             raise AuthOrConfigError(f"{API_KEY_ENV} is not set", hint=_KEY_HINT)
-        with anthropic.Anthropic() as default_client:
+        with anthropic.Anthropic(max_retries=0) as default_client:
             return _converse_and_validate(default_client, spec, payload_json, state, tools)
     return _converse_and_validate(client, spec, payload_json, state, tools)
 
@@ -407,21 +471,95 @@ def _converse_and_validate(
         ) from exc
 
 
+class _Retry(Exception):
+    """A request failed in a way worth sending again; `cause` is the SDK's error."""
+
+    def __init__(self, cause: anthropic.APIError) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+
+
+def _retryable(exc: anthropic.APIError) -> bool:
+    """Whether `exc` is a 429, a 529, a 5xx or a connection failure that is not a timeout."""
+    if isinstance(exc, anthropic.APITimeoutError):
+        return False
+    if isinstance(exc, anthropic.APIConnectionError):
+        return True
+    if isinstance(exc, anthropic.APIStatusError):
+        return exc.status_code in (429, 529) or exc.status_code >= 500
+    return False
+
+
+def _api_error(
+    spec: LLMSpec, state: _RunState, exc: anthropic.APIError, *, retries: int = 0
+) -> ModelAPIError:
+    after = f" after {retries} {'retry' if retries == 1 else 'retries'}" if retries else ""
+    return ModelAPIError(
+        f"the Messages API failed for {spec.address}{after}: {type(exc).__name__}: {exc.message}",
+        agent=spec.address,
+        transcript=state.transcript,
+    )
+
+
+def _delay(failures: int, exc: anthropic.APIError) -> float:
+    """Seconds to wait after the `failures`-th failed send: the server's ask, else doubling."""
+    delay = BACKOFF_S * 2 ** (failures - 1)
+    if isinstance(exc, anthropic.APIStatusError):
+        try:
+            delay = float(exc.response.headers["retry-after"])
+        except KeyError, ValueError:
+            pass
+    return min(max(delay, 0.0), MAX_BACKOFF_S)
+
+
 def _converse(
+    client: anthropic.Anthropic, spec: LLMSpec, state: _RunState, tools: list[_ScopedTool]
+) -> str:
+    """Run the tool loop to a final answer, sending a failed request again within the limits.
+
+    A retryable failure (see `_retryable`) rebuilds the request from `state.transcript`, which is
+    consistent whenever a request fails, and sends it again after a backoff. It gives up with a
+    `ModelAPIError` after `limits.max_retries` resends, or when the wait would pass the deadline.
+    """
+    failures = 0
+    while True:
+        before = state.messages
+        try:
+            return _converse_once(client, spec, state, tools)
+        except _Retry as retry:
+            failures = 1 if state.messages > before else failures + 1
+            retries = failures - 1
+            if retries >= spec.limits.max_retries:
+                raise _api_error(spec, state, retry.cause, retries=retries) from retry.cause
+            delay = _delay(failures, retry.cause)
+            if time.monotonic() + delay >= state.deadline:
+                raise ModelAPIError(
+                    f"the Messages API failed for {spec.address}: not retrying, a {delay:g}s wait "
+                    f"would pass limits.timeout_s ({spec.limits.timeout_s}s): "
+                    f"{type(retry.cause).__name__}: {retry.cause.message}",
+                    agent=spec.address,
+                    transcript=state.transcript,
+                ) from retry.cause
+            state.sleep(delay)
+
+
+def _converse_once(
     client: anthropic.Anthropic, spec: LLMSpec, state: _RunState, tools: list[_ScopedTool]
 ) -> str:
     """Run the tool loop from `state.transcript` to a final answer and return the answer's text.
 
     Appends every assistant message and tool result to the transcript as it goes, and maps the
-    stop reasons and API errors to typed errors.
+    stop reasons and API errors to typed errors. A failure worth retrying raises `_Retry`.
     """
     runner = client.beta.messages.tool_runner(**build_request(spec, state.transcript, tools))
     try:
         for message in runner:
             state.add_usage(message.usage)
+            state.messages += 1
             state.transcript.append(
                 {"role": "assistant", "content": [_block(block) for block in message.content]}
             )
+            state.check_limits()
             reason = message.stop_reason
             if reason == "refusal":
                 details = message.stop_details
@@ -477,11 +615,9 @@ def _converse(
             hint=_KEY_HINT,
         ) from exc
     except anthropic.APIError as exc:
-        raise ModelAPIError(
-            f"the Messages API failed for {spec.address}: {type(exc).__name__}: {exc.message}",
-            agent=spec.address,
-            transcript=state.transcript,
-        ) from exc
+        if _retryable(exc):
+            raise _Retry(exc) from exc
+        raise _api_error(spec, state, exc) from exc
     finally:
         runner.close()
     raise ModelAPIError(
