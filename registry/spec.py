@@ -58,14 +58,16 @@ class LimitsSpec(_Model):
     """The `limits` block: hard caps on one run.
 
     The first three are required and positive. `max_tokens_total` is an optional cap on all the
-    tokens a run spends, input and output together; the manifest declares it and the retry and
-    budget work (#25) enforces it, so the runner does not read it yet.
+    tokens a run spends across its turns; the runner raises `TokenLimitError` once a run passes it.
+    `max_retries` is how many times the runner sends a request again after a 429, 529, 5xx or
+    connection failure; it is not the validation retry, and 0 turns retries off.
     """
 
     max_tool_turns: int = Field(gt=0)
     timeout_s: int = Field(gt=0)
     max_output_tokens: int = Field(gt=0)
     max_tokens_total: int | None = Field(default=None, gt=0)
+    max_retries: int = Field(default=2, ge=0)
 
 
 class WeightsSpec(_Model):

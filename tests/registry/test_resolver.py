@@ -123,6 +123,21 @@ def test_sandbox_and_total_token_cap_are_read(make_agent: MakeAgent, agents_dir:
     assert spec.limits.max_tokens_total == 9000
 
 
+def test_max_retries_defaults_to_two_and_is_read(make_agent: MakeAgent, agents_dir: Path) -> None:
+    make_agent("reviewer", "1.2.0")
+    make_agent(
+        "fixer",
+        "1.0.0",
+        edit=lambda t: t.replace("timeout_s: 60", "timeout_s: 60\n  max_retries: 0"),
+    )
+    default = resolve("reviewer", "^1.2", agents_dir)
+    assert isinstance(default, LLMSpec)
+    assert default.limits.max_retries == 2
+    none = resolve("fixer", "^1.0", agents_dir)
+    assert isinstance(none, LLMSpec)
+    assert none.limits.max_retries == 0
+
+
 def test_unloaded_spec_has_no_classes(make_agent: MakeAgent) -> None:
     path = make_agent("reviewer", "1.2.0")
     spec = resolve("reviewer", "^1.2", path.parent.parent)
@@ -296,6 +311,7 @@ def test_path_is_not_a_manifest_key(make_agent: MakeAgent, agents_dir: Path) -> 
         ("timeout_s: 60", "timeout_s: 0", "limits.timeout_s"),
         ("  max_tool_turns: 4\n", "", "limits.max_tool_turns"),
         ("timeout_s: 60", "timeout_s: 60\n  max_tokens_total: 0", "limits.max_tokens_total"),
+        ("timeout_s: 60", "timeout_s: 60\n  max_retries: -1", "limits.max_retries"),
         ("effort: high\n", "effort: high\nsandbox: maybe\n", "sandbox"),
         ("effort: high\n", "", "effort"),
         ("deny: []", "deny: [git.read_file]", "tools"),
