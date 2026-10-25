@@ -1,0 +1,18 @@
+fixture: hardcoded-secret
+summary: >-
+  Adds notify_deploy, which posts to the deploy webhook with a bearer token written into the
+  source. The existing send function takes its token as an argument.
+defects:
+  - id: deploy-token-in-source
+    file: webhooks/sender.py
+    line_start: 25
+    line_end: 25
+    severity: blocker
+    category: hardcoded-secret
+    title: Webhook token committed in source
+    snippet: "DEPLOY_HOOK_TOKEN = "
+    description: >-
+      The bearer token for the deploy webhook is a string literal, so anyone who can read the
+      repository or its history can post to the channel, and rotating it needs a code change. Read
+      it from the environment, for example os.environ["DEPLOY_HOOK_TOKEN"], and rotate the leaked
+      value.

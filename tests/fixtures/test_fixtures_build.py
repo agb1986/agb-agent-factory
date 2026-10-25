@@ -32,6 +32,8 @@ REQUIRED = {
     "off-by-one-single-file",
     "quadratic-loop",
     "missing-index-hint",
+    "hardcoded-secret",
+    "path-traversal",
 }
 CLEAN = {"clean-refactor", "docs-only", "test-only"}
 FIXTURES = fixture_build.discover()
