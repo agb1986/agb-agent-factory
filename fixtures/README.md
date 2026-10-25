@@ -31,7 +31,9 @@ fixtures/build.py                the build script
 
 The trees are ordinary Python projects whose own tests pass on both refs (a test that fails on
 `head` would hand the reviewer the answer). The files are linted and type-checked with the rest of
-the repository, so a planted defect must be one ruff and ty accept.
+the repository, so a planted defect must be one ruff and ty accept. The one exception is
+`off-by-one-red`, a fixture for the fixer agent: its `head` has a test that fails on purpose, and
+`tests/fixtures` expects exactly that.
 
 ## Fixture names
 
@@ -41,8 +43,10 @@ fixture**; add a new one instead.
 | Name | What `head` changes | Planted defects |
 | --- | --- | --- |
 | `off-by-one` | Rewrites `rolling_sums` as a running sum with a loop bound one too small | 1 (major, logic) |
+| `off-by-one-red` | `off-by-one`, plus `test_last_window_is_included`, which fails on `head` (a fixer eval: make it pass) | 1 (major, logic) |
 | `clean-refactor` | Renames `calc` to `invoice_total`, extracts two helpers, same behaviour | none |
 | `untested-change` | Adds the public `apply_discount` with no test | 1 (minor, testing) |
+| `untested-change-covered` | `untested-change`, plus a passing test file for `apply_discount` (a fixer eval: nothing to fix) | none |
 | `mixed` | Three files: a `>=` flipped to `>` (bug), a camelCase local (nit), comment-only edits (harmless) | 2 (major logic, info style) |
 | `docs-only` | Edits `README.md` and `docs/usage.md` | none |
 | `test-only` | Adds two test cases | none |

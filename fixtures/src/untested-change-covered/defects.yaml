@@ -1,0 +1,5 @@
+fixture: untested-change-covered
+summary: >-
+  Adds the public function apply_discount in a new module, with a test file that covers its
+  validation branch and its rounding rule. The function is correct and tested.
+defects: []
