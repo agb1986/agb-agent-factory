@@ -13,6 +13,7 @@ Each section states one rule and gives a minimal example. A ticket that has to i
 | Output contract | [Output contract](#output-contract) | `runtime/runner.py` (#5) |
 | Request fields | [Request fields](#request-fields) | `runtime/runner.py` (#5) |
 | Tool naming, allow and deny | [Tools](#tools) | `tools/registry.py` (#3), `runtime/runner.py` (#5) |
+| Fixture repositories | [Fixtures](#fixtures) | `fixtures/build.py`, `fixtures/schema.py` (#9) |
 | Gates and routing | [Gates](#gates) | `runtime/gates.py` (#18) |
 | Trace row | [Trace row](#trace-row) | `runtime/trace.py` (#6) |
 | Secrets | [Secrets](#secrets) | `runtime/runner.py` (#5), `runtime/jev_runner.py` (#17) |
@@ -224,6 +225,20 @@ The runner calls a hook around every tool execution; #5 documents its protocol (
 tools:
   allow: [git.read_file, git.show_diff]   # sent as git__read_file, git__show_diff
   deny: [rg.search]
+```
+
+## Fixtures
+
+A fixture is a directory `fixtures/src/<name>/` holding a `base/` tree, a `head/` tree and a `defects.yaml`; hand-built ones live in `fixtures/handmade/<name>/` in the same shape. `uv run python -m fixtures.build [name ...]` turns each into a git repository under `fixtures/repos/<name>/` (gitignored) with branches `base` and `head`, one commit each. Identity, dates and branch names are fixed and no hooks or git config apply, so the SHAs are reproducible; a rebuild deletes the old repository first. The directory name is the fixture's name and the handle an eval case uses, so a name is never renamed or reused. A new fixture only needs its directory: `discover` picks it up, and `ROOTS` in `fixtures/build.py` lists the source roots.
+
+`defects.yaml` lists the planted defects: `id`, `file`, `line_start`, `line_end` (1-based, inclusive, in the head tree), `severity` (`info`, `minor`, `major` or `blocker`, as in a finding), `category` (a lowercase slug; so far `logic`, `style`, `security`, `performance`, `testing`), `title`, `description` and a `snippet` that must appear inside the window. The list is empty for a fixture a reviewer should pass without findings. The build fails when a window has drifted off its code. Source trees are linted and type-checked with the rest of the repository, so a planted defect must be one ruff and ty accept.
+
+```yaml
+fixture: off-by-one
+summary: Running-sum rewrite that drops the last window.
+defects:
+  - {id: last-window-dropped, file: series/rolling.py, line_start: 12, line_end: 13,
+     severity: major, category: logic, title: ..., description: ..., snippet: "len(values) - 1"}
 ```
 
 ## Gates
