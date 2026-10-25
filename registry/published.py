@@ -67,6 +67,20 @@ def git_head(directory: Path | None = None) -> str:
     return done.stdout.strip()
 
 
+def is_dirty(directory: Path) -> bool:
+    """Return whether git sees uncommitted changes under `directory`."""
+    try:
+        done = subprocess.run(
+            ["git", "status", "--porcelain", "--", str(directory)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except OSError, subprocess.CalledProcessError:
+        return False
+    return bool(done.stdout.strip())
+
+
 def publish(
     spec: AgentSpec,
     cases: Any,
@@ -118,6 +132,12 @@ def command(
     spec = resolve_ref(ref)
     cases = load_cases(spec.directory / CASES_FILE)
     git_sha = git_head()
+    if is_dirty(spec.directory):
+        print(
+            f"warning: {spec.directory} has uncommitted changes; "
+            f"the recorded commit {git_sha[:12]} does not contain them",
+            file=sys.stderr,
+        )
     with Trace() as trace:
         result = publish(
             spec, cases, trace, git_sha=git_sha, workers=workers, runner=runner, judge=judge
