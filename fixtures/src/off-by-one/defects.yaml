@@ -1,0 +1,16 @@
+fixture: off-by-one
+summary: >-
+  Rewrites rolling_sums as a running sum. The loop stops one step early, so the last window is
+  never added. The tests pass because none of them looks at the last window of a long series.
+defects:
+  - id: last-window-dropped
+    file: series/rolling.py
+    line_start: 12
+    line_end: 13
+    severity: major
+    category: logic
+    title: Loop bound drops the last window
+    snippet: "range(window, len(values) - 1)"
+    description: >-
+      The running-sum loop should run to len(values), not len(values) - 1. For [1, 2, 3, 4] with a
+      window of 2 it returns [3, 5] instead of [3, 5, 7].

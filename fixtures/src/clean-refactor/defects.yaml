@@ -1,0 +1,5 @@
+fixture: clean-refactor
+summary: >-
+  Renames calc to invoice_total, extracts _subtotal and _with_tax, and updates the caller and the
+  tests. Behaviour is identical.
+defects: []

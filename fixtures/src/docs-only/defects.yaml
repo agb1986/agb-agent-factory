@@ -1,0 +1,3 @@
+fixture: docs-only
+summary: Edits README.md and docs/usage.md only. No code or test changes.
+defects: []
