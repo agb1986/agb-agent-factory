@@ -65,8 +65,8 @@ def test_manifest_resolves_to_the_documented_version(spec: LLMSpec) -> None:
     assert spec.limits.max_tokens_total is not None
 
 
-def test_the_manifest_declares_no_guard_yet(spec: LLMSpec) -> None:
-    assert spec.guard is None
+def test_the_manifest_puts_the_agent_behind_the_action_guard(spec: LLMSpec) -> None:
+    assert spec.guard == "action-guard@^0.1"
 
 
 def test_tools_exist_and_need_the_sandbox_flag(spec: LLMSpec) -> None:

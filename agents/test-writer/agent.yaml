@@ -9,6 +9,7 @@ schemas: schemas.py
 input_model: TestWriterInput
 output_model: TestWriterOutput
 sandbox: true
+guard: action-guard@^0.1
 tools:
   allow: [fs.list_files, fs.read_file, fs.write_file, shell.run]
   deny: []

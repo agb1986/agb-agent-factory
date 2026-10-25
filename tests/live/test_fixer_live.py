@@ -54,7 +54,7 @@ def test_the_agent_fixes_the_planted_defect_without_touching_the_tests(tmp_path:
         answer = run(spec, payload, trace, repo_path=fixture.path, pipeline_run_id="live-fixer")
         rows = (
             trace._connect()
-            .execute("SELECT pipeline_run_id, cost_usd, error FROM traces")
+            .execute("SELECT agent_ref, pipeline_run_id, cost_usd, error FROM traces")
             .fetchall()
         )
 
@@ -64,7 +64,13 @@ def test_the_agent_fixes_the_planted_defect_without_touching_the_tests(tmp_path:
     assert found["nothing_to_fix"] is False, found
     assert check_run(case.expected.run, found, fixture.path) == []
 
-    assert len(rows) == 1
-    assert rows[0][0] == "live-fixer"
-    assert rows[0][1] is not None and rows[0][1] > 0
-    assert rows[0][2] is None
+    # One row for the agent and one per guard decision, all in this pipeline run and all priced.
+    agent_rows = [row for row in rows if row[0] == spec.address]
+    guard_rows = [row for row in rows if row[0].startswith("action-guard@")]
+    assert len(agent_rows) == 1
+    assert len(agent_rows) + len(guard_rows) == len(rows)
+    assert guard_rows, rows
+    for _, pipeline_run_id, cost_usd, error in rows:
+        assert pipeline_run_id == "live-fixer"
+        assert cost_usd is not None and cost_usd > 0
+        assert error is None

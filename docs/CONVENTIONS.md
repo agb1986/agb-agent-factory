@@ -68,7 +68,7 @@ An LLM agent reasons, may call scoped tools, and returns a Pydantic model throug
 | `evals.min_pass_rate` | Eval pass rate the publish gate requires, from 0 to 1 |
 | `guard` | Optional. The action-guard agent that must allow each of this agent's tool calls that is not read-only, as `name@^MAJOR.MINOR`, such as `action-guard@^0.1`. Absent means no guard; see [Tools](#tools) |
 
-Unknown keys are an error, so a typo never falls back to a default. Later tickets add fields and document them here: an optional `guard` agent address (#23), and `limits.max_retries` and `limits.max_tokens_total` (#25).
+Unknown keys are an error, so a typo never falls back to a default. Later tickets add fields and document them here: `limits.max_retries` (#25).
 
 Two of those fields exist now and are only declared: `sandbox` (a boolean, default `false`) says the agent may be given the sandbox-only tools, and `limits.max_tokens_total` (an integer, optional) is the most tokens one run may use. Nothing enforces `max_tokens_total` yet; #25 does. `sandbox: true` is the manifest's half of the gate described under [Tools](#tools).
 

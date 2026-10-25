@@ -9,6 +9,7 @@ schemas: schemas.py
 input_model: FixerInput
 output_model: FixerOutput
 sandbox: true
+guard: action-guard@^0.1
 tools:
   allow: [fs.list_files, fs.read_file, fs.write_file, shell.run]
   deny: []
