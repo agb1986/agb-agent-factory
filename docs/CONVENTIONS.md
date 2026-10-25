@@ -290,6 +290,8 @@ cases:
     grader: llm_judge
 ```
 
+`evals.run.evaluate` runs each case through `runtime.runner.run` with the tag `eval:<name>@<version>`, so `tag` on the trace rows selects an eval's runs. Grading is deterministic first: the verdict must equal the expected one, and each expected defect needs a finding with the same file, an overlapping line window and a severity at or above `severity_floor`. A case that fails those checks fails without a judge call. A case that passes them goes to the `llm_judge` grader (`evals/graders/llm_judge.py`), one structured-output call to `claude-haiku-5-5` that returns `pass`, `score` and `reason` and is traced under the same tag. A typed agent failure fails its own case with the error text; a missing key or a payload the agent rejects ends the whole eval. The eval passes when `passed_count / total` reaches the agent's `evals.min_pass_rate`.
+
 ## Gates
 
 Thresholds, skip decisions and routing are code in `runtime/gates.py`. The thresholds come from the manifest, never from a prompt, and no model decides them. A gate evaluation returns a `Decision`:
@@ -375,6 +377,8 @@ $ factory list --json
 $ factory run no-such-agent@^1.0 --json 2>&1 >/dev/null
 {"error": {"code": 3, "message": "no agent named 'no-such-agent'", "hint": "run `factory list`"}}
 ```
+
+`factory eval <name>[@range] [--json] [--workers N]` runs the agent's `evals/cases.yaml` on `--workers` threads (default 4) and prints a per-case table on stderr. Under `--json`, stdout carries one object with `agent`, `version`, `ref`, `tag`, `eval_run_id`, `min_pass_rate`, `pass_rate`, `passed`, `total`, `passed_count`, `cost_usd`, `duration_ms` and `cases`; each case has `id`, `fixture`, `grader`, `passed`, `score`, `reason`, `deterministic`, `judge`, `error` and `duration_ms`. It exits 0 at or above the minimum pass rate and 1 below it, with the document printed either way. `tests/evals/golden/code-reviewer-eval.json` is a normalised example.
 
 ## Exit codes
 
