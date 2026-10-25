@@ -35,7 +35,9 @@ def test_ensure_schema_twice_is_a_noop(trace: Trace) -> None:
     trace.record(row("r1"))
     trace.ensure_schema()
     assert trace.schema_version() == len(MIGRATIONS)
-    assert trace._connect().execute("SELECT count(*) FROM schema_version").fetchone() == (1,)
+    assert trace._connect().execute("SELECT count(*) FROM schema_version").fetchone() == (
+        len(MIGRATIONS),
+    )
     assert trace._connect().execute("SELECT count(*) FROM traces").fetchone() == (1,)
 
 
@@ -129,24 +131,26 @@ def test_second_migration_bumps_schema_version(tmp_path: Path) -> None:
     path = tmp_path / "t.duckdb"
     with Trace(path) as t:
         t.ensure_schema()
-        assert t.schema_version() == 1
-    extra = (2, "ALTER TABLE traces ADD COLUMN model VARCHAR")
+        assert t.schema_version() == len(MIGRATIONS)
+    extra = (len(MIGRATIONS) + 1, "ALTER TABLE traces ADD COLUMN model VARCHAR")
     with Trace(path, migrations=(*MIGRATIONS, extra)) as t:
         t.ensure_schema()
         t.ensure_schema()
-        assert t.schema_version() == 2
-        assert t._connect().execute("SELECT count(*) FROM schema_version").fetchone() == (2,)
+        assert t.schema_version() == len(MIGRATIONS) + 1
+        assert t._connect().execute("SELECT count(*) FROM schema_version").fetchone() == (
+            len(MIGRATIONS) + 1,
+        )
         t._connect().execute("SELECT model FROM traces")
 
 
 def test_failed_migration_rolls_back(tmp_path: Path) -> None:
     import duckdb
 
-    bad = (2, "ALTER TABLE no_such_table ADD COLUMN x VARCHAR")
+    bad = (len(MIGRATIONS) + 1, "ALTER TABLE no_such_table ADD COLUMN x VARCHAR")
     with Trace(tmp_path / "t.duckdb", migrations=(*MIGRATIONS, bad)) as t:
         with pytest.raises(duckdb.Error):
             t.ensure_schema()
-        assert t.schema_version() == 1
+        assert t.schema_version() == len(MIGRATIONS)
 
 
 def test_data_survives_reopen(tmp_path: Path) -> None:
@@ -170,3 +174,28 @@ def test_creates_parent_directory(tmp_path: Path) -> None:
     with Trace(path) as t:
         t.ensure_schema()
     assert path.exists()
+
+
+def test_record_published_appends_one_row(trace: Trace) -> None:
+    trace.record_published("code-reviewer", "1.0.0", 0.75, "abc123")
+    [found] = trace.published()
+    assert (found.agent, found.version, found.pass_rate, found.git_sha) == (
+        "code-reviewer",
+        "1.0.0",
+        0.75,
+        "abc123",
+    )
+    assert found.published_at.tzinfo is not None
+
+
+def test_published_filters_by_agent_and_keeps_history(trace: Trace) -> None:
+    trace.record_published("a", "1.0.0", 1.0, "s1")
+    trace.record_published("a", "1.0.0", 0.9, "s2")
+    trace.record_published("b", "2.0.0", 1.0, "s3")
+    assert [r.git_sha for r in trace.published("a")] == ["s1", "s2"]
+    assert len(trace.published()) == 3
+
+
+def test_record_published_rejects_naive_timestamp(trace: Trace) -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        trace.record_published("a", "1.0.0", 1.0, "s", datetime(2026, 1, 1))

@@ -55,6 +55,18 @@ MIGRATIONS: tuple[Migration, ...] = (
         )
         """,
     ),
+    (
+        2,
+        """
+        CREATE TABLE published (
+            agent VARCHAR NOT NULL,
+            version VARCHAR NOT NULL,
+            pass_rate DOUBLE NOT NULL,
+            published_at TIMESTAMPTZ NOT NULL,
+            git_sha VARCHAR NOT NULL
+        )
+        """,
+    ),
 )
 
 
@@ -78,6 +90,17 @@ class TraceRow:
     output_json: Any = None
     error: str | None = None
     tag: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PublishedRow:
+    """One agent version that passed its evals, as written to the `published` table."""
+
+    agent: str
+    version: str
+    pass_rate: float
+    published_at: datetime
+    git_sha: str
 
 
 def resolve_path(path: str | os.PathLike[str] | None = None) -> Path:
@@ -189,6 +212,47 @@ class Trace:
                 row.tag,
             ],
         )
+
+    def record_published(
+        self,
+        agent: str,
+        version: str,
+        pass_rate: float,
+        git_sha: str,
+        published_at: datetime | None = None,
+    ) -> None:
+        """Mark `agent@version` as published: its evals passed at `pass_rate` on commit `git_sha`.
+
+        Appends one row to the `published` table, stamped now (UTC) unless `published_at` is given.
+        Publishing a version again adds another row; the table is a history, and a version counts
+        as published once it has any row. Creates the schema first.
+        """
+        stamp = datetime.now(UTC) if published_at is None else published_at
+        if stamp.tzinfo is None:
+            raise ValueError("published_at must be timezone-aware")
+        self.ensure_schema()
+        self._connect().execute(
+            "INSERT INTO published VALUES (?, ?, ?, ?, ?)",
+            [agent, version, pass_rate, stamp.astimezone(UTC), git_sha],
+        )
+
+    def published(self, agent: str | None = None) -> list[PublishedRow]:
+        """Return every `published` row, oldest first, optionally only those of one agent."""
+        self.ensure_schema()
+        # Fetching a TIMESTAMPTZ makes duckdb import pytz; read it as UTC wall time instead.
+        sql = (
+            "SELECT agent, version, pass_rate, timezone('UTC', published_at), git_sha"
+            " FROM published"
+        )
+        params: list[Any] = []
+        if agent is not None:
+            sql += " WHERE agent = ?"
+            params.append(agent)
+        sql += " ORDER BY published_at, agent, version"
+        found = self._connect().execute(sql, params).fetchall()
+        return [
+            PublishedRow(a, v, rate, at.replace(tzinfo=UTC), sha) for a, v, rate, at, sha in found
+        ]
 
     def cost_by_agent(self, since: datetime | None = None) -> dict[str, float]:
         """Return total `cost_usd` per `agent_ref`, optionally for runs started at or after `since`.
