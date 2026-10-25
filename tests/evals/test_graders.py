@@ -105,6 +105,29 @@ def test_a_clean_case_expects_no_findings_to_match() -> None:
     assert check_deterministic(clean, _answer(verdict="approve")).passed
 
 
+def test_a_null_verdict_is_not_checked() -> None:
+    unchecked = EXPECTED.model_copy(update={"verdict": None})
+    assert check_deterministic(unchecked, _answer(_finding(), verdict="approve")).passed
+    assert check_deterministic(unchecked, {"findings": [_finding()]}).passed
+
+
+def test_a_judges_merged_findings_are_matched_like_findings() -> None:
+    unchecked = EXPECTED.model_copy(update={"verdict": None})
+    judgement = {"scores": {}, "merged_findings": [_finding()], "rationale": "r"}
+    assert check_deterministic(unchecked, judgement).passed
+    weak = judgement | {"merged_findings": [_finding(severity="minor")]}
+    checks = check_deterministic(unchecked, weak)
+    assert not checks.passed
+    assert "below severity major" in checks.failures[0]
+
+
+def test_a_judgement_that_dropped_the_defect_fails() -> None:
+    unchecked = EXPECTED.model_copy(update={"verdict": None})
+    judgement = {"scores": {}, "merged_findings": [], "rationale": "r"}
+    checks = check_deterministic(unchecked, judgement)
+    assert checks.failures and "no finding in shop/shipping.py" in checks.failures[0]
+
+
 def test_a_deterministic_failure_never_calls_the_judge() -> None:
     result = grade(_case(), _answer(verdict="approve"), _no_judge)
     assert not result.passed

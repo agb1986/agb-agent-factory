@@ -1,9 +1,10 @@
 """Grade one agent answer against a case's expectations.
 
-Deterministic checks run first and are cheap and exact: the verdict must match, and every expected
-defect must be matched by some finding in the same file, on overlapping lines, at or above the
-defect's `severity_floor`. A case that fails them is graded failed on the spot and the judge is
-never called. Only an answer that passes them goes to the grader the case names.
+Deterministic checks run first and are cheap and exact: the verdict must match, unless the case
+expects none, and every expected defect must be matched by some finding in the same file, on
+overlapping lines, at or above the defect's `severity_floor`. A case that fails them is graded
+failed on the spot and the judge is never called. Only an answer that passes them goes to the
+grader the case names.
 """
 
 from collections.abc import Mapping
@@ -43,12 +44,13 @@ def check_deterministic(expected: Expected, actual: Mapping[str, Any]) -> Determ
     """Check `actual`, an agent's output as a dict, against `expected` without calling a model.
 
     Reads `verdict` and `findings` (each with `file`, `line_start`, `line_end`, `severity`) from
-    the output. A finding with an unknown severity matches nothing.
+    the output; a judge's output has `merged_findings` instead, read the same way. A null expected
+    verdict skips the verdict check. A finding with an unknown severity matches nothing.
     """
     failures: list[str] = []
-    if actual.get("verdict") != expected.verdict:
+    if expected.verdict is not None and actual.get("verdict") != expected.verdict:
         failures.append(f"verdict is {actual.get('verdict')!r}, expected {expected.verdict!r}")
-    findings = actual.get("findings") or []
+    findings = actual.get("findings", actual.get("merged_findings")) or []
     failures.extend(
         problem
         for defect in expected.defects

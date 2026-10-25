@@ -55,10 +55,16 @@ class ExpectedDefect(_Strict):
 
 
 class Expected(_Strict):
-    """What a good answer looks like: the verdict and the defects that must be found."""
+    """What a good answer looks like: the verdict and the defects that must be found.
 
-    verdict: str
+    `verdict` is required but may be null for an agent whose output has none, such as the judge;
+    a null verdict is not checked. `criteria` is prose the grader must also see met, such as "the
+    rationale names the failed reviewer"; the deterministic checks do not read it.
+    """
+
+    verdict: str | None
     defects: tuple[ExpectedDefect, ...] = ()
+    criteria: str | None = None
 
 
 class Case(_Strict):

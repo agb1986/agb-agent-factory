@@ -74,6 +74,17 @@ def test_the_jev_grader_is_accepted_by_the_schema(tmp_path: Path) -> None:
     assert _load(tmp_path, _case(grader="jev"))[0].grader == "jev"
 
 
+def test_a_case_may_expect_no_verdict_and_carry_criteria(tmp_path: Path) -> None:
+    expected = _case()["expected"] | {"verdict": None, "criteria": "The rationale names it."}
+    (case,) = _load(tmp_path, _case(expected=expected))
+    assert case.expected.verdict is None
+    assert case.expected.criteria == "The rationale names it."
+
+
+def test_criteria_default_to_none(tmp_path: Path) -> None:
+    assert _load(tmp_path, _case())[0].expected.criteria is None
+
+
 def test_a_missing_file_is_not_found_with_exit_code_3(tmp_path: Path) -> None:
     with pytest.raises(CasesNotFound) as info:
         load_cases(tmp_path / "nope" / "cases.yaml")
