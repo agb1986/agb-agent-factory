@@ -101,6 +101,7 @@ def run(
     pipeline_run_id: str | None = None,
     hook: ToolHook | None = None,
     client: anthropic.Anthropic | None = None,
+    tag: str | None = None,
 ) -> BaseModel:
     """Run the LLM agent `spec` on `payload` and return an instance of its output model.
 
@@ -110,7 +111,8 @@ def run(
     read; it is required when the agent allows any tool, and leaving it out is a `UsageError`
     that is not traced either. `hook` sees every tool call (default `AllowAll`); pass a new one
     per run. `client` defaults to one built from `ANTHROPIC_API_KEY`, and a missing key raises
-    `AuthOrConfigError`. `pipeline_run_id` lands in the trace row.
+    `AuthOrConfigError`. `pipeline_run_id` and `tag` (for example `eval:code-reviewer@1.2.0`) land
+    in the trace row.
 
     Past those two checks, exactly one row is written to `trace`, whether the run succeeds or
     fails. Raises the `runtime.errors.AgentError` subclasses for failures of the run itself,
@@ -158,6 +160,7 @@ def run(
                 cost_usd=cost_usd(spec.model, usage),
                 output_json=None if output is None else output.model_dump(mode="json"),
                 error=None if error is None else f"{type(error).__name__}: {error}",
+                tag=tag,
             )
         )
 
