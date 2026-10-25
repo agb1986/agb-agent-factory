@@ -18,6 +18,7 @@ from pydantic import BaseModel, ValidationError
 
 from factory.exit import AuthOrConfigError, NotFoundError, UsageError
 from registry.jev_spec import JevSpec
+from registry.published import published_set
 from registry.spec import KINDS, NAME_PATTERN, VERSION_PATTERN, LLMSpec
 
 type AgentSpec = LLMSpec | JevSpec
@@ -51,6 +52,20 @@ class VersionNotFound(AgentNotFound):
         self.available = available
 
 
+class NotPublished(VersionNotFound):
+    """The agent has versions matching the range but none is published (exit 3).
+
+    `available` lists the published versions of the agent, which may be empty.
+    """
+
+    def __init__(self, message: str, available: tuple[str, ...]) -> None:
+        super().__init__(message, available)
+        self.hint = (
+            "publish it with `factory publish-check <agent>`, or pass `--allow-unpublished`"
+            + (f"; published: {', '.join(available)}" if available else "")
+        )
+
+
 class AgentRef(NamedTuple):
     """One agent version found on disk, as `list_agents()` reports it."""
 
@@ -81,10 +96,17 @@ def caret_to_specifier(range: str) -> SpecifierSet:
     return SpecifierSet(f">={major}.{minor}.0,<{upper}", prereleases=False)
 
 
-def list_agents(agents_dir: Path | None = None) -> list[AgentRef]:
+def list_agents(
+    agents_dir: Path | None = None,
+    *,
+    published_only: bool = False,
+    trace_path: Path | None = None,
+) -> list[AgentRef]:
     """Return every (name, version, kind) found under `agents_dir`, by name then version.
 
-    Defaults to `agents/` in the working directory, which may be missing (an empty list). Raises
+    Defaults to `agents/` in the working directory, which may be missing (an empty list). With
+    `published_only`, versions without a row in the `published` table are left out; `trace_path`
+    overrides where that table is read from (see `registry.published.published_set`). Raises
     `ManifestError` when any manifest found is malformed or sits in the wrong place.
     """
     root = AGENTS_DIR if agents_dir is None else agents_dir
@@ -94,15 +116,31 @@ def list_agents(agents_dir: Path | None = None) -> list[AgentRef]:
     for entry in sorted(root.iterdir()):
         if entry.is_dir():
             found.extend(_candidates(root, entry.name))
+    if published_only:
+        published = published_set(trace_path)
+        found = [c for c in found if (c.ref.name, c.ref.version) in published]
     return [c.ref for c in sorted(found, key=lambda c: (c.ref.name, c.version))]
 
 
-def resolve(name: str, range: str, agents_dir: Path | None = None) -> AgentSpec:
+def resolve(
+    name: str,
+    range: str,
+    agents_dir: Path | None = None,
+    *,
+    published_only: bool = False,
+    trace_path: Path | None = None,
+) -> AgentSpec:
     """Return the fully loaded spec of the highest version of `name` matching the caret `range`.
 
+    With `published_only`, versions without a row in the `published` table are ignored, so a
+    higher unpublished version never shadows a published one; `trace_path` overrides where that
+    table is read from (see `registry.published.published_set`). Pipelines pass it unless
+    `--allow-unpublished` is set.
+
     Raises `InvalidRange` for a bad range, `UsageError` for a bad name, `AgentNotFound` when the
-    agent does not exist, `VersionNotFound` (listing the versions found) when none matches, and
-    `ManifestError` for anything wrong in a manifest or in the schemas module an LLM agent names.
+    agent does not exist, `VersionNotFound` (listing the versions found) when none matches,
+    `NotPublished` when versions match but none is published, and `ManifestError` for anything
+    wrong in a manifest or in the schemas module an LLM agent names.
     """
     specifier = caret_to_specifier(range)
     if re.fullmatch(NAME_PATTERN, name) is None:
@@ -115,6 +153,17 @@ def resolve(name: str, range: str, agents_dir: Path | None = None) -> AgentSpec:
     if not matching:
         available = tuple(c.ref.version for c in sorted(found, key=lambda c: c.version))
         raise VersionNotFound(f"no version of {name} matches {range}", available)
+    if published_only:
+        published = published_set(trace_path)
+        live = [c for c in matching if (name, c.ref.version) in published]
+        if not live:
+            have = tuple(
+                c.ref.version
+                for c in sorted(found, key=lambda c: c.version)
+                if (name, c.ref.version) in published
+            )
+            raise NotPublished(f"no published version of {name} matches {range}", have)
+        matching = live
     return load_spec(max(matching, key=lambda c: c.version).path)
 
 
