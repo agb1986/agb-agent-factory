@@ -48,6 +48,13 @@ mention the same lines for an unrelated reason?
 - Are the extra findings, if any, plausible and not noise that would mislead a reader? Extra \
 findings are acceptable unless they are plainly wrong or contradict the verdict.
 
+Some agents judge a panel of reviews instead of reviewing. Their answer has `scores`, \
+`merged_findings` and a `rationale` instead of a verdict, findings and summary, and `expected` \
+then has no verdict. Read `merged_findings` as the findings and the rationale as the summary, and \
+check that the scores agree with them.
+
+When `expected` has `criteria`, the answer passes only if it meets every one of them.
+
 Set `pass` to true only when the answer is a good review for the expectation. Set `score` between \
 0 and 1: 1 for a precise, complete review, 0 for one that misses the point. Give a one or two \
 sentence `reason` that names what decided it.\
@@ -104,7 +111,10 @@ class LLMJudge:
 
     def __call__(self, expected: Expected, actual: Mapping[str, Any]) -> JudgeVerdict:
         """Return the judge's verdict on `actual`, tracing the call whether it succeeds or not."""
-        payload = {"expected": expected.model_dump(mode="json"), "actual": dict(actual)}
+        payload = {
+            "expected": expected.model_dump(mode="json", exclude_none=True),
+            "actual": dict(actual),
+        }
         started_at = datetime.now(UTC)
         start = time.monotonic()
         usage = TokenUsage(0, 0, 0, 0)

@@ -92,6 +92,25 @@ def test_a_valid_reply_is_the_verdict_and_is_traced(trace: Trace) -> None:
     assert _rows(trace) == [(JUDGE_REF, "llm", "eval:x@1.0.0", "run-1", None)]
 
 
+def test_the_judge_sees_criteria_and_no_null_verdict(trace: Trace) -> None:
+    client = FakeClient(_reply(GOOD))
+    expected = Expected(verdict=None, criteria="The rationale names the failed reviewer.")
+    judgement = {"scores": {}, "merged_findings": [], "rationale": "r"}
+    _judge(trace, client)(expected, judgement)
+    sent = json.loads(client.requests[0]["messages"][0]["content"])
+    assert sent["expected"] == {
+        "defects": [],
+        "criteria": "The rationale names the failed reviewer.",
+    }
+    assert sent["actual"] == judgement
+
+
+def test_the_judge_prompt_explains_judgements_and_criteria() -> None:
+    system = build_request([{"role": "user", "content": "x"}])["system"]
+    assert "merged_findings" in system
+    assert "criteria" in system
+
+
 def test_an_invalid_reply_is_retried_once_with_the_errors(trace: Trace) -> None:
     client = FakeClient(_reply('{"pass": true, "score": 7, "reason": "r"}'), _reply(GOOD))
     verdict = _judge(trace, client)(EXPECTED, ACTUAL)
