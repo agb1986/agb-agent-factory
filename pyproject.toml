@@ -53,4 +53,6 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["factory", "registry", "runtime", "tools"]
+# `fixtures/` is measured too, but its source trees are data, not code under test.
+source = ["factory", "fixtures", "registry", "runtime", "tools"]
+omit = ["fixtures/src/*", "fixtures/handmade/*", "fixtures/repos/*"]
