@@ -71,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
     review_parser.add_argument(
         "--no-triage", action="store_true", help="do not call the Jev triage agent"
     )
+    review_parser.add_argument(
+        "--budget-usd",
+        type=float,
+        help="stop the review once it has spent this many dollars (default: the pipeline default)",
+    )
     triage_parser = sub.add_parser(
         "triage",
         help="run only the Jev triage of a change and print its decision",
@@ -86,6 +91,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-unpublished",
         action="store_true",
         help="also use agent versions that have not passed `factory publish-check`",
+    )
+    cost_parser = sub.add_parser(
+        "cost",
+        help="print what the agent runs in the trace cost since a date",
+        epilog="example: factory cost --since 2026-10-01 --by pipeline --json",
+    )
+    cost_parser.add_argument(
+        "--since", required=True, help="start date or datetime, in UTC if it has no offset"
+    )
+    cost_parser.add_argument(
+        "--by", choices=("agent", "pipeline"), default="agent", help="grouping (default: agent)"
+    )
+    cost_parser.add_argument(
+        "--json", action="store_true", help="print one JSON document instead of text"
     )
     return parser
 
@@ -113,6 +132,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _review(args)
         if args.command == "triage":
             return _triage(args)
+        if args.command == "cost":
+            return _cost(args)
     except Exception as exc:  # noqa: BLE001 - the root handler maps every failure to a code
         return _fail(exc, as_json=getattr(args, "json", False))
     parser.print_usage(sys.stderr)
@@ -156,6 +177,7 @@ def _review(args: argparse.Namespace) -> int:
         reviewers=args.reviewers,
         allow_unpublished=args.allow_unpublished,
         no_triage=args.no_triage,
+        budget_usd=args.budget_usd,
     )
 
 
@@ -170,6 +192,13 @@ def _triage(args: argparse.Namespace) -> int:
         as_json=args.json,
         allow_unpublished=args.allow_unpublished,
     )
+
+
+def _cost(args: argparse.Namespace) -> int:
+    """Print the spend recorded in the trace since a date, by agent or by pipeline run."""
+    from runtime.cost import command
+
+    return command(args.since, by=args.by, as_json=args.json)
 
 
 def _fail(exc: Exception, *, as_json: bool) -> int:
