@@ -68,6 +68,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also use agent versions that have not passed `factory publish-check`",
     )
+    review_parser.add_argument(
+        "--no-triage", action="store_true", help="do not call the Jev triage agent"
+    )
+    triage_parser = sub.add_parser(
+        "triage",
+        help="run only the Jev triage of a change and print its decision",
+        epilog="example: factory triage ./repo --base main --head feature --json",
+    )
+    triage_parser.add_argument("repo_path", help="path of the git repository to triage")
+    triage_parser.add_argument("--base", required=True, help="git ref the change starts from")
+    triage_parser.add_argument("--head", required=True, help="git ref under review")
+    triage_parser.add_argument(
+        "--json", action="store_true", help="print one JSON document on stdout instead of text"
+    )
+    triage_parser.add_argument(
+        "--allow-unpublished",
+        action="store_true",
+        help="also use agent versions that have not passed `factory publish-check`",
+    )
     return parser
 
 
@@ -92,6 +111,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _publish_check(args.agent, as_json=args.json, workers=args.workers)
         if args.command == "review":
             return _review(args)
+        if args.command == "triage":
+            return _triage(args)
     except Exception as exc:  # noqa: BLE001 - the root handler maps every failure to a code
         return _fail(exc, as_json=getattr(args, "json", False))
     parser.print_usage(sys.stderr)
@@ -133,6 +154,20 @@ def _review(args: argparse.Namespace) -> int:
         head=args.head,
         as_json=args.json,
         reviewers=args.reviewers,
+        allow_unpublished=args.allow_unpublished,
+        no_triage=args.no_triage,
+    )
+
+
+def _triage(args: argparse.Namespace) -> int:
+    """Run only the triage step on a change; the decision goes to stdout."""
+    from pipelines.triage import command  # imported here: it pulls in the Jev runner
+
+    return command(
+        args.repo_path,
+        base=args.base,
+        head=args.head,
+        as_json=args.json,
         allow_unpublished=args.allow_unpublished,
     )
 
