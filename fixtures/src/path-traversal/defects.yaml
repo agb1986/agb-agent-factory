@@ -1,0 +1,17 @@
+fixture: path-traversal
+summary: >-
+  Adds read, which joins a caller-supplied file name onto the upload root. save in the same module
+  keeps only the last part of the name.
+defects:
+  - id: filename-escapes-root
+    file: uploads/storage.py
+    line_start: 15
+    line_end: 15
+    severity: blocker
+    category: path-traversal
+    title: Path traversal through the file name
+    snippet: "Path(root) / filename"
+    description: >-
+      A name such as ../../etc/passwd, or an absolute path, resolves outside the upload root, so
+      read returns any file the process can open. Use Path(filename).name as save does, or resolve
+      the path and check that it stays under the root.
