@@ -30,6 +30,8 @@ REQUIRED = {
     "sql-injection",
     "n-plus-one",
     "off-by-one-single-file",
+    "quadratic-loop",
+    "missing-index-hint",
 }
 CLEAN = {"clean-refactor", "docs-only", "test-only"}
 FIXTURES = fixture_build.discover()
