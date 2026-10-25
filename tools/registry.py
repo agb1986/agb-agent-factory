@@ -139,7 +139,9 @@ TOOLS: dict[str, Tool] = {
     ),
 }  # fmt: skip
 
-READ_ONLY: frozenset[str] = frozenset({"git.read_file", "git.show_diff", "rg.search"})
+READ_ONLY: frozenset[str] = frozenset(
+    {"git.read_file", "git.show_diff", "rg.search", "fs.list_files", "fs.read_file"}
+)
 """Names of the tools in `TOOLS` that change nothing. The action guard (`runtime.guard`) skips them.
 
 A tool that is not listed here, and a name that is not in `TOOLS` at all, counts as one that writes.
