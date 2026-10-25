@@ -1,0 +1,92 @@
+{
+  "agent": "code-reviewer",
+  "version": "1.2.0",
+  "ref": "code-reviewer@1.2.0",
+  "tag": "eval:code-reviewer@1.2.0",
+  "eval_run_id": "eval-run-1",
+  "min_pass_rate": 0.75,
+  "pass_rate": 0.75,
+  "passed": true,
+  "total": 4,
+  "passed_count": 3,
+  "cost_usd": 0.0,
+  "duration_ms": 0,
+  "cases": [
+    {
+      "id": "off-by-one",
+      "fixture": "off-by-one",
+      "grader": "llm_judge",
+      "passed": true,
+      "score": 0.9,
+      "reason": "judged",
+      "deterministic": {
+        "passed": true,
+        "failures": []
+      },
+      "judge": {
+        "passed": true,
+        "score": 0.9,
+        "reason": "judged"
+      },
+      "error": null,
+      "duration_ms": 0
+    },
+    {
+      "id": "clean-refactor",
+      "fixture": "clean-refactor",
+      "grader": "llm_judge",
+      "passed": true,
+      "score": 0.9,
+      "reason": "judged",
+      "deterministic": {
+        "passed": true,
+        "failures": []
+      },
+      "judge": {
+        "passed": true,
+        "score": 0.9,
+        "reason": "judged"
+      },
+      "error": null,
+      "duration_ms": 0
+    },
+    {
+      "id": "untested-change",
+      "fixture": "untested-change",
+      "grader": "llm_judge",
+      "passed": true,
+      "score": 0.9,
+      "reason": "judged",
+      "deterministic": {
+        "passed": true,
+        "failures": []
+      },
+      "judge": {
+        "passed": true,
+        "score": 0.9,
+        "reason": "judged"
+      },
+      "error": null,
+      "duration_ms": 0
+    },
+    {
+      "id": "mixed",
+      "fixture": "mixed",
+      "grader": "llm_judge",
+      "passed": false,
+      "score": 0.0,
+      "reason": "verdict is 'approve', expected 'request_changes'; defect free-shipping-boundary: no finding in shop/shipping.py on lines 12-12; defect camel-case-locals: no finding in shop/format.py on lines 6-7",
+      "deterministic": {
+        "passed": false,
+        "failures": [
+          "verdict is 'approve', expected 'request_changes'",
+          "defect free-shipping-boundary: no finding in shop/shipping.py on lines 12-12",
+          "defect camel-case-locals: no finding in shop/format.py on lines 6-7"
+        ]
+      },
+      "judge": null,
+      "error": null,
+      "duration_ms": 0
+    }
+  ]
+}
