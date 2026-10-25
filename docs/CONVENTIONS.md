@@ -187,7 +187,9 @@ Pipelines and manifests refer to an agent as `name@^MAJOR.MINOR`. The resolver t
 
 A resolved agent is written `name@MAJOR.MINOR.PATCH`, for example `code-reviewer@1.2.0`. That is the form in trace rows and tags.
 
-Any change to a prompt, schema or question bumps the version in the same commit. A change that breaks the input or output model bumps the major. A change that alters behaviour (prompt, questions, model, effort, tools, limits, gates, a compatible schema addition) bumps the minor. A change that never reaches the model (description, eval cases) bumps the patch.
+`resolve` and `list_agents` take `published_only: bool = False`. When true, a version without a row in the `published` table of the trace store is ignored, so an unpublished 1.3.0 never shadows a published 1.2.0. The table is read from the same path `Trace` uses (`FACTORY_TRACE_DB`, else `data/traces.duckdb`), and a store that does not exist yet means nothing is published. When versions match the range but none is published, `resolve` raises `NotPublished` (a `VersionNotFound`, exit 3) whose hint says to run `factory publish-check` or pass `--allow-unpublished`. Pipelines (#14) resolve with `published_only=True` unless the caller passes `--allow-unpublished`; every other command resolves with the default, so `factory eval` and `factory publish-check` can still reach a version that has not been published.
+
+Any change to a prompt, schema or question bumps the version in the same commit; `scripts/check_version_bump.py` enforces it (see "CLI shape"). A change that breaks the input or output model bumps the major. A change that alters behaviour (prompt, questions, model, effort, tools, limits, gates, a compatible schema addition) bumps the minor. A change that never reaches the model (description, eval cases) bumps the patch.
 
 ## Output contract
 
@@ -362,6 +364,15 @@ The LLM runner writes the row in a `finally` block, so a failed run still record
 | `error` | VARCHAR, null | Error class and message when the run failed |
 | `tag` | VARCHAR, null | Set by the eval runner and publish gate, e.g. `eval:code-reviewer@1.2.0` |
 
+A version becomes publishable by passing its evals. Migration 2 adds the `published` table, written only by `factory publish-check` through `Trace.record_published(agent, version, pass_rate, git_sha)` and read back with `Trace.published()`. It is an append-only history with no key: publishing a version again adds a row, and a version counts as published once it has any.
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `agent`, `version` | VARCHAR | The agent name and its `MAJOR.MINOR.PATCH`, as in the manifest |
+| `pass_rate` | DOUBLE | The eval pass rate that earned the row |
+| `published_at` | TIMESTAMPTZ | When the row was written, in UTC |
+| `git_sha` | VARCHAR | `HEAD` of the repository when the check ran |
+
 A `Trace` holds one DuckDB connection for its lifetime and opens it on first use, rather than opening per call. DuckDB allows one read-write process per file, so holding the connection keeps the single writer (#26) in charge of the file and saves a file open on every run; close it with `close()` or a `with` block. Schema changes are numbered migrations in `runtime/trace.py`: append a `(version, sql)` pair, never edit a shipped one, and `ensure_schema()` applies the missing ones and records them in `schema_version`. `cost_usd` is null for a model with no entry in `runtime/pricing.py`, and aggregates treat null as zero.
 
 ## Secrets
@@ -403,6 +414,10 @@ $ factory run no-such-agent@^1.0 --json 2>&1 >/dev/null
 ```
 
 `factory eval <name>[@range] [--json] [--workers N]` runs the agent's `evals/cases.yaml` on `--workers` threads (default 4) and prints a per-case table on stderr. Under `--json`, stdout carries one object with `agent`, `version`, `ref`, `tag`, `eval_run_id`, `min_pass_rate`, `pass_rate`, `passed`, `total`, `passed_count`, `cost_usd`, `duration_ms` and `cases`; each case has `id`, `fixture`, `grader`, `passed`, `score`, `reason`, `deterministic`, `judge`, `error` and `duration_ms`. It exits 0 at or above the minimum pass rate and 1 below it, with the document printed either way. `tests/evals/golden/code-reviewer-eval.json` is a normalised example.
+
+`factory publish-check <name>[@range] [--json] [--workers N]` runs the same evaluation as `factory eval` and, only when it passes, writes exactly one row to the `published` table (see "Trace row"). It writes nothing on a fail. Output and exit codes match `factory eval`: the table on stderr, and under `--json` one object holding the eval keys plus `published` (a boolean) and `git_sha`, printed also on a fail. It exits 0 when the version was published and 1 when the pass rate is below the floor, 3 for an unknown agent or version, and 4 when git cannot give the commit to record. Commit the change first: the recorded `git_sha` is `HEAD`, so it names the commit that carries the prompt only if the working tree is clean.
+
+`scripts/check_version_bump.py [base]` is the guard behind the rule in "Agent address". It compares the working tree with the merge base of `base` (default `origin/main`) and exits 1, naming each agent, when its `system.md`, its `schemas.py` or the `questions` block of its `agent.yaml` changed while `version` did not. An agent directory that is new since the merge base needs no bump. It exits 2 when it cannot run, for example for an unknown base. It runs as the `version-bump` pre-commit hook, and CI runs it as `uv run python scripts/check_version_bump.py origin/main`. Edits to `registry/common_schemas.py` are not covered, because that module belongs to no single agent.
 
 ## Exit codes
 

@@ -245,3 +245,16 @@ def test_publish_check_unknown_agent_exits_3(trace_db: Path) -> None:
 
 def test_publish_check_rejects_zero_workers(trace_db: Path) -> None:
     assert main(["publish-check", "code-reviewer", "--workers", "0"]) == ExitCode.USAGE
+
+
+def test_publish_check_warns_when_the_agent_directory_is_dirty(
+    trace_db: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    prompt = resolve("code-reviewer", "^1.0").directory / "system.md"
+    original = prompt.read_text()
+    prompt.write_text(original + "\n")
+    try:
+        command("code-reviewer", as_json=True, runner=_runner(GOOD), judge=_judge(True), workers=2)
+    finally:
+        prompt.write_text(original)
+    assert "uncommitted changes" in capsys.readouterr().err
