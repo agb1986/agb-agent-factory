@@ -1,0 +1,26 @@
+name: judge
+version: 2.0.0
+kind: llm
+description: Checks a panel's reviews against the repository, merges their findings and scores the change.
+model: claude-opus-5-5 # verified by tests/live/test_judge_live.py
+effort: high
+system_prompt: system.md
+schemas: schemas.py
+input_model: JudgeInput
+output_model: JudgeOutput
+tools:
+  allow: [git.read_file]
+  deny: []
+limits:
+  max_tool_turns: 10
+  timeout_s: 180
+  max_output_tokens: 16000
+evals:
+  min_pass_rate: 0.75
+scoring:
+  weights:
+    correctness_risk: 0.4
+    security_risk: 0.25
+    test_coverage: 0.2
+    maintainability: 0.15
+  ship_threshold: 0.7

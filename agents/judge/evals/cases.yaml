@@ -1,0 +1,207 @@
+# Eval cases for judge. Each one hands the judge a panel's reviews of the `off-by-one` fixture,
+# whose change drops the last window of a rolling sum, and checks how it weighs them. The reviews
+# and the diff are inline, so no reviewer runs; the diff is exactly what git.show_diff returns for
+# the fixture, and a test checks that. `repo_path` is not in the payload: the eval runner fills it
+# in with the built fixture repository, which the judge reads to confirm the cited lines.
+#
+# The judge returns no verdict, so `verdict` is null. The planted defect must survive as a merged
+# finding at or above its severity floor, and `criteria` says what else the grader must see.
+cases:
+  - id: unanimous-panel
+    fixture: off-by-one
+    payload:
+      reviews:
+        code-reviewer@1.2.0:
+          findings:
+            - &last-window-major
+              file: series/rolling.py
+              line_start: 12
+              line_end: 13
+              severity: major
+              category: logic
+              title: Loop bound drops the last window
+              body: >-
+                The running-sum loop stops at len(values) - 2, so the window that ends at the last
+                value is never added. For [1, 2, 3, 4] with a window of 2 it returns [3, 5] instead
+                of [3, 5, 7]. No test looks at the last window of a series longer than the window.
+              suggested_fix: >-
+                Loop over range(window, len(values)) and add a test such as
+                rolling_sums([1, 2, 3, 4], 2) == [3, 5, 7].
+          summary: >-
+            Rewrites rolling_sums as a running sum. The loop bound is one short, so every result
+            misses its last window.
+          verdict: request_changes
+        perf-reviewer@0.3.0:
+          findings:
+            - file: series/rolling.py
+              line_start: 12
+              line_end: 13
+              severity: major
+              category: correctness
+              title: Running sum skips the final window
+              body: >-
+                The running sum makes the function linear in the length of the series, which is
+                the point of the change, but the loop ends one step early: rolling_sums([1, 2, 3,
+                4], 2) gives [3, 5] and loses the sum of the last two values.
+              suggested_fix: Use range(window, len(values)) as the loop bound.
+          summary: >-
+            The running sum removes the quadratic cost of the old version. Its loop bound drops
+            the last window.
+          verdict: request_changes
+        security-reviewer@1.0.0: &security-clean
+          findings: []
+          summary: >-
+            Arithmetic on a list of integers; nothing crosses a trust boundary and no input,
+            file, query or secret is involved.
+          verdict: approve
+      diff_context: &off-by-one-diff
+        base: base
+        head: head
+        diff: |
+          diff --git a/series/rolling.py b/series/rolling.py
+          index b544479..83bddac 100644
+          --- a/series/rolling.py
+          +++ b/series/rolling.py
+          @@ -5,7 +5,11 @@ def rolling_sums(values: list[int], window: int) -> list[int]:
+               """Return the sum of every run of `window` consecutive values, oldest first."""
+               if window <= 0:
+                   raise ValueError("window must be positive")
+          -    sums = []
+          -    for start in range(len(values) - window + 1):
+          -        sums.append(sum(values[start : start + window]))
+          +    if window > len(values):
+          +        return []
+          +    total = sum(values[:window])
+          +    sums = [total]
+          +    for end in range(window, len(values) - 1):
+          +        total += values[end] - values[end - window]
+          +        sums.append(total)
+               return sums
+    expected:
+      verdict: null
+      defects:
+        - &last-window-dropped
+          id: last-window-dropped
+          file: series/rolling.py
+          line_start: 12
+          line_end: 13
+          severity_floor: major
+      criteria: >-
+        merged_findings holds a single finding for the dropped last window at series/rolling.py
+        lines 12 to 13, at severity major, whose sources list both code-reviewer@1.2.0 and
+        perf-reviewer@0.3.0. correctness_risk is clearly higher than security_risk.
+    grader: llm_judge
+
+  - id: severity-disagreement
+    fixture: off-by-one
+    payload:
+      reviews:
+        code-reviewer@1.2.0:
+          findings:
+            - *last-window-major
+          summary: >-
+            Rewrites rolling_sums as a running sum. The loop bound is one short, so every result
+            misses its last window.
+          verdict: request_changes
+        perf-reviewer@0.3.0:
+          findings:
+            - file: series/rolling.py
+              line_start: 12
+              line_end: 13
+              severity: minor
+              category: correctness
+              title: Off-by-one in the loop bound
+              body: >-
+                The loop bound is len(values) - 1 where len(values) would cover every window. It
+                only loses the final element of the result, so it is a small slip next to the gain
+                from the running sum.
+              suggested_fix: Use range(window, len(values)) as the loop bound.
+          summary: >-
+            The running sum removes the quadratic cost of the old version. A small off-by-one in
+            the loop bound is worth fixing.
+          verdict: approve
+        security-reviewer@1.0.0: *security-clean
+      diff_context: *off-by-one-diff
+    expected:
+      verdict: null
+      defects:
+        - *last-window-dropped
+      criteria: >-
+        The two reviewers' findings at series/rolling.py lines 12 to 13 are merged into one finding
+        at severity major, the stricter of the two, listing both code-reviewer@1.2.0 and
+        perf-reviewer@0.3.0 as sources. The rationale says that the reviewers disagreed about the
+        severity and why major stands, such as that every result with more than one window is
+        wrong.
+    grader: llm_judge
+
+  - id: nonexistent-line
+    fixture: off-by-one
+    payload:
+      reviews:
+        code-reviewer@1.2.0:
+          findings:
+            - *last-window-major
+          summary: >-
+            Rewrites rolling_sums as a running sum. The loop bound is one short, so every result
+            misses its last window.
+          verdict: request_changes
+        perf-reviewer@0.3.0:
+          findings:
+            - file: series/rolling.py
+              line_start: 42
+              line_end: 44
+              severity: major
+              category: performance
+              title: Window sum recomputed for every start
+              body: >-
+                Each iteration calls sum(values[start : start + window]), so the function costs
+                O(len(values) * window). Keep a running total and add and drop one value per step.
+              suggested_fix: Keep a running total instead of summing each window again.
+          summary: >-
+            The function still sums every window from scratch, which is quadratic for large
+            windows.
+          verdict: request_changes
+        security-reviewer@1.0.0: *security-clean
+      diff_context: *off-by-one-diff
+    expected:
+      verdict: null
+      defects:
+        - *last-window-dropped
+      criteria: >-
+        The perf-reviewer@0.3.0 finding at series/rolling.py lines 42 to 44 is dropped from
+        merged_findings, or kept only at severity info, because the file has 15 lines at head and
+        the code it describes was removed by the change. The rationale names that finding and gives
+        the reason. The code-reviewer@1.2.0 finding at lines 12 to 13 survives at severity major.
+    grader: llm_judge
+
+  - id: failed-reviewer
+    fixture: off-by-one
+    payload:
+      reviews:
+        code-reviewer@1.2.0:
+          findings:
+            - *last-window-major
+          summary: >-
+            Rewrites rolling_sums as a running sum. The loop bound is one short, so every result
+            misses its last window.
+          verdict: request_changes
+        perf-reviewer@0.3.0:
+          findings: []
+          summary: >-
+            The running sum makes the function linear in the length of the series instead of
+            quadratic. No performance concern.
+          verdict: approve
+      failed_reviewers:
+        - reviewer: security-reviewer@1.0.0
+          error: "RunTimeout: no answer within 180 s"
+      diff_context: *off-by-one-diff
+    expected:
+      verdict: null
+      defects:
+        - *last-window-dropped
+      criteria: >-
+        The rationale says explicitly that security-reviewer@1.0.0 failed, that the security of the
+        change was therefore not reviewed, and that this leaves a blind spot. The security_risk
+        justification says the area went unreviewed instead of claiming it was checked clean. The
+        code-reviewer@1.2.0 finding at series/rolling.py lines 12 to 13 survives at severity major.
+    grader: llm_judge
