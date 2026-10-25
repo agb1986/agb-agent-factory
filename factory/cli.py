@@ -6,9 +6,7 @@ from collections.abc import Sequence
 from importlib.metadata import version
 from pathlib import Path
 
-# Exit codes. Replace with `factory.exit.ExitCode` once #1 merges.
-EXIT_OK = 0
-EXIT_USAGE = 2
+from factory.exit import ExitCode
 
 AGENTS_DIR = Path("agents")
 
@@ -44,13 +42,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
-        return exc.code if isinstance(exc.code, int) else EXIT_USAGE
+        return exc.code if isinstance(exc.code, int) else ExitCode.USAGE
     if args.command == "list":
         for name in list_agents():
             print(name)
-        return EXIT_OK
+        return ExitCode.OK
     parser.print_usage(sys.stderr)
-    return EXIT_USAGE
+    return ExitCode.USAGE
 
 
 if __name__ == "__main__":

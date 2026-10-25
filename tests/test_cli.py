@@ -5,11 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from factory.cli import EXIT_OK, EXIT_USAGE, list_agents, main
+from factory.cli import list_agents, main
+from factory.exit import ExitCode
 
 
 def test_version_prints_package_metadata_version(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(["--version"]) == EXIT_OK
+    assert main(["--version"]) == ExitCode.OK
     assert capsys.readouterr().out.strip() == f"factory {version('agb-agent-factory')}"
 
 
@@ -17,7 +18,7 @@ def test_list_with_no_agents_prints_nothing(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    assert main(["list"]) == EXIT_OK
+    assert main(["list"]) == ExitCode.OK
     assert capsys.readouterr().out == ""
 
 
@@ -34,8 +35,8 @@ def test_list_agents_missing_dir_is_empty(tmp_path: Path) -> None:
 
 
 def test_no_subcommand_is_usage_error() -> None:
-    assert main([]) == EXIT_USAGE
+    assert main([]) == ExitCode.USAGE
 
 
 def test_unknown_subcommand_is_usage_error() -> None:
-    assert main(["bogus"]) == EXIT_USAGE
+    assert main(["bogus"]) == ExitCode.USAGE
