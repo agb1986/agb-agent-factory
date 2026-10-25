@@ -32,7 +32,8 @@ Each section states one rule and gives a minimal example. A ticket that has to i
 | `evals/` | Eval runner and calibration data |
 | `fixtures/` | Scripts that build small fixture repositories with planted defects |
 | `factory/` | The `factory` command (`cli.py`) and the exit codes and error types (`exit.py`) |
-| `docs/` | Conventions, plan, Jev spike notes, decisions |
+| `docs/` | Conventions, plan, Jev spike notes, decision records in `docs/decisions/` |
+| `prototypes/` | Throwaway evidence for a decision record, one subdirectory per question |
 
 An agent directory is named after the agent: lowercase words joined by hyphens, equal to the manifest's `name`. To keep several versions side by side, put each in a subdirectory named after its full version. That subdirectory name must equal the manifest's `version`. Both layouts may be used for the same agent, and the resolver considers all of them.
 
@@ -43,6 +44,8 @@ agents/code-reviewer/schemas.py
 agents/code-reviewer/evals/cases.yaml
 agents/code-reviewer/1.3.0/agent.yaml        # a second version beside it
 ```
+
+A decision record is `docs/decisions/NNNN-<slug>.md` with the sections Context, Options considered, Decision and Consequences. The code it cites as evidence lives in `prototypes/<question>/`, which production code never imports and the default `uv run pytest` does not collect; run it with `uv run pytest prototypes/<question>`. The repository has no `__init__.py` files, so a prototype module must not take the name of a top-level package such as `tools`. A prototype can be deleted once the issues that build on its decision have landed.
 
 ## Manifest: kind llm
 
