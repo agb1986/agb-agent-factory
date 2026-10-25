@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from factory.cli import main
+from factory.cli import build_parser, main
 from factory.exit import ExitCode
 
 
@@ -100,3 +100,21 @@ def test_no_subcommand_is_usage_error() -> None:
 
 def test_unknown_subcommand_is_usage_error() -> None:
     assert main(["bogus"]) == ExitCode.USAGE
+
+
+def test_cost_needs_since() -> None:
+    assert main(["cost"]) == ExitCode.USAGE
+
+
+def test_cost_rejects_an_unknown_grouping() -> None:
+    assert main(["cost", "--since", "2026-10-01", "--by", "model"]) == ExitCode.USAGE
+
+
+def test_review_takes_a_budget_that_is_a_number() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        ["review", ".", "--base", "main", "--head", "x", "--budget-usd", "0.75"]
+    )
+    assert args.budget_usd == 0.75
+    assert parser.parse_args(["review", ".", "--base", "main", "--head", "x"]).budget_usd is None
+    assert main(["review", ".", "--base", "main", "--head", "x", "--budget-usd", "lots"]) == 2

@@ -1,0 +1,51 @@
+{
+  "since": "2026-10-20T00:00:00Z",
+  "by": "pipeline",
+  "total_runs": 8,
+  "total_cost_usd": 1.001345,
+  "buckets": {
+    "other": {
+      "runs": 5,
+      "cost_usd": 0.051345,
+      "groups": [
+        {
+          "pipeline_run_id": "pipe-1",
+          "runs": 3,
+          "cost_usd": 0.039445
+        },
+        {
+          "pipeline_run_id": "pipe-2",
+          "runs": 1,
+          "cost_usd": 0.0119
+        },
+        {
+          "pipeline_run_id": "(none)",
+          "runs": 1,
+          "cost_usd": 0.0
+        }
+      ]
+    },
+    "eval": {
+      "runs": 2,
+      "cost_usd": 0.5,
+      "groups": [
+        {
+          "pipeline_run_id": "(none)",
+          "runs": 2,
+          "cost_usd": 0.5
+        }
+      ]
+    },
+    "publish": {
+      "runs": 1,
+      "cost_usd": 0.45,
+      "groups": [
+        {
+          "pipeline_run_id": "(none)",
+          "runs": 1,
+          "cost_usd": 0.45
+        }
+      ]
+    }
+  }
+}

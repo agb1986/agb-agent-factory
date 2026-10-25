@@ -1,13 +1,21 @@
 """Tests for runtime/trace.py."""
 
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from runtime.trace import DEFAULT_PATH, ENV_VAR, MIGRATIONS, Trace, TraceRow, resolve_path
+from runtime.trace import (
+    DEFAULT_PATH,
+    ENV_VAR,
+    MIGRATIONS,
+    CostRow,
+    Trace,
+    TraceRow,
+    resolve_path,
+)
 
 T0 = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
 
@@ -199,3 +207,62 @@ def test_published_filters_by_agent_and_keeps_history(trace: Trace) -> None:
 def test_record_published_rejects_naive_timestamp(trace: Trace) -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
         trace.record_published("a", "1.0.0", 1.0, "s", datetime(2026, 1, 1))
+
+
+# --- cost_breakdown ------------------------------------------------------------------------------
+
+
+def test_cost_breakdown_groups_by_agent_and_tag_bucket(trace: Trace) -> None:
+    trace.record(row("r1", cost_usd=0.25))
+    trace.record(row("r2", cost_usd=0.5, tag="eval:code-reviewer@1.2.0"))
+    trace.record(row("r3", cost_usd=1.0, tag="eval:code-reviewer@1.2.0"))
+    trace.record(row("r4", cost_usd=2.0, tag="publish:code-reviewer@1.2.0"))
+    trace.record(row("r5", cost_usd=4.0, tag="nightly"))
+    trace.record(row("r6", agent_ref="fixer@0.1.0", cost_usd=8.0))
+    assert trace.cost_breakdown(T0) == [
+        CostRow("code-reviewer@1.2.0", "eval", 2, 1.5),
+        CostRow("code-reviewer@1.2.0", "other", 2, 4.25),
+        CostRow("code-reviewer@1.2.0", "publish", 1, 2.0),
+        CostRow("fixer@0.1.0", "other", 1, 8.0),
+    ]
+
+
+def test_cost_breakdown_groups_by_pipeline_with_runs_outside_one_last(trace: Trace) -> None:
+    trace.record(row("r1", pipeline_run_id="p2", cost_usd=1.0))
+    trace.record(row("r2", pipeline_run_id="p1", cost_usd=2.0))
+    trace.record(row("r3", pipeline_run_id="p1", cost_usd=3.0))
+    trace.record(row("r4", cost_usd=4.0))
+    assert trace.cost_breakdown(T0, by="pipeline") == [
+        CostRow("p1", "other", 2, 5.0),
+        CostRow("p2", "other", 1, 1.0),
+        CostRow(None, "other", 1, 4.0),
+    ]
+
+
+def test_cost_breakdown_counts_a_run_without_a_cost_as_free(trace: Trace) -> None:
+    trace.record(row("r1"))
+    assert trace.cost_breakdown(T0) == [CostRow("code-reviewer@1.2.0", "other", 1, 0.0)]
+
+
+def test_cost_breakdown_starts_at_since_inclusive(trace: Trace) -> None:
+    trace.record(row("old", started_at=T0 - timedelta(seconds=1), cost_usd=1.0))
+    trace.record(row("edge", started_at=T0, cost_usd=2.0))
+    trace.record(row("new", started_at=T0 + timedelta(hours=1), cost_usd=4.0))
+    [only] = trace.cost_breakdown(T0)
+    assert (only.runs, only.cost_usd) == (2, 6.0)
+
+
+def test_cost_breakdown_reads_since_in_any_offset(trace: Trace) -> None:
+    trace.record(row("r1", cost_usd=1.0))
+    plus_two = timezone(timedelta(hours=2))
+    assert trace.cost_breakdown(T0.astimezone(plus_two))[0].runs == 1
+    assert trace.cost_breakdown(T0.astimezone(plus_two) + timedelta(seconds=1)) == []
+
+
+def test_cost_breakdown_on_an_empty_trace_is_empty(trace: Trace) -> None:
+    assert trace.cost_breakdown(T0) == []
+
+
+def test_cost_breakdown_rejects_a_naive_since(trace: Trace) -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        trace.cost_breakdown(datetime(2026, 10, 25))

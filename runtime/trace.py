@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 import duckdb
 
@@ -101,6 +101,16 @@ class PublishedRow:
     pass_rate: float
     published_at: datetime
     git_sha: str
+
+
+@dataclass(frozen=True, slots=True)
+class CostRow:
+    """The runs of one group and tag bucket, as returned by `Trace.cost_breakdown`."""
+
+    group: str | None
+    bucket: str
+    runs: int
+    cost_usd: float
 
 
 def resolve_path(path: str | os.PathLike[str] | None = None) -> Path:
@@ -269,6 +279,29 @@ class Trace:
             params.append(since.astimezone(UTC))
         sql += " GROUP BY agent_ref ORDER BY agent_ref"
         return {ref: float(cost) for ref, cost in self._connect().execute(sql, params).fetchall()}
+
+    def cost_breakdown(
+        self, since: datetime, by: Literal["agent", "pipeline"] = "agent"
+    ) -> list[CostRow]:
+        """Return runs started at or after `since`, counted and costed per group and tag bucket.
+
+        `by` groups by `agent_ref` or by `pipeline_run_id` (`None` for runs outside a pipeline).
+        The bucket is `eval` or `publish` for a tag that starts with `eval:` or `publish:`, and
+        `other` for any other tag and for no tag. Runs with a null cost add nothing. Rows come
+        ordered by group, then bucket. Raises `ValueError` for a naive `since`.
+        """
+        self.ensure_schema()
+        if since.tzinfo is None:
+            raise ValueError("since must be timezone-aware")
+        column = "agent_ref" if by == "agent" else "pipeline_run_id"
+        sql = (
+            f"SELECT {column}, CASE WHEN tag LIKE 'eval:%' THEN 'eval'"
+            " WHEN tag LIKE 'publish:%' THEN 'publish' ELSE 'other' END AS bucket,"
+            " count(*), COALESCE(sum(cost_usd), 0.0) FROM traces WHERE started_at >= ?"
+            f" GROUP BY {column}, bucket ORDER BY {column} NULLS LAST, bucket"
+        )
+        found = self._connect().execute(sql, [since.astimezone(UTC)]).fetchall()
+        return [CostRow(group, bucket, runs, float(cost)) for group, bucket, runs, cost in found]
 
     def cost_by_pipeline_run(self, pipeline_run_id: str) -> float:
         """Return total `cost_usd` of every run in one pipeline invocation, 0.0 when there is none."""

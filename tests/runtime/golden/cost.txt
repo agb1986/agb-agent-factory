@@ -1,0 +1,15 @@
+cost since 2026-10-20T00:00:00Z, by agent
+
+other runs: 5 runs, $0.0513
+  code-reviewer@1.2.0      2  $0.0242
+  diff-triage@0.1.0        1  $0.0000
+  judge@1.0.0              1  $0.0040
+  perf-reviewer@0.3.0      1  $0.0231
+
+eval runs: 2 runs, $0.5000
+  code-reviewer@1.2.0      2  $0.5000
+
+publish runs: 1 run, $0.4500
+  fixer@0.1.0      1  $0.4500
+
+total: 8 runs, $1.0013
