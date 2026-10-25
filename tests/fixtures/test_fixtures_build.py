@@ -35,7 +35,9 @@ REQUIRED = {
     "hardcoded-secret",
     "path-traversal",
 }
-CLEAN = {"clean-refactor", "docs-only", "test-only"}
+CLEAN = {"clean-refactor", "docs-only", "test-only", "untested-change-covered"}
+FAILS_ON_HEAD = {"off-by-one-red"}
+"""Fixtures built for the fixer: one test fails on `head` on purpose, and passes on `base`."""
 FIXTURES = fixture_build.discover()
 
 
@@ -188,7 +190,10 @@ def test_fixture_tests_pass_on_both_refs(
         text=True,
         check=False,
     )
-    assert done.returncode == 0, done.stdout + done.stderr
+    if name in FAILS_ON_HEAD and ref == "head":
+        assert done.returncode == 1, done.stdout + done.stderr
+    else:
+        assert done.returncode == 0, done.stdout + done.stderr
 
 
 def test_unknown_fixture_is_not_found(tmp_path: Path) -> None:
