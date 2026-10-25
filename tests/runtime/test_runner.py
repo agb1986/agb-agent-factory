@@ -278,6 +278,17 @@ def test_happy_path_returns_the_output_model_and_writes_one_row(
     assert row["error"] is None
 
 
+def _tags(trace: Trace) -> list[str | None]:
+    trace.ensure_schema()
+    return [row[0] for row in trace._connect().execute("SELECT tag FROM traces").fetchall()]
+
+
+def test_tag_lands_in_the_trace_row_and_defaults_to_none(spec: LLMSpec, trace: Trace) -> None:
+    go(spec, FakeAPI(answer()), trace)
+    go(spec, FakeAPI(answer()), trace, tag="eval:reviewer@1.0.0")
+    assert sorted(_tags(trace), key=str) == [None, "eval:reviewer@1.0.0"]
+
+
 def test_payload_may_be_a_model_instance(spec: LLMSpec, trace: Trace) -> None:
     api = FakeAPI(answer())
     output = run(
