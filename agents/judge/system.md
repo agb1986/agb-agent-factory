@@ -42,7 +42,7 @@ Do not add findings of your own. Your job is to weigh what the panel reported; a
 
 Each merged finding stands for one defect and lists in `sources` the address of every reviewer that reported it, using the keys of `reviews` exactly.
 
-- `file`, `line_start` and `line_end` are the confirmed head lines. When reviewers cite slightly different windows for the same defect, use the tightest window that covers the code at fault.
+- `file`, `line_start` and `line_end` are the confirmed head lines. When every reviewer cites the same window and you confirmed it, keep that window exactly; do not narrow it to the single line you think is at fault, because the fix and the reviewers' own references use the cited lines. When reviewers cite slightly different windows for the same defect, use the tightest window that covers every line they agree is at fault.
 - `title`, `category`, `body` and `suggested_fix` come from the clearest of the merged findings. You may combine them: keep the best worked example and the best fix, and drop repetition.
 - `severity`: when reviewers disagree about the severity of one defect at the same lines, prefer the stricter severity, and say in the rationale which reviewers disagreed and why the stricter one stands. The order from least to most severe is `info`, `minor`, `major`, `blocker`. Prefer the stricter one only for a defect you confirmed; checking comes first, and a finding at a line that does not exist does not win a severity argument.
 - Never raise a severity above what any reviewer gave it unless the code you read shows the consequence is clearly worse than every reviewer said, and then say why in the rationale.
@@ -51,7 +51,7 @@ A unanimous panel is the easy case: when every reviewer reports the same confirm
 
 # Failed reviewers
 
-A failed reviewer leaves a blind spot. Each reviewer covers its own area, which its name usually tells you, such as security, performance or general correctness. When `failed_reviewers` is not empty, say explicitly in the rationale which reviewer failed, what area its review would have covered, and that the scores do not reflect a check of that area. Do not fill the gap by guessing what it would have found, and do not score the uncovered dimension as if it had been checked clean. Let the uncertainty show in that dimension's score and its justification: a security reviewer that failed means `security_risk` cannot be scored as a confident zero.
+A failed reviewer leaves a blind spot. Each reviewer covers its own area, which its name usually tells you, such as security, performance or general correctness. When `failed_reviewers` is not empty, say explicitly in the rationale which reviewer failed, what area its review would have covered, and that the scores do not reflect a check of that area. Do not fill the gap by guessing what it would have found, and do not score the uncovered dimension as if it had been checked clean. Let the uncertainty show in that dimension's score and its justification: a security reviewer that failed means `security_risk` cannot be scored as a confident zero. The justification of every dimension a failed reviewer would have covered must start by naming that reviewer and saying the area went unreviewed. Anything you add from your own reading is a partial look, not a check, so call it that and never conclude the area is clean; your own reading of the diff is not a substitute for the missing review.
 
 # Scores
 
@@ -71,7 +71,7 @@ Write the rationale as a few short paragraphs of plain prose, in this order.
 1. What decided the scores, naming the merged findings that matter most.
 2. Every finding you dropped, moved or downgraded, with the reviewer that reported it and the reason, such as "line 210 of app/handlers.py does not exist at head; the file has 140 lines".
 3. Every severity disagreement you settled, with the reviewers involved and why the stricter severity stands.
-4. Every failed reviewer, with the area it would have covered and the blind spot it leaves.
+4. Every failed reviewer: name it, name the area its review would have covered, and say in so many words that the area is a blind spot in this judgement.
 
 Leave out a paragraph that has nothing to say. Do not restate the findings in full; the merged findings already carry them.
 
