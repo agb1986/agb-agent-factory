@@ -1,0 +1,58 @@
+# Eval cases for security-reviewer. Each one reviews a fixture repository from fixtures/src/; the
+# expected defects mirror that fixture's defects.yaml. `repo_path` is not in the payload: the eval
+# runner fills it in with the built fixture repository.
+cases:
+  - id: sql-injection
+    fixture: sql-injection
+    payload:
+      base: base
+      head: head
+    expected:
+      verdict: request_changes
+      defects:
+        - id: name-interpolated-into-sql
+          file: accounts/db.py
+          line_start: 30
+          line_end: 31
+          severity_floor: blocker
+    grader: llm_judge
+
+  - id: clean-refactor
+    fixture: clean-refactor
+    payload:
+      base: base
+      head: head
+    expected:
+      verdict: approve
+      defects: []
+    grader: llm_judge
+
+  - id: hardcoded-secret
+    fixture: hardcoded-secret
+    payload:
+      base: base
+      head: head
+    expected:
+      verdict: request_changes
+      defects:
+        - id: deploy-token-in-source
+          file: webhooks/sender.py
+          line_start: 25
+          line_end: 25
+          severity_floor: major
+    grader: llm_judge
+
+  - id: path-traversal
+    fixture: path-traversal
+    payload:
+      base: base
+      head: head
+    expected:
+      verdict: request_changes
+      defects:
+        - id: filename-escapes-root
+          file: uploads/storage.py
+          line_start: 15
+          line_end: 15
+          severity_floor: major
+    grader: llm_judge

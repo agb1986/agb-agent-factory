@@ -1,0 +1,19 @@
+name: security-reviewer
+version: 1.0.0
+kind: llm
+description: Reviews a diff for injection, authorisation, secrets, deserialisation and dependency risk, and reports findings with head-revision line numbers.
+model: claude-sonnet-5-5 # verified by tests/live/test_security_reviewer_live.py
+effort: high
+system_prompt: system.md
+schemas: schemas.py
+input_model: ReviewInput
+output_model: ReviewOutput
+tools:
+  allow: [git.read_file, git.show_diff, rg.search]
+  deny: []
+limits:
+  max_tool_turns: 12
+  timeout_s: 180
+  max_output_tokens: 4096
+evals:
+  min_pass_rate: 0.75
