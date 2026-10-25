@@ -37,6 +37,7 @@ from factory.exit import FactoryError, UsageError
 from registry import resolve
 from registry.spec import LLMSpec
 from runtime import runner
+from runtime.budget import Budget
 from runtime.errors import AgentError
 from runtime.hooks import ToolCall, ToolDecision, ToolHook, ToolResult
 from runtime.trace import Trace, TraceRow
@@ -207,6 +208,7 @@ def llm_asker(
     pipeline_run_id: str | None = None,
     tag: str | None = None,
     client: anthropic.Anthropic | None = None,
+    budget: Budget | None = None,
 ) -> Ask:
     """Return an `Ask` that runs the `kind: llm` guard agent `spec` through `runtime.runner.run`.
 
@@ -225,6 +227,7 @@ def llm_asker(
                 pipeline_run_id=pipeline_run_id,
                 client=client,
                 tag=tag,
+                budget=budget,
             )
         except AgentError as exc:
             raise AskFailed(f"{type(exc).__name__}: {exc}", capture.row) from exc
@@ -245,6 +248,7 @@ def build_guard_hook(
     inner: ToolHook | None = None,
     client: anthropic.Anthropic | None = None,
     agents_dir: Path | None = None,
+    budget: Budget | None = None,
 ) -> GuardHook:
     """Return the `GuardHook` for one run of `spec`, which must have a `guard` address.
 
@@ -262,7 +266,14 @@ def build_guard_hook(
         )
     root = str(Path(repo_path if repo_path is not None else Path.cwd()).resolve())
     return GuardHook(
-        llm_asker(guard_spec, trace, pipeline_run_id=pipeline_run_id, tag=tag, client=client),
+        llm_asker(
+            guard_spec,
+            trace,
+            pipeline_run_id=pipeline_run_id,
+            tag=tag,
+            client=client,
+            budget=budget,
+        ),
         trace,
         parent_run_id=parent_run_id,
         guard_ref=guard_spec.address,

@@ -14,6 +14,7 @@ from registry import resolve
 from registry.resolver import load_spec
 from registry.spec import LLMSpec
 from runtime import guard
+from runtime.budget import Budget, BudgetExceeded
 from runtime.errors import AgentError
 from runtime.guard import (
     AskFailed,
@@ -21,6 +22,7 @@ from runtime.guard import (
     GuardHook,
     Verdict,
     build_guard_hook,
+    llm_asker,
     render_call,
 )
 from runtime.hooks import ToolCall, ToolDecision, ToolResult
@@ -430,3 +432,49 @@ def test_the_guard_error_is_exported_as_a_factory_error() -> None:
     assert issubclass(GuardError, FactoryError)
     assert not issubclass(GuardError, AgentError)
     assert "git.read_file" in TOOLS
+
+
+# --- the budget ----------------------------------------------------------------------------------
+
+
+def test_the_guard_runs_are_charged_to_the_budget_of_the_guarded_run(
+    writer: LLMSpec, trace: Trace, read_file_calls: list[dict[str, Any]]
+) -> None:
+    budget = Budget(5.0)
+    api = FakeAPI(asks_for_tool(), verdict(True, "Reads a file."), answer())
+    run(writer, {"diff": "+ x"}, trace, repo_path="/repo", client=api.client(), budget=budget)
+    guarded, decided = decisions(trace)
+    assert budget.spent == pytest.approx(guarded["cost_usd"] + decided["cost_usd"])
+    assert decided["cost_usd"] > 0
+
+
+def test_a_guard_that_passes_the_budget_ends_the_run_with_the_budget_error(
+    writer: LLMSpec, trace: Trace, read_file_calls: list[dict[str, Any]]
+) -> None:
+    api = FakeAPI(asks_for_tool(), verdict(True, "Reads a file."), answer())
+    with pytest.raises(BudgetExceeded):
+        run(
+            writer,
+            {"diff": "+ x"},
+            trace,
+            repo_path="/repo",
+            client=api.client(),
+            budget=Budget(0.00001),
+        )
+    assert read_file_calls == []
+
+
+def test_the_asker_passes_the_budget_to_the_guard_run(
+    reviewer: LLMSpec, trace: Trace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[Budget | None] = []
+
+    def fake_run(spec: LLMSpec, payload: Mapping[str, Any], trace: Trace, **kwargs: Any) -> Any:
+        seen.append(kwargs["budget"])
+        raise BudgetExceeded(1.0, 2.0)
+
+    monkeypatch.setattr(guard.runner, "run", fake_run)
+    budget = Budget(1.0)
+    with pytest.raises(BudgetExceeded):
+        llm_asker(reviewer, trace, budget=budget)({"tool": "fs.write_file"})
+    assert seen == [budget]
