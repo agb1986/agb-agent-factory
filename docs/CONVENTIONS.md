@@ -272,6 +272,22 @@ defects:
      severity: major, category: logic, title: ..., description: ..., snippet: "len(values) - 1"}
 ```
 
+## Eval cases
+
+`agents/<name>/evals/cases.yaml` holds a top-level `cases` list. A case has `id` (unique in the file), `fixture` (a fixture directory name), `payload` (the agent input without `repo_path`, which the eval runner sets to the built fixture repository), `expected` and `grader`. `expected` has `verdict` and `defects`; each expected defect copies `id`, `file`, `line_start` and `line_end` from the fixture's `defects.yaml` and names `severity_floor`, the lowest severity a matching finding may have. A finding matches a defect when it names the same file and its line window overlaps the defect's. `grader` is `llm_judge` for LLM agents.
+
+```yaml
+cases:
+  - id: off-by-one
+    fixture: off-by-one
+    payload: {base: base, head: head}
+    expected:
+      verdict: request_changes
+      defects:
+        - {id: last-window-dropped, file: series/rolling.py, line_start: 12, line_end: 13, severity_floor: major}
+    grader: llm_judge
+```
+
 ## Gates
 
 Thresholds, skip decisions and routing are code in `runtime/gates.py`. The thresholds come from the manifest, never from a prompt, and no model decides them. A gate evaluation returns a `Decision`:
