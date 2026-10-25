@@ -1,0 +1,19 @@
+name: perf-reviewer
+version: 0.3.0
+kind: llm
+description: Reviews a diff for algorithmic complexity, N+1 queries, unbounded memory and blocking calls on hot paths.
+model: claude-sonnet-5-5 # verified by tests/live/test_perf_reviewer_live.py
+effort: high
+system_prompt: system.md
+schemas: schemas.py
+input_model: ReviewInput
+output_model: ReviewOutput
+tools:
+  allow: [git.read_file, git.show_diff, rg.search]
+  deny: []
+limits:
+  max_tool_turns: 12
+  timeout_s: 180
+  max_output_tokens: 4096
+evals:
+  min_pass_rate: 0.75

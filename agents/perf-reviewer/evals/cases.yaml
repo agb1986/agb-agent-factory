@@ -1,0 +1,58 @@
+# Eval cases for perf-reviewer. Each one reviews a fixture repository from fixtures/src/; the
+# expected defects mirror that fixture's defects.yaml. `repo_path` is not in the payload: the eval
+# runner fills it in with the built fixture repository.
+cases:
+  - id: n-plus-one
+    fixture: n-plus-one
+    payload:
+      base: base
+      head: head
+    expected:
+      verdict: request_changes
+      defects:
+        - id: customer-query-in-loop
+          file: orders/db.py
+          line_start: 43
+          line_end: 45
+          severity_floor: major
+    grader: llm_judge
+
+  - id: clean-refactor
+    fixture: clean-refactor
+    payload:
+      base: base
+      head: head
+    expected:
+      verdict: approve
+      defects: []
+    grader: llm_judge
+
+  - id: quadratic-loop
+    fixture: quadratic-loop
+    payload:
+      base: base
+      head: head
+    expected:
+      verdict: request_changes
+      defects:
+        - id: nested-loop-over-same-list
+          file: dedupe/ids.py
+          line_start: 20
+          line_end: 23
+          severity_floor: major
+    grader: llm_judge
+
+  - id: missing-index-hint
+    fixture: missing-index-hint
+    payload:
+      base: base
+      head: head
+    expected:
+      verdict: request_changes
+      defects:
+        - id: unindexed-user-id-lookup
+          file: notifications/handlers.py
+          line_start: 17
+          line_end: 20
+          severity_floor: major
+    grader: llm_judge
