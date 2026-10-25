@@ -114,7 +114,7 @@ The generated output models are: noul `{p: float}`; choice `{answer: str, probs:
 
 A Jev manifest pins a versioned model id such as `jev-1.14.0`, never the rolling aliases `jev-latest` or `jev-preview`, because gate thresholds are tuned against one version. `GET /v1/models` lists only the aliases, so a pinned id is verified live by checking that the response's `model` field equals it. The spike notes in [jev-sdk.md](jev-sdk.md) (#15) give the wire format behind these output models.
 
-`registry/jev_spec.py` validates all of this when the manifest loads and reports every problem at once, naming the gate or routing entry by index. Question ids and gate names are lowercase `snake_case`, and an id must also be usable as an output field, so Python keywords and names starting with `model_` are refused. A `render` template may use only plain field names such as `{diff}`: no `{}`, `{0}`, attribute or index access, or fields nested in a format spec, and it must use at least one. A `p_above` or `p_below` gate on a choice or score needs `option`, which must be one of its options or levels; on a noul it must not set `option`. `answer_in` values must be real options or levels. A `routing` entry's `when` is a gate name, or `question=answer` for a choice or score question and one of its options or levels, and each `when` appears once. `JevSpec.output_class` builds the output model once, a `JevOutput` subclass named after the agent (`DiffTriageOutput`) with one field per question id. A choice or score field also checks that `answer` or `level` is one of the question's answers and that `probs` has exactly those keys. A score's `value` is not bounded by `range`: how the API's expected level maps onto `range` is settled with the live client in #17.
+`registry/jev_spec.py` validates all of this when the manifest loads and reports every problem at once, naming the gate or routing entry by index. Question ids and gate names are lowercase `snake_case`, and an id must also be usable as an output field, so Python keywords and names starting with `model_` are refused. A `render` template may use only plain field names such as `{diff}`: no `{}`, `{0}`, attribute or index access, or fields nested in a format spec, and it must use at least one. A `p_above` or `p_below` gate on a choice or score needs `option`, which must be one of its options or levels; on a noul it must not set `option`. `answer_in` values must be real options or levels. A `routing` entry's `when` is a gate name, or `question=answer` for a choice or score question and one of its options or levels, and each `when` appears once. `JevSpec.output_class` builds the output model once, a `JevOutput` subclass named after the agent (`DiffTriageOutput`) with one field per question id. A choice or score field also checks that `answer` or `level` is one of the question's answers and that `probs` has exactly those keys. A score's `value` is the API's expected level mapped linearly onto `range`: with `n` levels and expected level `score` (0 to `n - 1`), `value = min + score / (n - 1) * (max - min)`. A `score` outside 0 to `n - 1` is a `JevError`, so `value` always lies within `range`.
 
 ```yaml
 name: diff-triage
@@ -151,6 +151,23 @@ routing:
 evals:
   min_pass_rate: 0.9
 ```
+
+## Jev runner
+
+`runtime/jev_runner.py` holds `run_jev(spec, payload, trace, *, pipeline_run_id=None)`, which renders the payload through `input.render`, asks every question in one request and returns the generated output model (`spec.output_class`). A payload that lacks a field the template names raises `UsageError` before anything is sent, names the missing fields and never repeats a value, and writes no trace row.
+
+Only `runtime/jev_transport.py` imports the TypeSafe SDK (`typesafe_sdk`, the optional `[jev]` extra). The runner loads it when a run starts, so a checkout without the extra still imports everything else. A missing extra, a missing `TYPESAFE_API_KEY` and a key the API rejects (401 or 403) all raise `AuthOrConfigError` (exit 4) at call time. The hint names the variable, never its value, and for a missing extra says `uv sync --extra jev`. Never turn on DEBUG for the `typesafe_sdk` logger: it logs request bodies, and the body is the diff under review.
+
+| Setting | Value |
+| --- | --- |
+| Timeout | 5 s per request; a timeout is not retried |
+| Attempts | 3, retrying only a 429 or a 5xx, after `Retry-After` when the API sends it and otherwise 0.5 s then 1 s; no wait exceeds 5 s |
+| SDK retry | Off. The runner owns the retries so tests can see them |
+| Questions | All in one request, never one request per question |
+
+Input over `input.max_chars` is cut to that length and a final line `[truncated: input cut to N of M characters]` is appended. The run is then `truncated`, which `decision_json` records and the gates read. A `max_tokens_exceeded` 400 from the API means the input does not fit the model's context, and it is handled as one more truncation: the runner halves the text and sends it again until the request fits or the limit would fall below `MIN_CHARS` (1000), when it raises `JevError`. A run that was halved counts as truncated.
+
+Any other failure (a non-retryable status, retries used up, a timeout, a response that does not match the manifest) is a `JevError`, a `FactoryError` (exit 1) whose message starts with the agent's address. The pipeline turns it into an escalation with reason `jev_error` (see [Gates](#gates)). A message holds the status, the request id and, for a 400 or 422, the API's own message; it never holds the request.
 
 ## Agent address
 
@@ -317,7 +334,7 @@ Decision(skip=False, escalate=True, route=("code-reviewer", "security-reviewer")
 
 Every agent run, successful or not, writes exactly one row to the DuckDB trace store. The default path is `data/traces.duckdb`, overridden by an argument or by `FACTORY_TRACE_DB` (#6).
 
-The LLM runner writes the row in a `finally` block, so a failed run still records its usage and `error` as `<ErrorClass>: <message>`. Usage is summed over every response, the validation retry included. Two checks come before the run starts and write no row, because there is nothing valid to record: a payload that fails the input model, and a missing `repo_path` for an agent that allows tools. Both raise `UsageError`.
+The LLM runner writes the row in a `finally` block, so a failed run still records its usage and `error` as `<ErrorClass>: <message>`. Usage is summed over every response, the validation retry included. Two checks come before the run starts and write no row, because there is nothing valid to record: a payload that fails the input model, and a missing `repo_path` for an agent that allows tools. Both raise `UsageError`. The Jev runner also writes its row in a `finally` block, with `kind` `jev`, `output_tokens` 0, `input_tokens` from the response's usage and `cost_usd` from `jev-1.14.0` in `runtime/pricing.py` (input tokens only, no cache). Its `input_json` is the payload and its `output_json` holds the full probability vectors. A payload that does not match the template raises `UsageError` and writes no row.
 
 | Column | Type | Meaning |
 | --- | --- | --- |
@@ -330,7 +347,7 @@ The LLM runner writes the row in a `finally` block, so a failed run still record
 | `input_tokens`, `output_tokens` | BIGINT, null | Summed over all turns. As in the API's usage, `input_tokens` excludes cache reads and writes |
 | `cache_read_tokens`, `cache_write_tokens` | BIGINT, null | Summed over all turns |
 | `cost_usd` | DOUBLE, null | From `runtime/pricing.py`; null when the model has no price |
-| `decision_json` | JSON, null | The `Decision` and gate inputs for a Jev or guard run |
+| `decision_json` | JSON, null | The `Decision` and gate inputs for a Jev or guard run. A Jev run records `{"truncated", "model"}`, `model` being the one that answered, or null when none did |
 | `input_json` | JSON | The validated input payload |
 | `output_json` | JSON, null | The validated output, or the full probability vectors for Jev; null on failure |
 | `error` | VARCHAR, null | Error class and message when the run failed |
@@ -346,7 +363,7 @@ A `Trace` holds one DuckDB connection for its lifetime and opens it on first use
 - The factory never reads that file. Whoever starts the factory exports the key: the shell, CI, or the `agb factory` wrapper (#30).
 - A missing key raises `AuthOrConfigError` (exit 4) with a hint that names the variable, never its value. So does a key the API rejects with a 401 or 403, with the same hint.
 - No secret goes into the repository, a test, a config file, a container image, a trace row, a log line or an error message.
-- Tests that need a live key carry the `live` marker; `tests/conftest.py` skips them when `ANTHROPIC_API_KEY` is unset. #17 extends that hook so Jev live tests skip without the Jev key.
+- Tests that need a live key carry a marker, and `tests/conftest.py` skips each marker when its variable is unset: `live` needs `ANTHROPIC_API_KEY` and `live_jev` needs `TYPESAFE_API_KEY`. The two are independent, so having one key does not run the other's tests.
 
 ```python
 if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -407,7 +424,7 @@ A failure the user or agent should see is a `FactoryError` with a one-line `mess
 | `NotFoundError` | 3 |
 | `AuthOrConfigError` | 4 |
 
-Later typed errors subclass one of these. A resolver miss (`AgentNotFound`, `VersionNotFound`) is a `NotFoundError`; a missing key is an `AuthOrConfigError`; `AgentError`, `JevError`, `GuardError` and `BudgetExceeded` are `FactoryError`s.
+Later typed errors subclass one of these. A resolver miss (`AgentNotFound`, `VersionNotFound`) is a `NotFoundError`; a missing key is an `AuthOrConfigError`; `AgentError`, `JevError`, `GuardError` and `BudgetExceeded` are `FactoryError`s. `JevError` lives in `runtime/jev_runner.py` and exits 1.
 
 `runtime/errors.py` holds the failures of an LLM run. Each is an `AgentError` (exit 1) with the agent's `name@version` address as `agent` and the messages so far as `transcript`, in the shape the Messages API takes, thinking signatures kept:
 
