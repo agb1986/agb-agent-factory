@@ -64,7 +64,7 @@ An LLM agent reasons, may call scoped tools, and returns a Pydantic model throug
 
 Unknown keys are an error, so a typo never falls back to a default. Later tickets add fields and document them here: an optional `guard` agent address (#23), and `limits.max_retries` and `limits.max_tokens_total` (#25).
 
-The resolver validates a manifest as it loads it. `name` is lowercase words joined by hyphens and equals the agent's directory name. Tool names must match the dotted form, and a name in both `allow` and `deny` is an error; an absent `tools` block means no tools. `system_prompt` and `schemas` must be relative paths that stay inside the agent directory and name files that exist. `schemas.py` is imported by file path, and `input_model` and `output_model` must name Pydantic models in it. The resolver does not check that a tool name is known to `tools/registry.py`; the runner does when a run starts, and an unknown name raises `UnknownToolError` (exit 3). The `JevSpec` placeholder in `registry/spec.py` accepts the keys listed under `kind: jev` and validates only the shared fields until #16 completes it.
+The resolver validates a manifest as it loads it. `name` is lowercase words joined by hyphens and equals the agent's directory name. Tool names must match the dotted form, and a name in both `allow` and `deny` is an error; an absent `tools` block means no tools. `system_prompt` and `schemas` must be relative paths that stay inside the agent directory and name files that exist. `schemas.py` is imported by file path, and `input_model` and `output_model` must name Pydantic models in it. The resolver does not check that a tool name is known to `tools/registry.py`; the runner does when a run starts, and an unknown name raises `UnknownToolError` (exit 3).
 
 ```yaml
 name: code-reviewer
@@ -114,12 +114,14 @@ The generated output models are: noul `{p: float}`; choice `{answer: str, probs:
 
 A Jev manifest pins a versioned model id such as `jev-1.14.0`, never the rolling aliases `jev-latest` or `jev-preview`, because gate thresholds are tuned against one version. `GET /v1/models` lists only the aliases, so a pinned id is verified live by checking that the response's `model` field equals it. The spike notes in [jev-sdk.md](jev-sdk.md) (#15) give the wire format behind these output models.
 
+`registry/jev_spec.py` validates all of this when the manifest loads and reports every problem at once, naming the gate or routing entry by index. Question ids and gate names are lowercase `snake_case`, and an id must also be usable as an output field, so Python keywords and names starting with `model_` are refused. A `render` template may use only plain field names such as `{diff}`: no `{}`, `{0}`, attribute or index access, or fields nested in a format spec, and it must use at least one. A `p_above` or `p_below` gate on a choice or score needs `option`, which must be one of its options or levels; on a noul it must not set `option`. `answer_in` values must be real options or levels. A `routing` entry's `when` is a gate name, or `question=answer` for a choice or score question and one of its options or levels, and each `when` appears once. `JevSpec.output_class` builds the output model once, a `JevOutput` subclass named after the agent (`DiffTriageOutput`) with one field per question id. A choice or score field also checks that `answer` or `level` is one of the question's answers and that `probs` has exactly those keys. A score's `value` is not bounded by `range`: how the API's expected level maps onto `range` is settled with the live client in #17.
+
 ```yaml
 name: diff-triage
 version: 0.1.0
 kind: jev
 description: Decides whether a diff needs the review panel and which reviewers see it.
-model: jev-model-id-from-docs-jev-sdk   # set by #16 from docs/jev-sdk.md
+model: jev-1.14.0
 input:
   render: "Files changed:\n{files}\n\nDiff:\n{diff}"
   max_chars: 24000
