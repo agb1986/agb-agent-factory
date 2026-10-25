@@ -33,7 +33,6 @@ class ReviewInput(BaseModel):
     )
 
 
-
 class Finding(BaseModel):
     """One defect or concern, located in the head revision."""
 
