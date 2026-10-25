@@ -1,0 +1,56 @@
+[project]
+name = "agb-agent-factory"
+version = "0.1.0"
+description = "A registry of small, versioned, scoped agents for software engineering work, and the pipelines that run them."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "anthropic",
+    "duckdb",
+    "packaging",
+    "pydantic>=2",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+# Empty until the phase 4 spike (#15) names the Jev transport.
+jev = []
+
+[project.scripts]
+factory = "factory.cli:main"
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "ty",
+]
+
+[build-system]
+requires = ["uv_build>=0.10,<0.11"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+# Flat layout: `factory/` sits at the repository root next to `registry/`, `runtime/` and the rest.
+module-root = ""
+module-name = "factory"
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+# Default rules (E4, E7, E9, F) plus isort and pyupgrade.
+extend-select = ["I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "live: needs a live ANTHROPIC_API_KEY; skipped when the key is absent",
+]
+
+[tool.coverage.run]
+source = ["factory"]
