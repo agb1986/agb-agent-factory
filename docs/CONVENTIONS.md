@@ -45,6 +45,8 @@ agents/code-reviewer/evals/cases.yaml
 agents/code-reviewer/1.3.0/agent.yaml        # a second version beside it
 ```
 
+Models that several agents share live in `registry/common_schemas.py`. An agent's `schemas.py` is imported by file path, so it cannot import a sibling agent's module; a reviewer that uses the shared review contract (`ReviewInput`, `Finding`, `ReviewOutput`, `Severity`, `Verdict`) imports it from `registry.common_schemas` and re-exports the names its manifest uses. Moving a model there without changing its JSON schema is not a version bump.
+
 A decision record is `docs/decisions/NNNN-<slug>.md` with the sections Context, Options considered, Decision and Consequences. The code it cites as evidence lives in `prototypes/<question>/`, which production code never imports and the default `uv run pytest` does not collect; run it with `uv run pytest prototypes/<question>`. The repository has no `__init__.py` files, so a prototype module must not take the name of a top-level package such as `tools`. A prototype can be deleted once the issues that build on its decision have landed.
 
 ## Manifest: kind llm
