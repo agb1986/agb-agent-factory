@@ -5,14 +5,20 @@ expects none, and every expected defect must be matched by some finding in the s
 overlapping lines, at or above the defect's `severity_floor`. A case that fails them is graded
 failed on the spot and the judge is never called. Only an answer that passes them goes to the
 grader the case names.
+
+The `sandbox_tests` grader adds checks that run commands: see `evals.graders.sandbox_tests`. It
+needs the repository the agent worked on, so `grade` takes its path.
 """
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from evals.cases import SEVERITIES, Case, Expected, ExpectedDefect
 from evals.graders.llm_judge import Judge, JudgeVerdict
+from evals.graders.sandbox_tests import check_run
+from factory.exit import UsageError
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,14 +93,23 @@ def _rank(finding: Mapping[str, Any]) -> int:
     return SEVERITIES.index(severity) if severity in SEVERITIES else -1
 
 
-def grade(case: Case, actual: Mapping[str, Any], judge: Judge) -> Grade:
+def grade(
+    case: Case, actual: Mapping[str, Any], judge: Judge, repo_path: str | Path | None = None
+) -> Grade:
     """Grade `actual` against `case`: deterministic checks first, then the case's grader.
 
     A failed check returns a failed grade with score 0.0 and the failures as the reason, without
-    calling `judge`. Raises `NotImplementedError` for the `jev` grader.
+    calling `judge`. The `sandbox_tests` grader adds the checks of `expected.run`, which run
+    commands in the work tree at `repo_path` and so need it. Raises `NotImplementedError` for the
+    `jev` grader and `UsageError` for `sandbox_tests` without a `repo_path`.
     """
     ensure_supported(case.grader)
     checks = check_deterministic(case.expected, actual)
+    if case.grader == "sandbox_tests" and case.expected.run is not None:
+        if repo_path is None:
+            raise UsageError("the sandbox_tests grader needs the repository path to run tests in")
+        ran = check_run(case.expected.run, actual, repo_path)
+        checks = Deterministic(checks.passed and not ran, (*checks.failures, *ran))
     if not checks.passed:
         return Grade(False, 0.0, "; ".join(checks.failures), checks)
     verdict = judge(case.expected, actual)

@@ -111,6 +111,12 @@ def test_the_judge_prompt_explains_judgements_and_criteria() -> None:
     assert "criteria" in system
 
 
+def test_the_judge_prompt_tells_it_the_sandbox_already_ran_the_tests() -> None:
+    system = build_request([{"role": "user", "content": "x"}])["system"]
+    assert "commands_run" in system
+    assert "sandbox" in system
+
+
 def test_an_invalid_reply_is_retried_once_with_the_errors(trace: Trace) -> None:
     client = FakeClient(_reply('{"pass": true, "score": 7, "reason": "r"}'), _reply(GOOD))
     verdict = _judge(trace, client)(EXPECTED, ACTUAL)

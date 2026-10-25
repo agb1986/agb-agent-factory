@@ -8,8 +8,13 @@ what `factory eval <name>[@^M.m]` runs, and `python -m evals.run` is the same co
 A case whose agent run fails with a typed error (a refusal, a timeout, invalid output) is a failed
 case with that error, not a failed eval. A missing or rejected API key, and a payload the agent
 cannot accept, end the whole eval, since every other case would fail the same way.
+
+An agent with `sandbox: true` changes the repository it works on. Its cases share one built
+fixture, so each case runs on its own copy, and the `sandbox_tests` grader runs the tests in that
+copy after the agent is done.
 """
 
+import shutil
 import sys
 import tempfile
 import threading
@@ -269,20 +274,30 @@ def _run_case(
     tag: str,
 ) -> CaseResult:
     start = time.monotonic()
-    payload = dict(case.payload)
-    if "repo_path" in spec.input_class.model_fields:
-        payload["repo_path"] = str(repo_path)
-    try:
-        output = runner(
-            spec, payload, trace, repo_path=repo_path, pipeline_run_id=eval_run_id, tag=tag
-        )
-        graded = grade(case, output.model_dump(mode="json"), judge)
-    except AuthOrConfigError, UsageError:
-        raise
-    except FactoryError as exc:
-        message = f"{type(exc).__name__}: {exc.message}"
-        return CaseResult(case, False, _elapsed(start), error=message)
+    with tempfile.TemporaryDirectory(prefix="factory-eval-case-") as scratch:
+        if spec.sandbox:
+            repo_path = _private_copy(repo_path, Path(scratch))
+        payload = dict(case.payload)
+        if "repo_path" in spec.input_class.model_fields:
+            payload["repo_path"] = str(repo_path)
+        try:
+            output = runner(
+                spec, payload, trace, repo_path=repo_path, pipeline_run_id=eval_run_id, tag=tag
+            )
+            graded = grade(case, output.model_dump(mode="json"), judge, repo_path)
+        except AuthOrConfigError, UsageError:
+            raise
+        except FactoryError as exc:
+            message = f"{type(exc).__name__}: {exc.message}"
+            return CaseResult(case, False, _elapsed(start), error=message)
     return CaseResult(case, graded.passed, _elapsed(start), grade=graded)
+
+
+def _private_copy(repo_path: Path, scratch: Path) -> Path:
+    """Copy the fixture repository into `scratch` so an agent that writes cannot disturb a sibling."""
+    copy = scratch / repo_path.name
+    shutil.copytree(repo_path, copy, symlinks=True)
+    return copy
 
 
 def _elapsed(start: float) -> int:

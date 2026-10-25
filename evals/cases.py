@@ -21,7 +21,7 @@ SEVERITIES = ("info", "minor", "major", "blocker")
 """Finding severities, lowest first. A finding meets a `severity_floor` at or above its index."""
 
 type Severity = Literal["info", "minor", "major", "blocker"]
-type GraderName = Literal["llm_judge", "jev"]
+type GraderName = Literal["llm_judge", "sandbox_tests", "jev"]
 
 _NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
@@ -54,17 +54,43 @@ class ExpectedDefect(_Strict):
         return self
 
 
+class ExpectedRun(_Strict):
+    """What running the tests in the sandbox must show, for an agent that writes tests or code.
+
+    Each field left out is not checked. `new_tests` runs the files in the answer's `test_files`:
+    `fail` means pytest ran and reported failures (exit code 1), `pass` means exit code 0.
+    `passes_on_base` also requires those files to pass once the fixture's non-test files are put
+    back to their `base` state, which shows the test fails because of the defect and for no other
+    reason. `suite` runs every test in the repository. `production` and `tests` say whether the
+    agent changed any file that is not, or is, a test file, compared with the fixture's HEAD.
+    """
+
+    new_tests: Literal["fail", "pass"] | None = None
+    passes_on_base: bool = False
+    suite: Literal["pass"] | None = None
+    production: Literal["changed", "unchanged"] | None = None
+    tests: Literal["changed", "unchanged"] | None = None
+
+    @model_validator(mode="after")
+    def _base_needs_new_tests(self) -> ExpectedRun:
+        if self.passes_on_base and self.new_tests is None:
+            raise ValueError("passes_on_base: needs new_tests to say which tests to run")
+        return self
+
+
 class Expected(_Strict):
     """What a good answer looks like: the verdict and the defects that must be found.
 
     `verdict` is required but may be null for an agent whose output has none, such as the judge;
     a null verdict is not checked. `criteria` is prose the grader must also see met, such as "the
-    rationale names the failed reviewer"; the deterministic checks do not read it.
+    rationale names the failed reviewer"; the deterministic checks do not read it. `run` is what
+    the `sandbox_tests` grader checks by running tests, and is required for that grader.
     """
 
     verdict: str | None
     defects: tuple[ExpectedDefect, ...] = ()
     criteria: str | None = None
+    run: ExpectedRun | None = None
 
 
 class Case(_Strict):
@@ -84,6 +110,14 @@ class Case(_Strict):
     def _no_repo_path(self) -> Case:
         if "repo_path" in self.payload:
             raise ValueError("payload.repo_path: not allowed, the runner sets it")
+        return self
+
+    @model_validator(mode="after")
+    def _run_matches_grader(self) -> Case:
+        if self.grader == "sandbox_tests" and self.expected.run is None:
+            raise ValueError("expected.run: required by the sandbox_tests grader")
+        if self.grader != "sandbox_tests" and self.expected.run is not None:
+            raise ValueError("expected.run: only the sandbox_tests grader reads it")
         return self
 
 
