@@ -46,6 +46,15 @@ Trace. Exactly one row is written for every run whose payload is valid, on succe
 with their full probability vectors, and `decision_json` `{"truncated": bool, "model": <the model
 the response named>}`. A failed run has `error` as `<ErrorClass>: <message>`.
 
+Budget. `run_jev` takes the pipeline's `Budget` (see `runtime.budget`) through its `budget`
+keyword. It checks the budget before it renders and sends anything, so a spent budget writes no
+row, and it charges the trace row's cost when the run ends. A run is one request, so there is no
+check in between. A failed run only adds its cost, so the budget never hides the `JevError`.
+
+Retry count. `MAX_ATTEMPTS` is a module constant, not a manifest limit: `JevSpec` has no `limits`
+block, and a Jev request is cheap and has no tool loop to protect. See "Jev runner" in
+docs/CONVENTIONS.md.
+
 Nothing here logs the rendered text or the payload, and none of the errors repeat them.
 """
 
@@ -61,6 +70,7 @@ from pydantic import BaseModel, ValidationError
 
 from factory.exit import AuthOrConfigError, FactoryError, UsageError
 from registry.jev_spec import ChoiceQuestion, JevOutput, JevSpec, NoulQuestion, ScoreQuestion
+from runtime.budget import Budget
 from runtime.pricing import TokenUsage, cost_usd
 from runtime.trace import Trace, TraceRow
 
@@ -207,6 +217,7 @@ def run_jev(
     pipeline_run_id: str | None = None,
     transport: JevTransport | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    budget: Budget | None = None,
 ) -> JevOutput:
     """Run the Jev agent `spec` on `payload` and return an instance of its output model.
 
@@ -214,13 +225,18 @@ def run_jev(
     `input.render` uses, and a missing one raises `UsageError` before anything is sent or traced.
     `transport` defaults to the SDK transport (see `default_transport`); `sleep` waits out a
     backoff and is a parameter so tests need not wait. `pipeline_run_id` lands in the trace row.
+    `budget` is the pipeline's dollar cap; the run is refused when it is spent and charged to it
+    when it ends.
 
     Past the payload check, exactly one row is written to `trace`, whether the run succeeds or
     fails. Raises `JevError` for a failed run and `AuthOrConfigError` for a missing or rejected key
-    or a missing `typesafe-sdk`.
+    or a missing `typesafe-sdk`, and `BudgetExceeded` when `budget` has run out or this run's
+    cost takes it over.
     """
     payload_json = _payload_json(spec, payload)
     text = spec.input.render.format(**payload_json)
+    if budget is not None:
+        budget.check()
     run_id = str(uuid.uuid4())
     started_at = datetime.now(UTC)
     start = time.monotonic()
@@ -234,6 +250,7 @@ def run_jev(
         error = exc
         raise
     finally:
+        cost = cost_usd(state.model or spec.model, TokenUsage(state.input_tokens, 0))
         trace.record(
             TraceRow(
                 run_id=run_id,
@@ -245,12 +262,17 @@ def run_jev(
                 pipeline_run_id=pipeline_run_id,
                 input_tokens=state.input_tokens,
                 output_tokens=0,
-                cost_usd=cost_usd(state.model or spec.model, TokenUsage(state.input_tokens, 0)),
+                cost_usd=cost,
                 decision_json={"truncated": state.truncated, "model": state.model},
                 output_json=None if output is None else output.model_dump(mode="json"),
                 error=None if error is None else f"{type(error).__name__}: {error}",
             )
         )
+        if budget is not None:
+            if error is None:
+                budget.charge(cost)
+            else:
+                budget.add(cost)
 
 
 @dataclass
