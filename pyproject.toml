@@ -35,7 +35,7 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 # Flat layout: `factory/` sits at the repository root next to `registry/`, `runtime/` and the rest.
 module-root = ""
-module-name = "factory"
+module-name = ["factory", "registry", "runtime", "tools"]
 
 [tool.ruff]
 line-length = 100
@@ -53,4 +53,4 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["factory"]
+source = ["factory", "registry", "runtime", "tools"]
