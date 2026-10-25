@@ -1,6 +1,6 @@
 # Plan for agb-agent-factory
 
-Source: the "agb-tools -> factory" handover (v2, with Jev) in [HANDOVER-v2.md](HANDOVER-v2.md), reviewed on 2026-10-25 against the current Claude API and the Jev documentation. This file is the working copy; the issue tracker is the source of truth for progress.
+Source: the "agb-tools -> factory" handover (v2, with Jev) in [HANDOVER-v2.md](HANDOVER-v2.md), reviewed on 2026-10-25 against the current Claude API and the Jev documentation. This file is the working copy; the issue tracker is the source of truth for progress. Model assignments, delivery waves and the per-issue agent prompts are in [EXECUTION.md](EXECUTION.md).
 
 ## Decisions taken on 2026-10-25
 
