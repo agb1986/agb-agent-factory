@@ -14,4 +14,6 @@ Every agent is a directory with a manifest (`agent.yaml`), a system prompt and P
 
 ## Stack
 
-Python 3.14 managed by uv. `anthropic` (Tool Runner, structured outputs), `pydantic` v2, `pyyaml`, `packaging`, `duckdb`. Jev access is isolated in one module so the transport (HTTP, OpenRouter, or an SDK when one exists for Python) can change without touching anything else.
+Python 3.14 managed by uv. `anthropic` (Tool Runner, structured outputs), `pydantic` v2, `pyyaml`, `packaging`, `duckdb`. Dev tools: `ruff` (line length 100), `ty`, `pytest` with `pytest-cov`, `pre-commit`. Jev access is isolated in one module so the transport (HTTP, OpenRouter, or an SDK when one exists for Python) can change without touching anything else.
+
+Set up with `uv sync`, then `uv run factory --version`, `uv run pytest` and `uv run pre-commit run --all-files`.
