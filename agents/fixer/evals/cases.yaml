@@ -1,0 +1,54 @@
+# Eval cases for fixer. Each one gives the agent a reviewer's finding and the test files that cover
+# it, for a fixture from fixtures/src/, and grades the work tree it leaves: the sandbox runs the
+# whole suite and compares what changed (expected.run). `repo_path` is not in the payload: the eval
+# runner fills it in with a private copy of the built fixture repository.
+cases:
+  - id: off-by-one-red
+    fixture: off-by-one-red
+    payload:
+      finding:
+        file: series/rolling.py
+        line_start: 12
+        line_end: 13
+        severity: major
+        category: logic
+        title: Loop bound drops the last window
+        body: >-
+          The running-sum loop stops at len(values) - 1, so the last window is never added. For
+          [1, 2, 3, 4] with a window of 2 it returns [3, 5] instead of [3, 5, 7].
+        suggested_fix: "range(window, len(values))"
+      test_files: [tests/test_rolling.py]
+    expected:
+      verdict: null
+      criteria: >-
+        The summary names the loop bound as the cause and says it was changed in series/rolling.py.
+        The change is small and touches only the loop bound.
+      run:
+        suite: pass
+        production: changed
+        tests: unchanged
+    grader: sandbox_tests
+
+  - id: untested-change-covered
+    fixture: untested-change-covered
+    payload:
+      finding:
+        file: pricing/discount.py
+        line_start: 4
+        line_end: 8
+        severity: minor
+        category: testing
+        title: New public function has no test
+        body: >-
+          apply_discount has a validation branch and a rounding rule, and no test covers either.
+      test_files: [tests/test_discount.py]
+    expected:
+      verdict: null
+      criteria: >-
+        The summary says nothing needs fixing because the listed tests already pass.
+        No file was changed.
+      run:
+        suite: pass
+        production: unchanged
+        tests: unchanged
+    grader: sandbox_tests

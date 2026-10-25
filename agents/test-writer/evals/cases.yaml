@@ -1,0 +1,52 @@
+# Eval cases for test-writer. Each one gives the agent a reviewer's finding about a fixture from
+# fixtures/src/ and grades the work tree it leaves: the sandbox runs its new tests (expected.run).
+# `repo_path` is not in the payload: the eval runner fills it in with a private copy of the built
+# fixture repository.
+cases:
+  - id: off-by-one
+    fixture: off-by-one
+    payload:
+      finding:
+        file: series/rolling.py
+        line_start: 12
+        line_end: 13
+        severity: major
+        category: logic
+        title: Loop bound drops the last window
+        body: >-
+          The running-sum loop stops at len(values) - 1, so the last window is never added. For
+          [1, 2, 3, 4] with a window of 2 it returns [3, 5] instead of [3, 5, 7].
+        suggested_fix: "range(window, len(values))"
+    expected:
+      verdict: null
+      criteria: >-
+        The new test checks the last window of a series, for example rolling_sums([1, 2, 3, 4], 2) == [3, 5, 7].
+        The summary says the test fails on the current code because of the dropped window.
+      run:
+        new_tests: fail
+        passes_on_base: true
+        production: unchanged
+    grader: sandbox_tests
+
+  - id: untested-change
+    fixture: untested-change
+    payload:
+      finding:
+        file: pricing/discount.py
+        line_start: 4
+        line_end: 8
+        severity: minor
+        category: testing
+        title: New public function has no test
+        body: >-
+          apply_discount has a validation branch and a rounding rule, and no test covers either.
+          A test file for pricing/discount.py is missing.
+    expected:
+      verdict: null
+      criteria: >-
+        The new tests cover the validation branch and the rounding rule of apply_discount.
+        The summary says the tests pass because the code is correct and they only add coverage.
+      run:
+        new_tests: pass
+        production: unchanged
+    grader: sandbox_tests
