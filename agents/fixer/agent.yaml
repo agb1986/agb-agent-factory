@@ -1,0 +1,21 @@
+name: fixer
+version: 0.1.0
+kind: llm
+description: Fixes a reported defect in production code until its failing tests and the full suite pass.
+model: claude-sonnet-5-5 # verified by tests/live/test_fixer_live.py
+effort: xhigh
+system_prompt: system.md
+schemas: schemas.py
+input_model: FixerInput
+output_model: FixerOutput
+sandbox: true
+tools:
+  allow: [fs.list_files, fs.read_file, fs.write_file, shell.run]
+  deny: []
+limits:
+  max_tool_turns: 25
+  timeout_s: 600
+  max_output_tokens: 8192
+  max_tokens_total: 200000
+evals:
+  min_pass_rate: 0.75

@@ -1,0 +1,21 @@
+name: test-writer
+version: 0.1.0
+kind: llm
+description: Writes a test that reproduces a reported defect and runs it in the sandbox to see it fail.
+model: claude-sonnet-5-5 # verified by tests/live/test_test_writer_live.py
+effort: xhigh
+system_prompt: system.md
+schemas: schemas.py
+input_model: TestWriterInput
+output_model: TestWriterOutput
+sandbox: true
+tools:
+  allow: [fs.list_files, fs.read_file, fs.write_file, shell.run]
+  deny: []
+limits:
+  max_tool_turns: 25
+  timeout_s: 600
+  max_output_tokens: 8192
+  max_tokens_total: 200000
+evals:
+  min_pass_rate: 0.75
