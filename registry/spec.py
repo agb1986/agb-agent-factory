@@ -1,4 +1,6 @@
-"""Pydantic models for agent manifests: `AgentSpecBase`, `LLMSpec` and the `JevSpec` placeholder.
+"""Pydantic models for agent manifests: `AgentSpecBase` and `LLMSpec`, and the shared blocks.
+
+`JevSpec` lives in `registry.jev_spec`; it builds on the base classes defined here.
 
 The field set, its meaning and the layout of `agent.yaml` are fixed in `docs/CONVENTIONS.md`. Every
 model forbids unknown keys, so a typo in a manifest is an error and never falls back to a default.
@@ -7,7 +9,7 @@ Loading a manifest from disk, and importing the schemas module an `LLMSpec` name
 """
 
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
@@ -30,12 +32,6 @@ class EvalsSpec(_Model):
     """The `evals` block: the pass rate the publish gate requires, from 0 to 1."""
 
     min_pass_rate: float = Field(ge=0, le=1)
-
-
-class JevEvalsSpec(EvalsSpec):
-    """The `evals` block of a Jev agent, which may also set the recall floor for risky diffs."""
-
-    min_recall_risky: float | None = Field(default=None, ge=0, le=1)
 
 
 class ToolsSpec(_Model):
@@ -144,23 +140,5 @@ class LLMSpec(AgentSpecBase):
         self._input_class = input_class
         self._output_class = output_class
 
-
-class JevSpec(AgentSpecBase):
-    """Placeholder for a Jev agent: shared fields are validated, the rest is accepted as given.
-
-    The Jev-specific keys listed in `docs/CONVENTIONS.md` are accepted untyped. #16 replaces them
-    with real models and validation.
-    """
-
-    kind: Literal["jev"]
-    evals: JevEvalsSpec
-    model: str | None = None
-    input: dict[str, Any] | None = None
-    questions: list[dict[str, Any]] | None = None
-    gates: list[dict[str, Any]] | None = None
-    routing: list[dict[str, Any]] | None = None
-
-
-AgentSpec = LLMSpec | JevSpec
 
 KINDS = ("llm", "jev")

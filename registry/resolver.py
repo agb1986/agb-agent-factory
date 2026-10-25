@@ -17,7 +17,10 @@ from packaging.version import Version
 from pydantic import BaseModel, ValidationError
 
 from factory.exit import AuthOrConfigError, NotFoundError, UsageError
-from registry.spec import KINDS, NAME_PATTERN, VERSION_PATTERN, AgentSpec, JevSpec, LLMSpec
+from registry.jev_spec import JevSpec
+from registry.spec import KINDS, NAME_PATTERN, VERSION_PATTERN, LLMSpec
+
+type AgentSpec = LLMSpec | JevSpec
 
 AGENTS_DIR = Path("agents")
 MANIFEST = "agent.yaml"

@@ -1,8 +1,10 @@
 """Agent manifests: models, loading and semver resolution."""
 
+from registry.jev_spec import JevOutput, JevSpec
 from registry.resolver import (
     AgentNotFound,
     AgentRef,
+    AgentSpec,
     InvalidRange,
     ManifestError,
     VersionNotFound,
@@ -11,7 +13,7 @@ from registry.resolver import (
     load_spec,
     resolve,
 )
-from registry.spec import AgentSpec, AgentSpecBase, JevSpec, LLMSpec
+from registry.spec import AgentSpecBase, LLMSpec
 
 __all__ = [
     "AgentNotFound",
@@ -19,6 +21,7 @@ __all__ = [
     "AgentSpec",
     "AgentSpecBase",
     "InvalidRange",
+    "JevOutput",
     "JevSpec",
     "LLMSpec",
     "ManifestError",
