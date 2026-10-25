@@ -106,10 +106,12 @@ Gate rules read the question's generated output:
 | Rule | Reads | Valid on | `value` |
 | --- | --- | --- | --- |
 | `p_above`, `p_below` | `p` for a noul; `probs[option]` for a choice or score, with an extra `option` key | all types | a probability |
-| `confidence_below` | `confidence` | choice only, since noul and score outputs carry no confidence | a probability |
+| `confidence_below` | `confidence` | choice, score; noul outputs carry no confidence | a probability |
 | `answer_in` | `answer` for a choice, `level` for a score | choice, score | a list of options or levels |
 
-The generated output models are: noul `{p: float}`; choice `{answer: str, probs: dict[str, float], confidence: float}`; score `{value: float, level: str, probs: dict[str, float]}`. `JevOutput` has one field per question id. A truncated input always forces review, whatever the gates say.
+The generated output models are: noul `{p: float}`; choice `{answer: str, probs: dict[str, float], confidence: float}`; score `{value: float, level: str, probs: dict[str, float], confidence: float}`. `JevOutput` has one field per question id. A truncated input always forces review, whatever the gates say.
+
+A Jev manifest pins a versioned model id such as `jev-1.14.0`, never the rolling aliases `jev-latest` or `jev-preview`, because gate thresholds are tuned against one version. `GET /v1/models` lists only the aliases, so a pinned id is verified live by checking that the response's `model` field equals it. The spike notes in [jev-sdk.md](jev-sdk.md) (#15) give the wire format behind these output models.
 
 ```yaml
 name: diff-triage
@@ -272,7 +274,7 @@ A `Trace` holds one DuckDB connection for its lifetime and opens it on first use
 
 ## Secrets
 
-`ANTHROPIC_API_KEY` and the Jev key are read from the environment and from nowhere else. The Jev key is `TYPESAFE_API_KEY` in the handover; #15 confirms the name.
+`ANTHROPIC_API_KEY` and the Jev key are read from the environment and from nowhere else. The Jev key is `TYPESAFE_API_KEY`, confirmed by #15 in [jev-sdk.md](jev-sdk.md).
 
 - Store keys with `agb sys secrets set <NAME>`, which writes them to a mode-600 `secrets.env`.
 - The factory never reads that file. Whoever starts the factory exports the key: the shell, CI, or the `agb factory` wrapper (#30).
