@@ -14,7 +14,7 @@ from tools import (
     tool_defs,
     wire_name,
 )
-from tools.registry import SANDBOX_ONLY
+from tools.registry import READ_ONLY, SANDBOX_ONLY
 
 ALL = [
     "git.read_file",
@@ -125,3 +125,8 @@ def test_sandbox_only_tool_that_is_only_denied_is_fine() -> None:
 def test_only_the_two_writing_tools_are_sandbox_only() -> None:
     assert SANDBOX_ONLY == {"fs.write_file", "shell.run"}
     assert SANDBOX_ONLY <= set(TOOLS)
+
+
+def test_every_tool_is_either_read_only_or_sandbox_only() -> None:
+    assert READ_ONLY | SANDBOX_ONLY == set(TOOLS)
+    assert not READ_ONLY & SANDBOX_ONLY

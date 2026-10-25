@@ -67,7 +67,7 @@ def test_manifest_resolves_to_the_documented_version(spec: LLMSpec) -> None:
 
 
 def test_the_manifest_declares_no_guard_yet(spec: LLMSpec) -> None:
-    assert "guard" not in type(spec).model_fields
+    assert spec.guard is None
 
 
 def test_tools_exist_and_need_the_sandbox_flag(spec: LLMSpec) -> None:
