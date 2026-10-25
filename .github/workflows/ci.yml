@@ -30,6 +30,10 @@ jobs:
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
 
+      # The sandbox tests skip without this image, which would hide them from the coverage floor.
+      - name: Build the sandbox image
+        run: docker build -t factory-sandbox:0.1 -f tools/sandbox.Dockerfile tools
+
       - run: uv sync --locked
 
       - run: uv run ruff check .
