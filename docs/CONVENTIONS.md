@@ -93,6 +93,8 @@ evals:
   min_pass_rate: 0.75
 ```
 
+An agent whose output is a set of scores, such as the judge, adds a `scoring` block: `weights` gives each of `correctness_risk`, `maintainability`, `security_risk` and `test_coverage` a weight from 0 to 1, the weights must sum to 1 (within float rounding) or the manifest fails to load, and `ship_threshold` is a number from 0 to 1. `runtime/scoring.py` is the only code that applies them: `assess(spec, output)` counts the two risks as `1 - value`, takes the weighted sum, and ships when it is at or above the threshold. Neither number goes into the system prompt or the request, so the agent cannot shade a score to reach it.
+
 ## Manifest: kind jev
 
 A Jev agent returns probabilities over answers fixed in advance. It generates no text and calls no tools. Besides the shared fields (with `kind: jev`), the manifest holds:
@@ -317,6 +319,8 @@ cases:
 ```
 
 `evals.run.evaluate` runs each case through `runtime.runner.run` with the tag `eval:<name>@<version>`, so `tag` on the trace rows selects an eval's runs. Grading is deterministic first: the verdict must equal the expected one, and each expected defect needs a finding with the same file, an overlapping line window and a severity at or above `severity_floor`. A case that fails those checks fails without a judge call. A case that passes them goes to the `llm_judge` grader (`evals/graders/llm_judge.py`), one structured-output call to `claude-haiku-5-5` that returns `pass`, `score` and `reason` and is traced under the same tag. A typed agent failure fails its own case with the error text; a missing key or a payload the agent rejects ends the whole eval. The eval passes when `passed_count / total` reaches the agent's `evals.min_pass_rate`.
+
+An agent whose output has no verdict, such as the judge, sets `verdict: null`, which skips the verdict check; its `merged_findings` are matched against `defects` the way `findings` are. `expected` may also carry `criteria`, prose the `llm_judge` grader must see met in full, such as "the rationale names the failed reviewer". The deterministic checks do not read it. The grader receives `expected` without its null fields.
 
 ## Gates
 
