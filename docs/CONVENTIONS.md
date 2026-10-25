@@ -66,6 +66,7 @@ An LLM agent reasons, may call scoped tools, and returns a Pydantic model throug
 | `limits.timeout_s` | Wall-clock limit for one run, in seconds, and the timeout of each request |
 | `limits.max_output_tokens` | `max_tokens` for each request |
 | `evals.min_pass_rate` | Eval pass rate the publish gate requires, from 0 to 1 |
+| `guard` | Optional. The action-guard agent that must allow each of this agent's tool calls that is not read-only, as `name@^MAJOR.MINOR`, such as `action-guard@^0.1`. Absent means no guard; see [Tools](#tools) |
 
 Unknown keys are an error, so a typo never falls back to a default. Later tickets add fields and document them here: an optional `guard` agent address (#23), and `limits.max_retries` and `limits.max_tokens_total` (#25).
 
@@ -286,6 +287,14 @@ tools:
   deny: [rg.search]
 ```
 
+`tools.registry.READ_ONLY` is the set of tools that cannot change anything: `git.read_file`, `git.show_diff` and `rg.search`. A tool that is not in it, including a name the registry does not know, is treated as one that changes something. Add a tool to `READ_ONLY` only if it reads and nothing else.
+
+An agent whose manifest sets `guard` gets an action guard. `runtime/guard.py` holds `GuardHook`, a `ToolHook` that `run` installs when `spec.guard` is set, in front of any `hook` the caller passed: the caller's hook decides first, and only a call it allows goes to the guard. For a call to a tool in `READ_ONLY` the hook allows and writes nothing. For any other call it renders the tool name, the arguments, the worktree root (`repo_path`, resolved) and a task summary (`name@version: description` of the guarded agent) as the guard agent's input, runs the guard through `runtime.runner.run`, and acts on its `allow` and `reason`. A denial goes back to the model as the error tool result `<tool> refused by the action guard: <reason>`. The third denial in one run raises `GuardError` instead (a `FactoryError`, exit 1), which `run` re-raises unchanged and records in the guarded run's own trace row. Allowed calls do not reset the count. A guard run that fails with an `AgentError` also raises `GuardError`: a call is never allowed on a guess. A missing API key or any other `FactoryError` from the guard run propagates as it is.
+
+Every guard decision is one trace row, whether it allows or refuses. Its `kind` and `agent_ref` are the guard agent's, and `decision_json` is `{"parent_run_id", "allow", "reason"}`, `parent_run_id` being the `run_id` of the run whose call was judged. For an LLM guard the row is the guard run's own row, so it carries the tokens and the cost. The guard agent has no tools, so it never recurses.
+
+The guard comes in two forms, chosen by the `kind` of the agent that `guard` names. `kind: llm` is the form that ships, `action-guard@0.1` on `claude-haiku-5-5` at effort `low`. `kind: jev` would be a noul answering "is this tool call safe inside the sandbox?" and applies once Jev is a go; it is not wired, and `build_guard_hook` raises `UsageError` for it, since turning a probability into allow or deny needs a threshold, and thresholds live in `runtime/gates.py`.
+
 ## Fixtures
 
 A fixture is a directory `fixtures/src/<name>/` holding a `base/` tree, a `head/` tree and a `defects.yaml`; hand-built ones live in `fixtures/handmade/<name>/` in the same shape. `uv run python -m fixtures.build [name ...]` turns each into a git repository under `fixtures/repos/<name>/` (gitignored) with branches `base` and `head`, one commit each. Identity, dates and branch names are fixed and no hooks or git config apply, so the SHAs are reproducible; a rebuild deletes the old repository first. The directory name is the fixture's name and the handle an eval case uses, so a name is never renamed or reused. A new fixture only needs its directory: `discover` picks it up, and `ROOTS` in `fixtures/build.py` lists the source roots.
@@ -321,6 +330,8 @@ cases:
 `evals.run.evaluate` runs each case through `runtime.runner.run` with the tag `eval:<name>@<version>`, so `tag` on the trace rows selects an eval's runs. Grading is deterministic first: the verdict must equal the expected one, and each expected defect needs a finding with the same file, an overlapping line window and a severity at or above `severity_floor`. A case that fails those checks fails without a judge call. A case that passes them goes to the `llm_judge` grader (`evals/graders/llm_judge.py`), one structured-output call to `claude-haiku-5-5` that returns `pass`, `score` and `reason` and is traced under the same tag. A typed agent failure fails its own case with the error text; a missing key or a payload the agent rejects ends the whole eval. The eval passes when `passed_count / total` reaches the agent's `evals.min_pass_rate`.
 
 An agent whose output has no verdict, such as the judge, sets `verdict: null`, which skips the verdict check; its `merged_findings` are matched against `defects` the way `findings` are. `expected` may also carry `criteria`, prose the `llm_judge` grader must see met in full, such as "the rationale names the failed reviewer". The deterministic checks do not read it. The grader receives `expected` without its null fields.
+
+An agent whose output is neither verdicts nor findings, such as the action guard, which returns `allow` and `reason`, uses `verdict: null`, `defects: []` and `criteria` that says whether the call must be allowed or refused and what the reason has to name. Its cases need a fixture name only because the format asks for one; the payload does not mention it and has no `repo_path` field for the eval runner to fill in. A deterministic grader that reads `allow` would need a change in `evals/`.
 
 ## Gates
 
@@ -369,6 +380,8 @@ The LLM runner writes the row in a `finally` block, so a failed run still record
 | `output_json` | JSON, null | The validated output, or the full probability vectors for Jev; null on failure |
 | `error` | VARCHAR, null | Error class and message when the run failed |
 | `tag` | VARCHAR, null | Set by the eval runner and publish gate, e.g. `eval:code-reviewer@1.2.0` |
+
+A guard decision is a row of its own, written by `runtime/guard.py`. Its `decision_json` is `{"parent_run_id", "allow", "reason"}`, `parent_run_id` is the `run_id` of the guarded run, and `kind` and `agent_ref` name the guard agent. Select a run's decisions with `json_extract_string(decision_json, '$.parent_run_id') = <run_id>`.
 
 A version becomes publishable by passing its evals. Migration 2 adds the `published` table, written only by `factory publish-check` through `Trace.record_published(agent, version, pass_rate, git_sha)` and read back with `Trace.published()`. It is an append-only history with no key: publishing a version again adds a row, and a version counts as published once it has any.
 
@@ -459,6 +472,8 @@ A failure the user or agent should see is a `FactoryError` with a one-line `mess
 | `AuthOrConfigError` | 4 |
 
 Later typed errors subclass one of these. A resolver miss (`AgentNotFound`, `VersionNotFound`) is a `NotFoundError`; a missing key is an `AuthOrConfigError`; `AgentError`, `JevError`, `GuardError` and `BudgetExceeded` are `FactoryError`s. `JevError` lives in `runtime/jev_runner.py` and exits 1.
+
+`GuardError` lives in `runtime/guard.py` and exits 1. It is raised for a third denial in one run, or for a guard that cannot answer, and it is not an `AgentError`.
 
 `runtime/errors.py` holds the failures of an LLM run. Each is an `AgentError` (exit 1) with the agent's `name@version` address as `agent` and the messages so far as `transcript`, in the shape the Messages API takes, thinking signatures kept:
 
