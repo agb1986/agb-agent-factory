@@ -22,10 +22,11 @@ from factory import cli
 from factory.cli import main
 from factory.exit import ExitCode
 from fixtures.build import build
-from pipelines import review_panel
+from pipelines import review_panel, triage
 from registry import AgentRef
 from registry.spec import LLMSpec
 from runtime.trace import Trace, TraceRow
+from tests.pipelines.test_review_panel import FakeJev
 
 Golden = Callable[[str, Any], None]
 
@@ -205,6 +206,23 @@ def test_review_json(
     monkeypatch.setenv("FACTORY_TRACE_DB", str(tmp_path / "traces.duckdb"))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(review_panel, "run", FakeReviewRunner())
+    monkeypatch.setattr(review_panel, "run_jev", FakeJev())
     (fixture,) = build(["mixed"], dest=tmp_path / "repos")
     argv = ["review", str(fixture.path), "--base", "base", "--head", "head"]
     golden("review", _run([*argv, "--allow-unpublished", "--json"], capsys))
+
+
+# --- triage
+
+
+def test_triage_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    golden: Golden,
+) -> None:
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(tmp_path / "traces.duckdb"))
+    monkeypatch.setattr(triage, "run_jev", FakeJev())
+    (fixture,) = build(["mixed"], dest=tmp_path / "repos")
+    argv = ["triage", str(fixture.path), "--base", "base", "--head", "head"]
+    golden("triage", _run([*argv, "--allow-unpublished", "--json"], capsys))
