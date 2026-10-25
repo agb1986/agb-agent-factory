@@ -72,3 +72,4 @@ Its manifest validates, its output model round-trips through the API, it has at 
 - Exact current Jev model id (`jev-1.13.0` and `typesafe/jev-1.14-20261014` both appear in public sources).
 - Whether the fixer runs on the Claude Agent SDK, Managed Agents, or a hand-built Docker sandbox.
 - Whether `httpx2` (used by `anthropic` 1.x) and `httpx` (used by `agb-tools`) can share an environment, which matters only if the two repositories are ever installed together.
+  - Answered in #2: `anthropic` 2.3.0 pulls `httpx2` only (no `httpx`), so the two repositories need separate environments unless `agb-tools` moves to `httpx2`.
