@@ -19,13 +19,12 @@ from pipelines.review_panel import (
     JUDGE,
     REVIEWERS,
     AllReviewersFailed,
-    Decision,
     Panel,
     PanelResult,
     resolve_panel,
     run_panel,
-    triage,
 )
+from registry.jev_spec import JevOutput, JevSpec
 from registry.spec import LLMSpec
 from runtime.errors import RefusalError
 from runtime.trace import Trace, TraceRow
@@ -122,6 +121,57 @@ class FakeRunner:
         return {c["spec"].name for c in self.calls if c["spec"].name != JUDGE[0]}
 
 
+TRIAGE_ANSWERS: dict[str, Any] = {
+    "needs_review": {"p": 0.8},
+    "reviewers": {
+        "answer": "code-security",
+        "probs": {"code": 0.1, "code-security": 0.7, "code-perf": 0.1, "all": 0.1},
+        "confidence": 0.9,
+    },
+}
+"""What the fake Jev agent answers by default: no gate fires, route is code and security."""
+
+
+class FakeJev:
+    """Stands in for `runtime.jev_runner.run_jev`: answers fixed, traces a row, records calls."""
+
+    def __init__(
+        self,
+        answers: Mapping[str, Any] | None = None,
+        error: Exception | None = None,
+        *,
+        truncated: bool = False,
+        cost_usd: float = 0.0,
+    ) -> None:
+        self.answers = dict(TRIAGE_ANSWERS if answers is None else answers)
+        self.error = error
+        self.truncated = truncated
+        self.cost_usd = cost_usd
+        self.calls: list[dict[str, Any]] = []
+
+    def __call__(
+        self, spec: JevSpec, payload: Mapping[str, Any], trace: Trace, **kwargs: Any
+    ) -> JevOutput:
+        self.calls.append({"spec": spec, "payload": dict(payload), **kwargs})
+        trace.record(
+            TraceRow(
+                run_id="row-jev",
+                pipeline_run_id=kwargs["pipeline_run_id"],
+                agent_ref=spec.address,
+                kind="jev",
+                started_at=datetime.now(UTC),
+                duration_ms=1,
+                input_json=dict(payload),
+                cost_usd=self.cost_usd,
+                decision_json={"truncated": self.truncated, "model": spec.model},
+                error=None if self.error is None else str(self.error),
+            )
+        )
+        if self.error is not None:
+            raise self.error
+        return spec.output_class.model_validate(self.answers)
+
+
 @pytest.fixture(scope="module")
 def repo(tmp_path_factory: pytest.TempPathFactory) -> Path:
     (fixture,) = build(["mixed"], dest=tmp_path_factory.mktemp("repos"))
@@ -140,6 +190,7 @@ def trace(tmp_path: Path) -> Iterator[Trace]:
 
 
 def _run(panel: Panel, repo: Path, trace: Trace, runner: FakeRunner, **kwargs: Any) -> PanelResult:
+    kwargs.setdefault("jev_runner", FakeJev())
     return run_panel(
         panel, repo, "base", "head", trace, runner=runner, pipeline_run_id=RUN_ID, **kwargs
     )
@@ -286,12 +337,6 @@ def test_an_unknown_ref_raises_not_found_before_any_agent_runs(
     assert runner.calls == []
 
 
-def test_triage_is_a_no_op_that_reviews_everything() -> None:
-    assert triage("diff") == Decision(
-        skip=False, escalate=False, route=(), reason="triage is not wired yet"
-    )
-
-
 # --- the document
 
 
@@ -319,6 +364,7 @@ def test_the_document_has_the_documented_keys(panel: Panel, repo: Path, trace: T
         "ship",
         "total_cost_usd",
         "duration_ms",
+        "triage",
     ]
     assert list(document["reviewers"][0]) == [
         "agent", "version", "ref", "status", "verdict", "finding_count", "error"
@@ -336,6 +382,7 @@ def cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, FakeRunner
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     runner = FakeRunner()
     monkeypatch.setattr(review_panel, "run", runner)
+    monkeypatch.setattr(review_panel, "run_jev", FakeJev())
     return {"runner": runner}
 
 
