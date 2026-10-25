@@ -1,0 +1,56 @@
+{
+  "since": "2026-10-20T00:00:00Z",
+  "by": "agent",
+  "total_runs": 8,
+  "total_cost_usd": 1.001345,
+  "buckets": {
+    "other": {
+      "runs": 5,
+      "cost_usd": 0.051345,
+      "groups": [
+        {
+          "agent": "code-reviewer@1.2.0",
+          "runs": 2,
+          "cost_usd": 0.024245
+        },
+        {
+          "agent": "diff-triage@0.1.0",
+          "runs": 1,
+          "cost_usd": 0.0
+        },
+        {
+          "agent": "judge@1.0.0",
+          "runs": 1,
+          "cost_usd": 0.004
+        },
+        {
+          "agent": "perf-reviewer@0.3.0",
+          "runs": 1,
+          "cost_usd": 0.0231
+        }
+      ]
+    },
+    "eval": {
+      "runs": 2,
+      "cost_usd": 0.5,
+      "groups": [
+        {
+          "agent": "code-reviewer@1.2.0",
+          "runs": 2,
+          "cost_usd": 0.5
+        }
+      ]
+    },
+    "publish": {
+      "runs": 1,
+      "cost_usd": 0.45,
+      "groups": [
+        {
+          "agent": "fixer@0.1.0",
+          "runs": 1,
+          "cost_usd": 0.45
+        }
+      ]
+    }
+  }
+}

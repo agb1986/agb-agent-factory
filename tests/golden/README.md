@@ -12,6 +12,7 @@ fixed values, and compares the result to `tests/golden/<name>.json`.
 | `publish-check.json` | `factory publish-check code-reviewer@^1.2 --json` |
 | `review.json` | `factory review <repo> --json` |
 | `triage.json` | `factory triage <repo> --json` |
+| `cost.json` | `factory cost --since 2026-10-20 --json` |
 
 ## When a golden test fails
 
@@ -40,7 +41,9 @@ normalised document, and `golden("triage", ...)` writes or checks `tests/golden/
 the command calls the model, put a fake in front of it the way `fake_eval`, `FakeReviewRunner` and `FakeJev` do.
 If it adds a new per-run field, add its name and stand-in value to `VOLATILE`.
 
-`factory cost` and `factory fix` have no golden file yet because the commands do not exist.
+`factory fix` has no golden file yet because the command does not exist. `cost.json` is built
+from a seeded trace store, not from a fake model; `tests/runtime/golden/` holds the same report
+as text and grouped by pipeline.
 
 The review panel also has a golden of its own, `tests/pipelines/golden/review-panel.json`, which
 pins the pipeline document with a failing reviewer. `review.json` here pins what the command prints.

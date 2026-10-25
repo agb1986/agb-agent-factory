@@ -23,6 +23,7 @@ from pipelines.review_panel import (
 from registry.jev_spec import JevSpec, ProbabilityGate
 from registry.resolver import NotPublished
 from runtime import gates
+from runtime.budget import Budget, BudgetExceeded
 from runtime.trace import Trace, TraceRow
 from tests.pipelines.test_review_panel import RUN_ID, TRIAGE_ANSWERS, FakeJev, FakeRunner
 
@@ -277,6 +278,38 @@ def test_a_jev_failure_is_logged_with_its_error(
     assert row.decision_json["escalate"] is True
     assert row.error == "RuntimeError: boom"
     assert row.output_json is None
+
+
+# --- the budget
+
+
+def test_triage_is_charged_to_the_panel_budget(
+    panel: Panel, repo: Path, trace: RecordingTrace
+) -> None:
+    jev = FakeJev()
+    budget = Budget(3.0)
+    run_panel(
+        panel,
+        repo,
+        "base",
+        "head",
+        trace,
+        runner=FakeRunner(),
+        jev_runner=jev,
+        pipeline_run_id=RUN_ID,
+        budget=budget,
+    )
+    (call,) = jev.calls
+    assert call["budget"] is budget
+
+
+def test_a_triage_over_budget_ends_the_panel_before_any_reviewer(
+    panel: Panel, repo: Path, trace: RecordingTrace
+) -> None:
+    runner = FakeRunner()
+    with pytest.raises(BudgetExceeded):
+        _run(panel, repo, trace, FakeJev(error=BudgetExceeded(1.0, 1.2)), runner)
+    assert runner.calls == []
 
 
 # --- --no-triage
