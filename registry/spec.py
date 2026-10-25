@@ -17,10 +17,12 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator,
 NAME_PATTERN = r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
 VERSION_PATTERN = r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
 TOOL_NAME_PATTERN = r"^[a-z][a-z0-9]*(_[a-z0-9]+)*\.[a-z][a-z0-9]*(_[a-z0-9]+)*$"
+AGENT_RANGE_PATTERN = rf"{NAME_PATTERN[:-1]}@\^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
 
 type Name = Annotated[str, Field(pattern=NAME_PATTERN)]
 type Version = Annotated[str, Field(pattern=VERSION_PATTERN)]
 type ToolName = Annotated[str, Field(pattern=TOOL_NAME_PATTERN)]
+type AgentRange = Annotated[str, Field(pattern=AGENT_RANGE_PATTERN)]
 
 
 class _Model(BaseModel):
@@ -117,6 +119,8 @@ class LLMSpec(AgentSpecBase):
     `input_model` and `output_model` are the class names from the manifest. The loaded classes are
     `input_class` and `output_class`, available once the loader has called `attach_models`.
     `scoring` is optional and only an agent whose output carries scores, such as the judge, sets it.
+    `guard` is optional and names the action-guard agent, as `name@^MAJOR.MINOR`, that must allow
+    each of this agent's tool calls that is not read-only; see `runtime.guard`.
     """
 
     kind: Literal["llm"]
@@ -129,6 +133,7 @@ class LLMSpec(AgentSpecBase):
     tools: ToolsSpec = ToolsSpec()
     limits: LimitsSpec
     scoring: ScoringSpec | None = None
+    guard: AgentRange | None = None
 
     _input_class: type[BaseModel] | None = PrivateAttr(default=None)
     _output_class: type[BaseModel] | None = PrivateAttr(default=None)
