@@ -33,6 +33,20 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument(
         "--workers", type=int, default=4, help="cases to run at once (default: %(default)s)"
     )
+    publish_parser = sub.add_parser(
+        "publish-check",
+        help="run an agent's eval cases and record the version as published when they pass",
+        epilog="example: factory publish-check code-reviewer@^1.2 --json",
+    )
+    publish_parser.add_argument(
+        "agent", help="`name@^MAJOR.MINOR`; the highest version if no range"
+    )
+    publish_parser.add_argument(
+        "--json", action="store_true", help="print one JSON document on stdout instead of a table"
+    )
+    publish_parser.add_argument(
+        "--workers", type=int, default=4, help="cases to run at once (default: %(default)s)"
+    )
     return parser
 
 
@@ -53,6 +67,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _list(as_json=args.json)
         if args.command == "eval":
             return _eval(args.agent, as_json=args.json, workers=args.workers)
+        if args.command == "publish-check":
+            return _publish_check(args.agent, as_json=args.json, workers=args.workers)
     except Exception as exc:  # noqa: BLE001 - the root handler maps every failure to a code
         return _fail(exc, as_json=getattr(args, "json", False))
     parser.print_usage(sys.stderr)
@@ -73,6 +89,13 @@ def _list(*, as_json: bool) -> int:
 def _eval(agent: str, *, as_json: bool, workers: int) -> int:
     """Run an agent's eval cases; the table goes to stderr, the JSON document to stdout."""
     from evals.run import command  # imported here: it pulls in the Anthropic SDK
+
+    return command(agent, as_json=as_json, workers=workers)
+
+
+def _publish_check(agent: str, *, as_json: bool, workers: int) -> int:
+    """Evaluate an agent and write a `published` row if it passes; same output as `eval`."""
+    from registry.published import command  # imported here: it pulls in the Anthropic SDK
 
     return command(agent, as_json=as_json, workers=workers)
 
