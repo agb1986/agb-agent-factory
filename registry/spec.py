@@ -8,6 +8,7 @@ Loading a manifest from disk, and importing the schemas module an `LLMSpec` name
 `registry.resolver`; this module only describes and validates the data.
 """
 
+import math
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
@@ -59,6 +60,32 @@ class LimitsSpec(_Model):
     max_output_tokens: int = Field(gt=0)
 
 
+class WeightsSpec(_Model):
+    """The `scoring.weights` block: how much each of the judge's four scores counts, from 0 to 1."""
+
+    correctness_risk: float = Field(ge=0, le=1)
+    maintainability: float = Field(ge=0, le=1)
+    security_risk: float = Field(ge=0, le=1)
+    test_coverage: float = Field(ge=0, le=1)
+
+
+class ScoringSpec(_Model):
+    """The `scoring` block: score weights, which must sum to 1, and the score that ships a change.
+
+    The runtime applies both in `runtime.scoring`; the agent never sees them.
+    """
+
+    weights: WeightsSpec
+    ship_threshold: float = Field(ge=0, le=1)
+
+    @model_validator(mode="after")
+    def _weights_sum_to_one(self) -> ScoringSpec:
+        total = sum(self.weights.model_dump().values())
+        if not math.isclose(total, 1.0, abs_tol=1e-9):
+            raise ValueError(f"weights sum to {total:g}, expected 1")
+        return self
+
+
 class AgentSpecBase(_Model):
     """Fields shared by every agent kind.
 
@@ -89,6 +116,7 @@ class LLMSpec(AgentSpecBase):
 
     `input_model` and `output_model` are the class names from the manifest. The loaded classes are
     `input_class` and `output_class`, available once the loader has called `attach_models`.
+    `scoring` is optional and only an agent whose output carries scores, such as the judge, sets it.
     """
 
     kind: Literal["llm"]
@@ -100,6 +128,7 @@ class LLMSpec(AgentSpecBase):
     output_model: str = Field(min_length=1)
     tools: ToolsSpec = ToolsSpec()
     limits: LimitsSpec
+    scoring: ScoringSpec | None = None
 
     _input_class: type[BaseModel] | None = PrivateAttr(default=None)
     _output_class: type[BaseModel] | None = PrivateAttr(default=None)
