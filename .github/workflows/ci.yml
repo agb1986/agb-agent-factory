@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The version-bump check compares against the merge base, which needs the history.
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # The rg.search tests skip without ripgrep, which would hide them from the coverage floor.
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - run: uv sync --locked
+
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run ty check
+
+      - name: Tests with coverage
+        run: uv run pytest -m "not live and not live_jev" --cov --cov-fail-under=85
+
+      - name: Version bump
+        if: github.event_name == 'pull_request'
+        run: uv run python scripts/check_version_bump.py "origin/${{ github.base_ref }}"
