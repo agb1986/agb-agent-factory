@@ -364,7 +364,7 @@ def _run(
     """Build the tools and client, converse, validate, and retry validation once."""
     tools = [
         _ScopedTool(definition, state)
-        for definition in tool_defs(spec.tools.allow, spec.tools.deny)
+        for definition in tool_defs(spec.tools.allow, spec.tools.deny, sandbox=spec.sandbox)
     ]
     if client is None:
         if not os.environ.get(API_KEY_ENV):
