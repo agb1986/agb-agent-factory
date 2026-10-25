@@ -1,0 +1,44 @@
+name: diff-triage
+version: 0.1.0
+kind: jev
+description: Decides whether a diff needs human-quality review, and which reviewers should see it.
+model: jev-1.14.0
+
+input:
+  render: "Files changed:\n{files}\n\nDiff:\n{diff}"
+  # Conservative until #17 measures real diffs.
+  max_chars: 24000
+
+questions:
+  - id: needs_review
+    type: noul
+    text: Does this diff need human-quality review?
+  - id: reviewers
+    type: choice
+    text: Which reviewers should see this diff?
+    options: [code, code-security, code-perf, all]
+
+# Route only: no skip gate until #20 calibrates thresholds against the eval set. The thresholds
+# below are placeholders and #20 sets them.
+gates:
+  - name: unsure
+    question: reviewers
+    rule: confidence_below
+    value: 0.6
+    action: escalate
+
+routing:
+  - when: reviewers=code
+    route: [code-reviewer]
+  - when: reviewers=code-security
+    route: [code-reviewer, security-reviewer]
+  - when: reviewers=code-perf
+    route: [code-reviewer, perf-reviewer]
+  - when: reviewers=all
+    route: [code-reviewer, security-reviewer, perf-reviewer]
+  - when: unsure
+    route: [code-reviewer, security-reviewer, perf-reviewer]
+
+evals:
+  min_pass_rate: 0.9
+  min_recall_risky: 0.98
