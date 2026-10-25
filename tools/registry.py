@@ -1,18 +1,21 @@
-"""The registry of scoped, read-only tools and the helpers that turn an agent's lists into wire definitions.
+"""The registry of scoped tools and the helpers that turn an agent's lists into wire definitions.
 
 `TOOLS` maps a dotted name (`git.read_file`) to a pair: the tool definition and its implementation.
 The definition has `name`, `description` and `input_schema`, and describes only the arguments the
 model supplies. The implementation takes the repository root as its first argument, then the
 model's arguments, and has a keyword-only `max_bytes`; the runtime calls
 `impl(repo_path, **arguments, max_bytes=MAX_OUTPUT_BYTES)` and returns the string to the model.
-Every implementation reads only inside the root and raises a `ToolError` subclass on failure.
+Every implementation acts only inside the root and raises a `ToolError` subclass on failure.
+
+All tools but `fs.write_file` and `shell.run` are read-only. Those two, named in `SANDBOX_ONLY`,
+are refused by `tool_defs` unless the agent's manifest says `sandbox: true`.
 """
 
 import copy
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from tools import git, rg
+from tools import fs, git, rg, sandbox
 from tools._common import (
     DEFAULT_MAX_BYTES,
     ToolListError,
@@ -21,6 +24,9 @@ from tools._common import (
 
 MAX_OUTPUT_BYTES = DEFAULT_MAX_BYTES
 """Most bytes one tool call returns to the model. Longer output is cut and ends with a marker."""
+
+SANDBOX_ONLY = frozenset({"fs.write_file", "shell.run"})
+"""The tools that change files or start programs; only an agent with `sandbox: true` gets them."""
 
 _WIRE_SEPARATOR = "__"
 
@@ -77,6 +83,60 @@ TOOLS: dict[str, Tool] = {
         },
         rg.search,
     ),
+    "fs.list_files": (
+        {
+            "name": "fs.list_files",
+            "description": "List the files in the working tree, tracked or new but not ignored, one path per line.",
+            "input_schema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        },
+        fs.list_files,
+    ),
+    "fs.read_file": (
+        {
+            "name": "fs.read_file",
+            "description": "Return the current contents of one working-tree file, including edits not yet committed.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path relative to the repository root."},
+                },
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+        },
+        fs.read_file,
+    ),
+    "fs.write_file": (
+        {
+            "name": "fs.write_file",
+            "description": "Create or replace one working-tree file with the given content. Refuses paths outside the repository, anything under .git, and content over 256 KiB.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path relative to the repository root."},
+                    "content": {"type": "string", "description": "The complete new contents of the file."},
+                },
+                "required": ["path", "content"],
+                "additionalProperties": False,
+            },
+        },
+        sandbox.write_file,
+    ),
+    "shell.run": (
+        {
+            "name": "shell.run",
+            "description": "Run one command in an offline sandbox with the repository mounted at /work. Allowed programs: pytest, python, uv, and read-only git subcommands. Returns the exit code and the output. Run the tests as [\"python\", \"-m\", \"pytest\", \"-q\"].",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "argv": {"type": "array", "items": {"type": "string"}, "description": "The program and its arguments, one per item. No shell syntax."},
+                },
+                "required": ["argv"],
+                "additionalProperties": False,
+            },
+        },
+        sandbox.run_command,
+    ),
 }  # fmt: skip
 
 READ_ONLY: frozenset[str] = frozenset({"git.read_file", "git.show_diff", "rg.search"})
@@ -108,13 +168,16 @@ def dotted_name(wire: str) -> str:
     return dotted
 
 
-def tool_defs(allow: Iterable[str], deny: Iterable[str] = ()) -> list[ToolDef]:
+def tool_defs(
+    allow: Iterable[str], deny: Iterable[str] = (), *, sandbox: bool = False
+) -> list[ToolDef]:
     """Return the wire-format definitions for one agent's `tools.allow` and `tools.deny` lists.
 
     The result follows the order of `allow`, drops repeats, and names each tool with `__` in place
     of dots. The definitions are copies, so a caller can change them freely. Raises
     `UnknownToolError` for a name in either list that is not in `TOOLS`, and `ToolListError` when
-    a name is in both lists.
+    a name is in both lists, or when `allow` names a `SANDBOX_ONLY` tool and `sandbox` is false.
+    `sandbox` is the manifest's `sandbox` flag.
     """
     allowed = list(dict.fromkeys(allow))
     denied = list(dict.fromkeys(deny))
@@ -125,6 +188,12 @@ def tool_defs(allow: Iterable[str], deny: Iterable[str] = ()) -> list[ToolDef]:
         raise ToolListError(
             f"tools both allowed and denied: {', '.join(overlap)}",
             hint="remove each from one of tools.allow and tools.deny",
+        )
+    refused = [name for name in allowed if name in SANDBOX_ONLY]
+    if refused and not sandbox:
+        raise ToolListError(
+            f"sandbox-only tools need a sandboxed agent: {', '.join(refused)}",
+            hint="set `sandbox: true` in the manifest or remove them from tools.allow",
         )
     defs: list[ToolDef] = []
     for name in allowed:
