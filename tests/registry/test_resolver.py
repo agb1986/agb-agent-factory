@@ -284,12 +284,12 @@ def test_invalid_values_name_the_field(
     assert f": {field}" in caught.value.message or f"{path}: {field}" in caught.value.message
 
 
-def test_jev_manifest_validates_only_the_shared_fields(agents_dir: Path) -> None:
+def test_jev_manifest_resolves_to_a_typed_jev_spec(agents_dir: Path) -> None:
     (agents_dir / "diff-triage").mkdir()
     path = agents_dir / "diff-triage" / "agent.yaml"
     path.write_text(
         "name: diff-triage\nversion: 0.1.0\nkind: jev\ndescription: Triage.\n"
-        "model: some-jev-model\n"
+        "model: jev-1.14.0\n"
         "input: {render: 'x {diff}', max_chars: 10}\n"
         "questions: [{id: q, type: noul, text: 'Why?'}]\n"
         "gates: []\nrouting: []\n"
@@ -298,7 +298,7 @@ def test_jev_manifest_validates_only_the_shared_fields(agents_dir: Path) -> None
     spec = resolve("diff-triage", "^0.1", agents_dir)
     assert isinstance(spec, JevSpec)
     assert spec.evals.min_recall_risky == 0.98
-    assert spec.questions == [{"id": "q", "type": "noul", "text": "Why?"}]
+    assert [q.id for q in spec.questions] == ["q"]
 
 
 def test_jev_manifest_still_checks_the_shared_fields(agents_dir: Path) -> None:
