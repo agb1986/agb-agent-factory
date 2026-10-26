@@ -163,7 +163,7 @@ def test_triage_is_called_with_the_files_and_the_diff_under_the_pipeline_run_id(
 ) -> None:
     jev = FakeJev()
     _run(panel, repo, trace, jev)
-    (call,) = jev.calls
+    (call,) = jev.calls_to("diff-triage")
     assert call["spec"].address == "diff-triage@0.1.0"
     assert call["pipeline_run_id"] == RUN_ID
     assert call["payload"]["files"].splitlines() == changed_files(call["payload"]["diff"])
@@ -181,8 +181,9 @@ def test_the_jev_cost_is_in_the_pipeline_total(
     panel: Panel, repo: Path, trace: RecordingTrace
 ) -> None:
     result, _ = _run(panel, repo, trace, FakeJev(cost_usd=0.01))
-    assert result.total_cost_usd == pytest.approx(1.26)
-    assert trace.cost_by_pipeline_run(RUN_ID) == pytest.approx(1.26)
+    # Two Jev calls at $0.01: triage and the judge gate.
+    assert result.total_cost_usd == pytest.approx(1.27)
+    assert trace.cost_by_pipeline_run(RUN_ID) == pytest.approx(1.27)
 
 
 def test_the_decision_row_adds_no_cost(panel: Panel, repo: Path, trace: RecordingTrace) -> None:
@@ -299,7 +300,7 @@ def test_triage_is_charged_to_the_panel_budget(
         pipeline_run_id=RUN_ID,
         budget=budget,
     )
-    (call,) = jev.calls
+    (call,) = jev.calls_to("diff-triage")
     assert call["budget"] is budget
 
 
@@ -318,7 +319,7 @@ def test_a_triage_over_budget_ends_the_panel_before_any_reviewer(
 def test_a_panel_without_triage_never_calls_jev(repo: Path, trace: RecordingTrace) -> None:
     jev = FakeJev()
     result, runner = _run(resolve_panel(allow_unpublished=True, triage=False), repo, trace, jev)
-    assert jev.calls == []
+    assert jev.calls_to("diff-triage") == []
     assert _triage_rows(trace) == []
     assert runner.reviewers_called() == ALL_REVIEWERS
     assert result.triage.status == "disabled"
@@ -372,7 +373,7 @@ def test_review_runs_triage_by_default(
     assert main(_args("review", repo, "--json")) == ExitCode.OK
     document = json.loads(capsys.readouterr().out)
     assert document["triage"]["status"] == "ok"
-    assert len(cli["jev"].calls) == 1
+    assert len(cli["jev"].calls_to("diff-triage")) == 1
 
 
 def test_review_no_triage_bypasses_the_jev_call(
@@ -381,7 +382,7 @@ def test_review_no_triage_bypasses_the_jev_call(
     assert main(_args("review", repo, "--json", "--no-triage")) == ExitCode.OK
     document = json.loads(capsys.readouterr().out)
     assert document["triage"]["status"] == "disabled"
-    assert cli["jev"].calls == []
+    assert cli["jev"].calls_to("diff-triage") == []
     assert len(cli["runner"].calls) == 4
 
 

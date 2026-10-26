@@ -1,0 +1,33 @@
+# The manifest of the `jev` eval grader, read by `evals.graders.jev`. It is shaped like an agent
+# manifest so `JevSpec` validates it and `run_jev` runs it, but it lives next to the grader and
+# not under `agents/`: it is not an agent anyone calls, so `factory list` and the registry never
+# see it. One noul question asks whether an answer meets its expectation; the `matches` gate is the
+# grader's threshold, and the answer passes when the probability is over it.
+name: eval-grader-jev
+version: 0.1.0
+kind: jev
+description: Grades whether an agent's answer meets a case's expectation, for the jev eval grader.
+model: jev-1.14.0
+
+input:
+  render: "Expectation of the case:\n{expected}\n\nAnswer of the agent:\n{actual}"
+  max_chars: 16000
+
+questions:
+  - id: matches
+    type: noul
+    text: Does the answer meet the expectation, including its verdict and every criterion it lists?
+
+# Pass threshold. Measured on 2026-10-26 against the judge-gate cases (docs/jev-sdk.md): answers
+# that meet their expectation scored 0.68 to 0.96 and answers that do not scored 0.02 or less, so
+# 0.5 sits in the middle of that gap. At 0.7 a right answer failed about one run in four, because
+# the grader's probability moves by a few hundredths between runs.
+gates:
+  - name: matches
+    question: matches
+    rule: p_above
+    value: 0.5
+    action: skip
+
+evals:
+  min_pass_rate: 0.9

@@ -287,16 +287,6 @@ def test_workers_below_one_is_a_usage_error(
         _evaluate(spec, cases, trace, fixture_paths, FakeRunner(spec), workers=0)
 
 
-def test_the_jev_grader_raises_not_implemented_before_any_run(
-    spec: LLMSpec, cases: list[Case], trace: Trace, fixture_paths: dict[str, Path]
-) -> None:
-    jev_case = cases[0].model_copy(update={"grader": "jev"})
-    runner = FakeRunner(spec)
-    with pytest.raises(NotImplementedError, match="#19"):
-        _evaluate(spec, [jev_case, *cases], trace, fixture_paths, runner)
-    assert runner.calls == []
-
-
 def test_an_unknown_fixture_is_not_found_before_any_run(
     spec: LLMSpec, cases: list[Case], trace: Trace
 ) -> None:
@@ -355,6 +345,7 @@ def test_the_document_has_the_documented_keys(
         "reason",
         "deterministic",
         "judge",
+        "grader_fallback",
         "error",
         "duration_ms",
     }

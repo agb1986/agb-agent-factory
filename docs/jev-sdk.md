@@ -170,6 +170,45 @@ The live measurement, once a key exists: 20 calls of the triage question set ove
 - **#18 triage, route-only.** Pack all triage questions into one request. The [Jev 1.13 jaggedness notes](https://docs.typesafe.ai/model-jaggedness/jev-1.13.md) list two failure modes that matter here: a large state full of irrelevant detail lowers accuracy, and instructions injected into the state can move the answer. A diff can carry both, which is one more reason Jev stays route-only and never has the last word.
 - **#19 judge gate and #20 calibration.** Pinning matters because thresholds are tuned per version; moving to a new Jev version re-runs calibration. The vendor's starting Noul thresholds (0.7 and 0.3) are a starting point only.
 
+## Judge gate and grader agreement (#19)
+
+Measured 2026-10-26 against the live API with `jev-1.14.0`, with `TYPESAFE_API_KEY` and `ANTHROPIC_API_KEY` set.
+
+**Acceptance.** `tests/live/test_judge_gate_live.py` runs the review panel with `judge-gate@^0.1` twice, with the reviewers and the judge on a fake runner. On the `clean-refactor` fixture, with three approvals and no findings, the gate answered `clear_cut` 0.98 and `verdict` ship with confidence 0.98; the path was `skipped_judge`, no judge ran, and the estimated saving was $0.033. On the `mixed` fixture, with a blocker from one reviewer, it answered `clear_cut` 0.02 and `request_changes`; the path was `escalated`, reason `no_gate`, and the judge ran. The same file passes in 3.4 s.
+
+**Gate behaviour on the eval cases.** Three runs of each case:
+
+| Case | `clear_cut` | `verdict` |
+| --- | --- | --- |
+| Three approvals, no findings | 0.98 | ship, confidence 1.0 |
+| One major finding, two approvals | 0.04 to 0.05 | request_changes, 1.0 |
+| One blocker, two approvals | 0.01 | request_changes, 1.0 |
+| Reviewers contradict each other | 0.01 to 0.02 | request_changes, 0.97 to 0.98 |
+| One reviewer failed | 0.04 | unclear, 0.61 to 0.67 |
+
+The gate never skips a change that has an open finding or a missing reviewer. It also never answers `unclear` for contradictory reviewers: it reads an unrefuted blocker as `request_changes` with high confidence. What keeps that case from skipping the judge is `clear_cut`, not `unclear`, so the eval case for it does not pin a verdict and states in `criteria` that the gate must not ship and must not be clear-cut. The case first expected `unclear` and failed on every run; the expectation was wrong about what this model does, and it was changed on that evidence.
+
+**Threshold of the `jev` grader.** The grader asks one noul question, "does the answer meet the expectation?", and passes the answer above the `matches` gate of `evals/graders/jev_grader.yaml`. Three grader calls for each case, once with the answer the gate gave and once with a deliberately wrong answer:
+
+| | Probability of `matches` |
+| --- | --- |
+| Right answers | 0.68 to 0.96 |
+| Wrong answers | 0.01 to 0.02 |
+
+The manifest started at 0.7, the vendor's suggested noul threshold. That sat inside the spread of right answers: with it, `factory eval judge-gate@^0.1` scored 2/5 and 3/5 on three runs, failing cases whose probability came out at 0.65 to 0.71. The threshold is now 0.5, the middle of the gap. After the change, five runs of the eval each passed 5/5 against the manifest's minimum of 0.9, at $0.00017 for the Jev calls of one run. The gap is wide because the grader is given the expectation and the answer, and not the task; a wrong answer is far from the expectation, and a borderline one has not been tested here.
+
+**Agreement with the LLM judge.** `python -m evals.graders.jev judge-gate@^0.1 --json` grades each answer with both graders:
+
+| Run | Compared | Agreed | Fell back |
+| --- | --- | --- | --- |
+| 1 | 5 | 3 | 0 |
+| 2 | 5 | 3 | 0 |
+| 3 | 5 | 4 | 0 |
+
+In the run that printed reasons, the one disagreement was `split-panel`: the Jev grader passed it at 0.64, while the LLM judge failed it at 0.10, on the argument that a `clear_cut` of 0.01 "asserts the opposite of a split panel". That reading is backwards, since a low `clear_cut` is what a split panel should give. The LLM judge also passed `unanimous-blocker` with a score of 0.4. Every compared answer was a correct one, so the runs say how often the LLM judge fails a correct answer and nothing about how often either grader passes a wrong one; the table above is the only evidence for that. A full run costs about $0.001, of which the Jev grader is $0.00017. Only `judge-gate` was compared. The default run, over every agent, calls the real Claude agents with no budget, so it was not run; compare `code-reviewer@^1.2` the same way before moving an existing agent to `grader: jev`.
+
+**Model listing.** `client.models.list()` returned only `jev-latest` and `jev-preview` on this date, and `jev-1.14.0` is not in it. The pinned id still answers real calls, which is what the judge gate's live test relies on, so that test does not assert membership of the listing. `tests/live/test_jev_live.py` and `tests/live/test_triage_live.py` do assert it and fail on it; they are outside #19 and unchanged.
+
 ## Still to verify live
 
 These need `TYPESAFE_API_KEY` and belong in #17's live tests:

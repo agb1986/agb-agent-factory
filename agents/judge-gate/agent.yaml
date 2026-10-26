@@ -1,0 +1,44 @@
+name: judge-gate
+version: 0.1.0
+kind: jev
+description: Decides whether a panel's reviews are clear-cut enough to ship or block without the judge.
+model: jev-1.14.0
+
+input:
+  # `reviews` is one block per reviewer: its address, verdict, summary and findings, as rendered by
+  # `pipelines.review_panel.render_reviews`.
+  render: "Reviews of one change, one block per reviewer:\n\n{reviews}"
+  # About four reviews of a few findings each; a panel past this is not clear-cut anyway, and a cut
+  # render always escalates.
+  max_chars: 16000
+
+questions:
+  - id: clear_cut
+    type: noul
+    text: Is this review set clear-cut, with the reviewers agreeing on the outcome and no finding that needs weighing?
+  - id: verdict
+    type: choice
+    text: Given these reviews, should the change ship or have changes requested, or is it unclear?
+    options: [ship, request_changes, unclear]
+
+# The thresholds are the whole policy: the pipeline skips the judge only when `clear_cut` fires
+# and neither escalating gate does. The confidence threshold is `unsure`.
+gates:
+  - name: clear_cut
+    question: clear_cut
+    rule: p_above
+    value: 0.85
+    action: skip
+  - name: unsure
+    question: verdict
+    rule: confidence_below
+    value: 0.8
+    action: escalate
+  - name: unclear
+    question: verdict
+    rule: answer_in
+    value: [unclear]
+    action: escalate
+
+evals:
+  min_pass_rate: 0.9

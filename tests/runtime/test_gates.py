@@ -7,7 +7,16 @@ from typing import Any
 import pytest
 
 from registry import JevOutput, JevSpec
-from runtime.gates import NO_GATE, ROUTE_ONLY, Decision, decide, jev_error
+from runtime.gates import (
+    JUDGE_GATE,
+    NO_GATE,
+    ROUTE_ONLY,
+    TRUNCATED,
+    Decision,
+    decide,
+    decide_judge_gate,
+    jev_error,
+)
 
 MANIFEST: dict[str, Any] = {
     "name": "triage",
@@ -301,3 +310,29 @@ def test_the_diff_triage_manifest_escalates_on_low_confidence() -> None:
     assert decision.escalate is True and decision.skip is False
     assert decision.reason == "unsure"
     assert decision.route == ("code-reviewer", "security-reviewer", "perf-reviewer")
+
+
+# --- decide_judge_gate
+
+
+def test_a_skip_is_reported_as_the_judge_gate_whichever_gate_fired(spec: JevSpec) -> None:
+    output = _output(spec, p=0.05, area="api")
+    assert decide(spec, output, False).reason == "calm"
+    decision = decide_judge_gate(spec, output, False)
+    assert decision == Decision(skip=True, escalate=False, route=(), reason=JUDGE_GATE)
+
+
+def test_an_escalation_keeps_the_reason_the_gate_gave(spec: JevSpec) -> None:
+    output = _output(spec, p=0.05, confidence=0.2)
+    assert decide_judge_gate(spec, output, False) == decide(spec, output, False)
+    assert decide_judge_gate(spec, output, False).reason == "unsure"
+
+
+def test_nothing_fired_leaves_the_judge_running(spec: JevSpec) -> None:
+    decision = decide_judge_gate(spec, _output(spec, p=0.5, area="api"), False)
+    assert (decision.skip, decision.escalate, decision.reason) == (False, False, NO_GATE)
+
+
+def test_a_truncated_input_never_skips_the_judge(spec: JevSpec) -> None:
+    decision = decide_judge_gate(spec, _output(spec, p=0.05, area="api"), True)
+    assert decision == Decision(skip=False, escalate=True, route=(), reason=TRUNCATED)

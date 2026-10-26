@@ -104,5 +104,34 @@
     "truncated": false,
     "route_only": true,
     "error": null
+  },
+  "judge_gate": {
+    "status": "ok",
+    "ref": "judge-gate@0.1.0",
+    "decision": {
+      "skip": false,
+      "escalate": false,
+      "route": [],
+      "reason": "no_gate"
+    },
+    "probabilities": {
+      "clear_cut": {
+        "p": 0.2
+      },
+      "verdict": {
+        "answer": "request_changes",
+        "probs": {
+          "ship": 0.1,
+          "request_changes": 0.8,
+          "unclear": 0.1
+        },
+        "confidence": 0.9
+      }
+    },
+    "truncated": false,
+    "path": "escalated",
+    "verdict": null,
+    "judge_cost_estimate_usd": null,
+    "error": null
   }
 }

@@ -218,13 +218,15 @@ def run_jev(
     transport: JevTransport | None = None,
     sleep: Callable[[float], None] = time.sleep,
     budget: Budget | None = None,
+    tag: str | None = None,
 ) -> JevOutput:
     """Run the Jev agent `spec` on `payload` and return an instance of its output model.
 
     `spec` is a resolved `JevSpec`. `payload` is a dict or a model; it must have every field
     `input.render` uses, and a missing one raises `UsageError` before anything is sent or traced.
     `transport` defaults to the SDK transport (see `default_transport`); `sleep` waits out a
-    backoff and is a parameter so tests need not wait. `pipeline_run_id` lands in the trace row.
+    backoff and is a parameter so tests need not wait. `pipeline_run_id` and `tag` land in the
+    trace row; an eval sets `tag` to `eval:<address>`.
     `budget` is the pipeline's dollar cap; the run is refused when it is spent and charged to it
     when it ends.
 
@@ -266,6 +268,7 @@ def run_jev(
                 decision_json={"truncated": state.truncated, "model": state.model},
                 output_json=None if output is None else output.model_dump(mode="json"),
                 error=None if error is None else f"{type(error).__name__}: {error}",
+                tag=tag,
             )
         )
         if budget is not None:
