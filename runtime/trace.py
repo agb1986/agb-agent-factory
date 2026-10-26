@@ -2,10 +2,15 @@
 
 Connection handling: a `Trace` opens its connection once, on first use, and holds it until
 `close()`. DuckDB allows one read-write process per file, so opening per call would pay the file
-open and lock on every run and let a second process slip in between two calls. Holding the
-connection is also what lets the single writer in #26 own the file. A `Trace` is not thread-safe;
-give each thread its own `Trace` on a shared path only when they live in one process, because
-DuckDB shares the database between connections of one process.
+open and lock on every run and let a second process slip in between two calls.
+
+Single writer (#26): one `Trace` is shared by runs gathered on an event loop and by hooks and
+guard runs on worker threads, and a DuckDB connection must not be used from two threads at once.
+Every public method therefore holds the instance's lock, so its one connection sees one call at a
+time. A lock rather than a writer task and queue: `record` is a synchronous insert of one row that
+takes well under a millisecond, a queue would need a flush before every read (`factory cost`, the
+budget's cost queries) and a task to start and stop with the loop, and callers on worker threads
+have no loop to hand a row to. The lock is reentrant because `record` applies the schema first.
 
 Schema changes are numbered migrations in `MIGRATIONS`. `ensure_schema()` applies the ones not yet
 recorded in `schema_version`, each in its own transaction, so calling it twice does nothing the
@@ -15,14 +20,16 @@ Nothing secret goes into a row. Callers pass already-validated payloads in `inpu
 `output_json`.
 """
 
+import functools
 import json
 import os
-from collections.abc import Sequence
+import threading
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Literal, Self
+from typing import Any, Concatenate, Literal, Self
 
 import duckdb
 
@@ -124,8 +131,24 @@ def _json_or_none(value: Any) -> str | None:
     return None if value is None else json.dumps(value)
 
 
+def _serialised[**P, R](
+    method: Callable[Concatenate[Trace, P], R],
+) -> Callable[Concatenate[Trace, P], R]:
+    """Run `method` holding the instance's lock, so its connection sees one call at a time."""
+
+    @functools.wraps(method)
+    def locked(self: Trace, *args: P.args, **kwargs: P.kwargs) -> R:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return locked
+
+
 class Trace:
-    """The trace store. Holds one DuckDB connection per instance; see the module docstring."""
+    """The trace store. Holds one DuckDB connection per instance; see the module docstring.
+
+    Safe to share between threads and between runs gathered on one event loop.
+    """
 
     def __init__(
         self,
@@ -137,6 +160,7 @@ class Trace:
         self.path = resolve_path(path)
         self._migrations = tuple(sorted(migrations))
         self._con: duckdb.DuckDBPyConnection | None = None
+        self._lock = threading.RLock()
 
     def __enter__(self) -> Self:
         return self
@@ -149,6 +173,7 @@ class Trace:
     ) -> None:
         self.close()
 
+    @_serialised
     def close(self) -> None:
         """Close the connection. A later call reopens it."""
         if self._con is not None:
@@ -162,6 +187,7 @@ class Trace:
             self._con.execute("SET TimeZone = 'UTC'")
         return self._con
 
+    @_serialised
     def ensure_schema(self) -> None:
         """Create `schema_version` and apply every migration not yet recorded. Safe to repeat."""
         con = self._connect()
@@ -185,6 +211,7 @@ class Trace:
                 raise
             con.execute("COMMIT")
 
+    @_serialised
     def schema_version(self) -> int:
         """Return the highest applied migration number, or 0 for a store with none."""
         con = self._connect()
@@ -196,6 +223,7 @@ class Trace:
         row = con.execute("SELECT max(version) FROM schema_version").fetchone()
         return row[0] if row and row[0] is not None else 0
 
+    @_serialised
     def record(self, row: TraceRow) -> None:
         """Write one run. Creates the schema first, so a fresh store needs no setup."""
         if row.started_at.tzinfo is None:
@@ -223,6 +251,7 @@ class Trace:
             ],
         )
 
+    @_serialised
     def record_published(
         self,
         agent: str,
@@ -246,6 +275,7 @@ class Trace:
             [agent, version, pass_rate, stamp.astimezone(UTC), git_sha],
         )
 
+    @_serialised
     def published(self, agent: str | None = None) -> list[PublishedRow]:
         """Return every `published` row, oldest first, optionally only those of one agent."""
         self.ensure_schema()
@@ -264,6 +294,7 @@ class Trace:
             PublishedRow(a, v, rate, at.replace(tzinfo=UTC), sha) for a, v, rate, at, sha in found
         ]
 
+    @_serialised
     def cost_by_agent(self, since: datetime | None = None) -> dict[str, float]:
         """Return total `cost_usd` per `agent_ref`, optionally for runs started at or after `since`.
 
@@ -280,6 +311,7 @@ class Trace:
         sql += " GROUP BY agent_ref ORDER BY agent_ref"
         return {ref: float(cost) for ref, cost in self._connect().execute(sql, params).fetchall()}
 
+    @_serialised
     def cost_breakdown(
         self, since: datetime, by: Literal["agent", "pipeline"] = "agent"
     ) -> list[CostRow]:
@@ -303,6 +335,7 @@ class Trace:
         found = self._connect().execute(sql, [since.astimezone(UTC)]).fetchall()
         return [CostRow(group, bucket, runs, float(cost)) for group, bucket, runs, cost in found]
 
+    @_serialised
     def cost_by_pipeline_run(self, pipeline_run_id: str) -> float:
         """Return total `cost_usd` of every run in one pipeline invocation, 0.0 when there is none."""
         self.ensure_schema()
