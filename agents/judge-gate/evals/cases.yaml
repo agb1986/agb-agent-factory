@@ -1,0 +1,117 @@
+# Eval cases for judge-gate. Each one hands the gate the rendered reviews of a panel, in the shape
+# `pipelines.review_panel.render_reviews` produces, and checks the `verdict` answer. The gate has no
+# tools and never opens the repository, so the fixture name is only there because the eval format
+# requires one; the payload does not mention it. `repo_path` is not in the payload and the gate's
+# input has no such field.
+#
+# `expected.verdict` is compared with the option the `verdict` question picked, which is how a jev
+# agent's answers are flattened (see `evals.run`). The `clear_cut` probability is what lets the
+# panel skip the judge; the cases that must not skip it expect `unclear` or `request_changes`, and
+# `criteria` says what the grader must also see. The grader is `jev`: a noul question over the
+# gate's answers, falling back to the LLM judge when Jev is down.
+cases:
+  - id: clean-refactor-ships
+    fixture: clean-refactor
+    grader: jev
+    payload:
+      reviews: |-
+        code-reviewer@1.2.0: approve
+        summary: Pure rename of two private helpers; behaviour and public API unchanged.
+        no findings
+
+        security-reviewer@0.1.0: approve
+        summary: No new input handling, file access or dependencies.
+        no findings
+
+        perf-reviewer@0.1.0: approve
+        summary: No change to any loop or allocation.
+        no findings
+    expected:
+      verdict: ship
+      criteria: >-
+        All three reviewers approve with no findings, so the set is clear-cut and the gate must
+        answer ship with a high clear_cut probability.
+  - id: unanimous-blocker
+    fixture: off-by-one
+    grader: jev
+    payload:
+      reviews: |-
+        code-reviewer@1.2.0: request_changes
+        summary: The loop bound drops the last window of the series.
+        [major] series/rolling.py:12-13 Loop bound drops the last window
+
+        security-reviewer@0.1.0: approve
+        summary: No security-relevant change.
+        no findings
+
+        perf-reviewer@0.1.0: approve
+        summary: No performance-relevant change.
+        no findings
+    expected:
+      verdict: request_changes
+      criteria: >-
+        One reviewer found a major defect and the others found nothing in their area. The gate
+        must not answer ship, because a real finding is open.
+  - id: split-panel
+    fixture: mixed
+    grader: jev
+    payload:
+      reviews: |-
+        code-reviewer@1.2.0: approve
+        summary: The change reads well and the tests cover the new branch.
+        no findings
+
+        security-reviewer@0.1.0: request_changes
+        summary: The new endpoint builds a shell command from a request parameter.
+        [blocker] api/export.py:40-44 Request parameter reaches a shell command
+
+        perf-reviewer@0.1.0: approve
+        summary: The added loop is bounded by the page size.
+        no findings
+    expected:
+      verdict: request_changes
+      criteria: >-
+        A blocker from one reviewer against two approvals is a split panel. The gate must not
+        answer ship and must not claim the set is clear-cut; the judge has to weigh the finding.
+  - id: reviewers-contradict-each-other
+    fixture: mixed
+    grader: jev
+    payload:
+      reviews: |-
+        code-reviewer@1.2.0: approve
+        summary: The retry helper returns None after the last attempt on purpose; every caller checks for it.
+        no findings
+
+        security-reviewer@0.1.0: request_changes
+        summary: Returning None after the last attempt hides an authentication failure from the caller.
+        [blocker] net/retry.py:22-27 Authentication failure is hidden by the retry loop
+
+        perf-reviewer@0.1.0: approve
+        summary: Backoff is capped at five attempts.
+        no findings
+    expected:
+      verdict: null
+      criteria: >-
+        Two reviewers read the same lines and reach opposite conclusions about whether the
+        behaviour is intended or a defect. The gate must not answer ship, and its clear_cut
+        probability must be low, so the panel hands the disagreement to the judge. It need not
+        answer unclear: request_changes is a fair reading of a blocker that nobody has refuted.
+  - id: failed-reviewer
+    fixture: mixed
+    grader: jev
+    payload:
+      reviews: |-
+        code-reviewer@1.2.0: approve
+        summary: Small, well tested change.
+        no findings
+
+        security-reviewer@0.1.0: FAILED reviewer timed out after 120s
+
+        perf-reviewer@0.1.0: approve
+        summary: No performance-relevant change.
+        no findings
+    expected:
+      verdict: unclear
+      criteria: >-
+        One reviewer did not report. The panel has not covered its area, so the gate must answer
+        unclear and must not ship on two approvals alone.
