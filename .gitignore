@@ -21,6 +21,7 @@ fixtures/repos/
 # Secrets
 .env
 .env.*
+!.env.example
 secrets.env
 
 # Editors and OS
