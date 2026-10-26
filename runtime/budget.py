@@ -1,19 +1,27 @@
 """The pipeline budget: a dollar cap shared by every agent run of one pipeline invocation.
 
-A pipeline builds one `Budget` and passes it to every `runtime.runner.run` and
-`runtime.jev_runner.run_jev` call through their `budget` keyword. A run with a budget
+A pipeline builds one `Budget` and passes it to every `runtime.runner.run`,
+`runtime.async_runner.arun` and `runtime.jev_runner.run_jev` call, and to the eval graders, through
+their `budget` keyword. A run with a budget
 
 - checks it before it starts, and refuses to start once nothing is left;
-- checks it after every model turn, with the cost of the run so far on top of what earlier runs
-  spent, so a run that would pass the cap stops instead of finishing; and
-- charges its trace row's cost to it when it ends, whether it succeeded or failed.
+- charges each model message's cost as that message arrives, so runs that share the budget, on
+  threads or gathered on one event loop, see each other's spend while they are still running; and
+- raises `BudgetExceeded` from the charge that takes the spend past the cap, so a run that would
+  pass the cap stops at its next message instead of finishing. A Jev run or a judge call is one
+  charge, made when it returns.
 
-The first run that would exceed the cap raises `BudgetExceeded`. A pipeline lets that error end the
-whole pipeline: it is not a failed reviewer or a failed eval case. Runs that are in flight on other
-threads when the cap is passed finish their current request, so the total can pass the cap by what
-those requests cost. A run whose model has no price costs nothing here, as in the trace.
+A run that fails for another reason only adds its uncharged cost, so the budget never hides the
+error that ended it. The first charge past the cap raises `BudgetExceeded`, and a pipeline lets
+that error end the whole pipeline: it is not a failed reviewer or a failed eval case.
 
-`Budget` is safe to share between threads.
+The overshoot bound. A run cannot be stopped in the middle of a request, so runs in flight when
+the cap is passed each finish the request they are waiting on, charge it, and stop there. The
+final spend is therefore at most the cap plus one model message, one Jev call or one judge call
+per run in flight at the moment the cap was passed. Runs that are not yet started are refused.
+A run whose model has no price costs nothing here, as in the trace.
+
+`Budget` is safe to share between threads; its arithmetic is under a lock.
 """
 
 import threading
