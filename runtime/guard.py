@@ -207,7 +207,7 @@ def llm_asker(
     *,
     pipeline_run_id: str | None = None,
     tag: str | None = None,
-    client: anthropic.Anthropic | None = None,
+    client: anthropic.Anthropic | anthropic.AsyncAnthropic | None = None,
     budget: Budget | None = None,
 ) -> Ask:
     """Return an `Ask` that runs the `kind: llm` guard agent `spec` through `runtime.runner.run`.
@@ -246,7 +246,7 @@ def build_guard_hook(
     pipeline_run_id: str | None = None,
     tag: str | None = None,
     inner: ToolHook | None = None,
-    client: anthropic.Anthropic | None = None,
+    client: anthropic.Anthropic | anthropic.AsyncAnthropic | None = None,
     agents_dir: Path | None = None,
     budget: Budget | None = None,
 ) -> GuardHook:
