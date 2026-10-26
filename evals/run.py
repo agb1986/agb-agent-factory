@@ -21,7 +21,6 @@ copy after the agent is done.
 import shutil
 import sys
 import tempfile
-import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -60,14 +59,14 @@ type JevRunner = Callable[..., JevOutput]
 class _SharedTrace(Trace):
     """A view of a `Trace` whose writes are safe to make from the eval's worker threads.
 
-    A `Trace` holds one DuckDB connection and is not thread-safe, so every write goes through the
-    wrapped trace under a lock. The view itself never opens a connection.
+    A plain `Trace` serialises its own calls, but the trace a caller passes in may be a subclass
+    that does not, so every write goes through the wrapped trace under the view's lock. The view
+    itself never opens a connection.
     """
 
     def __init__(self, inner: Trace) -> None:
         super().__init__(inner.path)
         self._inner = inner
-        self._lock = threading.Lock()
 
     def record(self, row: TraceRow) -> None:
         """Write one run to the wrapped trace, one thread at a time."""

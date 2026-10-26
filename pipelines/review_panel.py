@@ -19,7 +19,6 @@ import json
 import os
 import re
 import sys
-import threading
 import time
 import uuid
 from collections.abc import Callable, Sequence
@@ -320,13 +319,12 @@ class _LockedTrace(Trace):
 
     A plain `Trace` serialises its own calls, but the trace a caller passes in may be a subclass
     that does not, and a runner other than `run` writes from a worker thread. Every write goes
-    through the wrapped trace under a lock. The view itself never opens a connection.
+    through the wrapped trace under the view's lock. The view itself never opens a connection.
     """
 
     def __init__(self, inner: Trace) -> None:
         super().__init__(inner.path)
         self._inner = inner
-        self._lock = threading.Lock()
 
     def record(self, row: TraceRow) -> None:
         """Write one run to the wrapped trace, one thread at a time."""
