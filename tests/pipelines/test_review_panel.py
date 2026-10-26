@@ -130,7 +130,17 @@ TRIAGE_ANSWERS: dict[str, Any] = {
         "confidence": 0.9,
     },
 }
-"""What the fake Jev agent answers by default: no gate fires, route is code and security."""
+"""What the fake triage agent answers by default: no gate fires, route is code and security."""
+
+GATE_ANSWERS: dict[str, Any] = {
+    "clear_cut": {"p": 0.2},
+    "verdict": {
+        "answer": "request_changes",
+        "probs": {"ship": 0.1, "request_changes": 0.8, "unclear": 0.1},
+        "confidence": 0.9,
+    },
+}
+"""What the fake judge-gate agent answers by default: not clear-cut, so the judge still runs."""
 
 
 class FakeJev:
@@ -143,8 +153,10 @@ class FakeJev:
         *,
         truncated: bool = False,
         cost_usd: float = 0.0,
+        gate_answers: Mapping[str, Any] | None = None,
     ) -> None:
         self.answers = dict(TRIAGE_ANSWERS if answers is None else answers)
+        self.gate_answers = dict(GATE_ANSWERS if gate_answers is None else gate_answers)
         self.error = error
         self.truncated = truncated
         self.cost_usd = cost_usd
@@ -156,7 +168,7 @@ class FakeJev:
         self.calls.append({"spec": spec, "payload": dict(payload), **kwargs})
         trace.record(
             TraceRow(
-                run_id="row-jev",
+                run_id=f"row-jev-{len(self.calls)}",
                 pipeline_run_id=kwargs["pipeline_run_id"],
                 agent_ref=spec.address,
                 kind="jev",
@@ -170,7 +182,12 @@ class FakeJev:
         )
         if self.error is not None:
             raise self.error
-        return spec.output_class.model_validate(self.answers)
+        answers = self.gate_answers if spec.name == "judge-gate" else self.answers
+        return spec.output_class.model_validate(answers)
+
+    def calls_to(self, name: str) -> list[dict[str, Any]]:
+        """Return the calls made to the Jev agent `name`."""
+        return [call for call in self.calls if call["spec"].name == name]
 
 
 @pytest.fixture(scope="module")
@@ -275,6 +292,7 @@ def test_the_judge_gets_the_reviews_and_the_diff(panel: Panel, repo: Path, trace
 def test_a_shipping_judgement_ships(panel: Panel, repo: Path, trace: Trace) -> None:
     result = _run(panel, repo, trace, FakeRunner())
     assert result.ship is True
+    assert result.assessment is not None
     assert result.assessment.score == pytest.approx(0.4 * 0.9 + 0.25 * 1.0 + 0.2 * 0.8 + 0.15 * 0.9)
 
 
@@ -366,6 +384,7 @@ def test_the_document_has_the_documented_keys(panel: Panel, repo: Path, trace: T
         "total_cost_usd",
         "duration_ms",
         "triage",
+        "judge_gate",
     ]
     assert list(document["reviewers"][0]) == [
         "agent", "version", "ref", "status", "verdict", "finding_count", "error"

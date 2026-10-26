@@ -72,6 +72,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-triage", action="store_true", help="do not call the Jev triage agent"
     )
     review_parser.add_argument(
+        "--no-judge-gate",
+        action="store_true",
+        help="do not call the Jev judge-gate agent, so the judge always runs",
+    )
+    review_parser.add_argument(
         "--budget-usd",
         type=float,
         help="stop the review once it has spent this many dollars (default: the pipeline default)",
@@ -177,6 +182,7 @@ def _review(args: argparse.Namespace) -> int:
         reviewers=args.reviewers,
         allow_unpublished=args.allow_unpublished,
         no_triage=args.no_triage,
+        no_judge_gate=args.no_judge_gate,
         budget_usd=args.budget_usd,
     )
 

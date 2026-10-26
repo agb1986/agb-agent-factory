@@ -7,6 +7,11 @@ the `ship` flag with the numbers in the judge's manifest. Before the reviewers r
 asks the Jev agent `diff-triage` about the diff and `runtime.gates.decide` turns its answers into a
 `Decision`. While `runtime.gates.ROUTE_ONLY` holds, the decision is logged and every selected
 reviewer still runs.
+
+Between the reviewers and the judge, `run_judge_gate` asks the Jev agent `judge-gate` whether the
+reviews are clear-cut. When they are, `runtime.gates.decide_judge_gate` skips the judge and the
+verdict comes from the gate; otherwise, and whenever anything is in doubt, the judge runs as it
+always did.
 """
 
 import json
@@ -32,8 +37,9 @@ from registry.jev_spec import JevOutput, JevSpec
 from registry.resolver import resolve
 from registry.spec import LLMSpec
 from runtime.budget import DEFAULT_BUDGET_USD, Budget, BudgetExceeded
-from runtime.gates import ROUTE_ONLY, Decision, decide, jev_error
+from runtime.gates import ROUTE_ONLY, Decision, decide, decide_judge_gate, jev_error
 from runtime.jev_runner import run_jev
+from runtime.pricing import TokenUsage, cost_usd
 from runtime.runner import API_KEY_ENV, run
 from runtime.scoring import Assessment, assess
 from runtime.trace import Trace, TraceRow
@@ -56,6 +62,25 @@ TRIAGE: tuple[str, str] = ("diff-triage", "^0.1")
 TRIAGE_TAG = "triage:decision"
 """The `tag` of the trace row that carries the triage `Decision`."""
 
+JUDGE_GATE: tuple[str, str] = ("judge-gate", "^0.1")
+"""The Jev agent that decides whether the judge can be skipped and the version range it is pinned to."""
+
+JUDGE_GATE_TAG = "judge_gate:decision"
+"""The `tag` of the trace row that carries the judge-gate `Decision` and the judge cost it saved."""
+
+REVIEWER_FAILED = "reviewer_failed"
+"""`Decision.reason` of the judge gate when a reviewer failed and no Jev call was made."""
+
+JUDGE_OUTPUT_TOKENS_ESTIMATE = 1500
+"""Output tokens assumed for a judge run when estimating what skipping it saved.
+
+A judge reply is four scores with justifications plus the merged findings, which in the eval cases
+runs 1,000 to 2,000 tokens. The saving is an estimate, not a measurement, and is labelled so.
+"""
+
+CHARS_PER_TOKEN = 4
+"""Characters per token assumed when estimating the input of a judge run that did not happen."""
+
 type Runner = Callable[..., BaseModel]
 type JevRunner = Callable[..., JevOutput]
 
@@ -68,12 +93,14 @@ class AllReviewersFailed(FactoryError):
 class Panel:
     """The resolved agents of one run: the reviewers to run, in order, the judge and the triage.
 
-    `triage` is `None` when triage is switched off (`--no-triage`).
+    `triage` is `None` when triage is switched off (`--no-triage`), and `gate`, the judge-gate
+    agent, when the gate is (`--no-judge-gate`).
     """
 
     reviewers: tuple[LLMSpec, ...]
     judge: LLMSpec
     triage: JevSpec | None = None
+    gate: JevSpec | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +167,69 @@ class TriageResult:
 DISABLED = TriageResult("disabled", None, None, None, False, None)
 """The `TriageResult` of a run with triage switched off."""
 
+PATH_SKIPPED = "skipped_judge"
+"""`GateResult.path` when the gate was sure and the judge did not run."""
+
+PATH_ESCALATED = "escalated"
+"""`GateResult.path` when the judge ran after the gate."""
+
+
+@dataclass(frozen=True, slots=True)
+class GateResult:
+    """How the judge gate went: the `Decision`, the path taken and what skipping the judge saved.
+
+    `status` is `ok`, `jev_error` (the Jev call raised, so `error` holds why and the decision is
+    the escalation), `not_run` (a reviewer failed, so the gate escalated without a Jev call) or
+    `disabled` (`--no-judge-gate`, nothing was called and `decision` is `None`). `path` is
+    `skipped_judge` or `escalated`, and `None` when disabled. `verdict` is the gate's answer
+    (`ship` or `request_changes`) and is only set when the judge was skipped.
+    `judge_cost_estimate_usd` is an estimate of what the judge run that did not happen would have
+    cost and is `None` unless the judge was skipped.
+    """
+
+    status: str
+    spec: JevSpec | None
+    decision: Decision | None
+    probabilities: dict[str, Any] | None
+    truncated: bool
+    error: str | None
+    path: str | None = None
+    verdict: str | None = None
+    judge_cost_estimate_usd: float | None = None
+
+    @property
+    def skipped(self) -> bool:
+        """Whether the gate skipped the judge."""
+        return self.path == PATH_SKIPPED
+
+    def to_json(self) -> dict[str, Any]:
+        """Return the `judge_gate` entry of the pipeline document."""
+        return {
+            "status": self.status,
+            "ref": self.spec.address if self.spec is not None else None,
+            "decision": self.decision.to_json() if self.decision is not None else None,
+            "probabilities": self.probabilities,
+            "truncated": self.truncated,
+            "path": self.path,
+            "verdict": self.verdict,
+            "judge_cost_estimate_usd": self.judge_cost_estimate_usd,
+            "error": self.error,
+        }
+
+    def text(self) -> str:
+        """Return one line saying what the gate decided, for the text reports."""
+        if self.decision is None:
+            return "judge gate: disabled"
+        if self.skipped:
+            saved = self.judge_cost_estimate_usd
+            note = f", saved about ${saved:.4f}" if saved is not None else ""
+            return f"judge gate: skipped the judge, verdict {self.verdict}{note}"
+        return f"judge gate: {self.decision.reason}, the judge ran"
+
+
+GATE_DISABLED = GateResult("disabled", None, None, None, False, None)
+"""The `GateResult` of a run with the judge gate switched off."""
+
 
 @dataclass(frozen=True, slots=True)
 class PanelResult:
@@ -150,37 +240,53 @@ class PanelResult:
     head: str
     reviewers: tuple[ReviewerResult, ...]
     judge: LLMSpec
-    judgement: BaseModel
-    assessment: Assessment
+    judgement: BaseModel | None
+    assessment: Assessment | None
     total_cost_usd: float
     duration_ms: int
     triage: TriageResult = DISABLED
+    gate: GateResult = GATE_DISABLED
 
     @property
     def ship(self) -> bool:
-        """Whether the weighted score reached the judge's ship threshold."""
-        return self.assessment.ship
+        """Whether the change ships: the weighted score reached the threshold, or the gate said so.
+
+        When the gate skipped the judge there is no score, and the gate's verdict decides.
+        """
+        if self.assessment is not None:
+            return self.assessment.ship
+        return self.gate.verdict == "ship"
 
     def to_json(self) -> dict[str, Any]:
-        """Return the pipeline document: reviewers, judge, score, ship flag, cost and triage."""
+        """Return the pipeline document: reviewers, judge, score, ship flag, cost, triage and gate.
+
+        When the gate skipped the judge, `judge` and `weighted_score` are null and `judge_gate`
+        says why.
+        """
+        judge = (
+            {"ref": self.judge.address, "output": self.judgement.model_dump(mode="json")}
+            if self.judgement is not None
+            else None
+        )
         return {
             "pipeline_run_id": self.pipeline_run_id,
             "base": self.base,
             "head": self.head,
             "reviewers": [reviewer.to_json() for reviewer in self.reviewers],
-            "judge": {"ref": self.judge.address, "output": self.judgement.model_dump(mode="json")},
-            "weighted_score": self.assessment.score,
-            "ship": self.assessment.ship,
+            "judge": judge,
+            "weighted_score": self.assessment.score if self.assessment is not None else None,
+            "ship": self.ship,
             "total_cost_usd": self.total_cost_usd,
             "duration_ms": self.duration_ms,
             "triage": self.triage.to_json(),
+            "judge_gate": self.gate.to_json(),
         }
 
     def text(self) -> str:
         """Return a short plain-text report of the run, for use without `--json`."""
-        output = self.judgement.model_dump(mode="json")
         lines = [f"pipeline run {self.pipeline_run_id}: {self.base}..{self.head}"]
         lines.append(self.triage.text())
+        lines.append(self.gate.text())
         for reviewer in self.reviewers:
             if reviewer.review is not None:
                 found = len(reviewer.review.findings)
@@ -189,13 +295,17 @@ class PanelResult:
                 )
             else:
                 lines.append(f"  {reviewer.spec.address}: FAILED {reviewer.error}")
-        for name, score in output["scores"].items():
-            lines.append(f"  {name}: {score['value']:.2f}  {score['justification']}")
-        for finding in output["merged_findings"]:
-            where = f"{finding['file']}:{finding['line_start']}-{finding['line_end']}"
-            lines.append(f"  [{finding['severity']}] {where} {finding['title']}")
         verdict = "ship" if self.ship else "do not ship"
-        lines.append(f"{verdict}: weighted score {self.assessment.score:.2f}")
+        if self.judgement is not None and self.assessment is not None:
+            output = self.judgement.model_dump(mode="json")
+            for name, score in output["scores"].items():
+                lines.append(f"  {name}: {score['value']:.2f}  {score['justification']}")
+            for finding in output["merged_findings"]:
+                where = f"{finding['file']}:{finding['line_start']}-{finding['line_end']}"
+                lines.append(f"  [{finding['severity']}] {where} {finding['title']}")
+            lines.append(f"{verdict}: weighted score {self.assessment.score:.2f}")
+        else:
+            lines.append(f"{verdict}: the judge gate was sure, no judge ran")
         lines.append(f"cost ${self.total_cost_usd:.4f}")
         return "\n".join(lines)
 
@@ -251,11 +361,13 @@ def resolve_panel(
     allow_unpublished: bool = False,
     trace_path: Path | None = None,
     triage: bool = True,
+    judge_gate: bool = True,
 ) -> Panel:
-    """Resolve the judge, the selected reviewers and the triage agent, before anything runs.
+    """Resolve the judge, the selected reviewers, the triage agent and the judge gate.
 
     `reviewers` names agents of `REVIEWERS`; the default is all three. Unless `allow_unpublished`
-    is set, only published versions resolve. `triage=False` leaves out `diff-triage`. Raises
+    is set, only published versions resolve. `triage=False` leaves out `diff-triage` and
+    `judge_gate=False` leaves out `judge-gate`, so the judge always runs. Raises
     `UsageError` for an empty or unknown name and the resolver's `NotFoundError` subclasses
     (exit 3) when an agent or version is missing.
     """
@@ -280,7 +392,12 @@ def resolve_panel(
         if triage
         else None
     )
-    return Panel(reviewers=specs, judge=judge, triage=triage_spec)
+    gate_spec = (
+        resolve_judge_gate(allow_unpublished=allow_unpublished, trace_path=trace_path)
+        if judge_gate
+        else None
+    )
+    return Panel(reviewers=specs, judge=judge, triage=triage_spec, gate=gate_spec)
 
 
 def _resolve(
@@ -301,6 +418,20 @@ def resolve_triage(*, allow_unpublished: bool = False, trace_path: Path | None =
     spec = resolve(*TRIAGE, published_only=not allow_unpublished, trace_path=trace_path)
     if not isinstance(spec, JevSpec):
         raise UsageError(f"{spec.address} is not a Jev agent, so triage cannot run it")
+    return spec
+
+
+def resolve_judge_gate(
+    *, allow_unpublished: bool = False, trace_path: Path | None = None
+) -> JevSpec:
+    """Resolve the judge-gate agent, `judge-gate` in the range `JUDGE_GATE` pins.
+
+    Raises `UsageError` when the name resolves to an agent that is not a Jev agent and the
+    resolver's `NotFoundError` subclasses (exit 3) when it or the version is missing.
+    """
+    spec = resolve(*JUDGE_GATE, published_only=not allow_unpublished, trace_path=trace_path)
+    if not isinstance(spec, JevSpec):
+        raise UsageError(f"{spec.address} is not a Jev agent, so the judge gate cannot run it")
     return spec
 
 
@@ -388,6 +519,130 @@ def run_triage(
     return result
 
 
+def render_reviews(results: Sequence[ReviewerResult]) -> str:
+    """Render the reviewers' work as the `reviews` text the judge-gate agent reads.
+
+    One block per reviewer, in panel order: its address, verdict and summary, then one line per
+    finding as `[severity] file:start-end title`. A reviewer that failed gets a `FAILED` line.
+    """
+    blocks = []
+    for result in results:
+        if result.review is None:
+            blocks.append(f"{result.spec.address}: FAILED {result.error}")
+            continue
+        review = result.review
+        lines = [f"{result.spec.address}: {review.verdict}", f"summary: {review.summary}"]
+        lines += [
+            f"[{f.severity}] {f.file}:{f.line_start}-{f.line_end} {f.title}"
+            for f in review.findings
+        ]
+        if not review.findings:
+            lines.append("no findings")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def estimate_judge_cost(judge: LLMSpec, judge_input: BaseModel) -> float | None:
+    """Estimate in USD what a judge run on `judge_input` would have cost, or `None` if unpriced.
+
+    The input is the size of the judge's input JSON at `CHARS_PER_TOKEN` characters per token and
+    the output is `JUDGE_OUTPUT_TOKENS_ESTIMATE`, priced with the judge model's entry in
+    `runtime.pricing`. The judge never ran, so this is an estimate and is reported as one.
+    """
+    chars = len(judge_input.model_dump_json())
+    usage = TokenUsage(
+        input_tokens=chars // CHARS_PER_TOKEN, output_tokens=JUDGE_OUTPUT_TOKENS_ESTIMATE
+    )
+    return cost_usd(judge.model, usage)
+
+
+def run_judge_gate(
+    spec: JevSpec,
+    judge: LLMSpec,
+    results: Sequence[ReviewerResult],
+    judge_input: BaseModel,
+    trace: Trace,
+    pipeline_run_id: str,
+    *,
+    jev_runner: JevRunner = run_jev,
+    budget: Budget | None = None,
+) -> GateResult:
+    """Ask the Jev agent `spec` whether the reviews are clear-cut enough to skip `judge`.
+
+    The Jev call writes its own trace row with the real cost under `pipeline_run_id`, and charges
+    that cost to `budget` when one is given. This function adds one more row, tagged
+    `judge_gate:decision`, with the decision, the path taken and, when the judge is skipped, an
+    estimate of the cost it would have had, which is how the trace shows the saving. When a
+    reviewer failed the panel cannot call the reviews clear-cut, so the gate escalates without a
+    Jev call (status `not_run`). Any exception from the call gives the escalating `jev_error`
+    decision and the judge runs; only `BudgetExceeded` is raised, because a panel out of money
+    must stop. The input counts as truncated when the Jev runner cut the text it sent.
+    """
+    started_at = datetime.now(UTC)
+    start = time.monotonic()
+    capture = _CapturingTrace(trace)
+    output: JevOutput | None = None
+    error: str | None = None
+    truncated = False
+    if any(result.review is None for result in results):
+        status, decision = "not_run", Decision(False, True, (), REVIEWER_FAILED)
+    else:
+        try:
+            output = jev_runner(
+                spec,
+                {"reviews": render_reviews(results)},
+                capture,
+                pipeline_run_id=pipeline_run_id,
+                budget=budget,
+            )
+        except BudgetExceeded:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a failed gate escalates, it does not stop the panel
+            error = f"{type(exc).__name__}: {exc}"
+        truncated = capture.truncated
+        if output is None:
+            status, decision = "jev_error", jev_error()
+        else:
+            status, decision = "ok", decide_judge_gate(spec, output, truncated)
+    answers = output.model_dump(mode="json") if output is not None else None
+    skipped = decision.skip and answers is not None
+    verdict = answers["verdict"]["answer"] if skipped and answers is not None else None
+    estimate = estimate_judge_cost(judge, judge_input) if skipped else None
+    result = GateResult(
+        status,
+        spec,
+        decision,
+        answers,
+        truncated,
+        error,
+        path=PATH_SKIPPED if skipped else PATH_ESCALATED,
+        verdict=verdict,
+        judge_cost_estimate_usd=estimate,
+    )
+    trace.record(
+        TraceRow(
+            run_id=str(uuid.uuid4()),
+            agent_ref=spec.address,
+            kind="jev",
+            started_at=started_at,
+            duration_ms=round((time.monotonic() - start) * 1000),
+            input_json={"reviewers": [r.spec.address for r in results]},
+            pipeline_run_id=pipeline_run_id,
+            cost_usd=0.0,
+            decision_json={
+                **decision.to_json(),
+                "path": result.path,
+                "judge_cost_estimate_usd": estimate,
+                "truncated": truncated,
+            },
+            output_json=answers,
+            error=error,
+            tag=JUDGE_GATE_TAG,
+        )
+    )
+    return result
+
+
 def run_panel(
     panel: Panel,
     repo_path: str | Path,
@@ -408,8 +663,11 @@ def run_panel(
     a thread pool, and each `runner` call gets the same `pipeline_run_id`, as does the judge's, so
     the trace holds one row per agent under that id. A reviewer that raises is reported in the
     judge's input as failed, and the panel goes on, as it does when triage fails, except one that
-    ran out of budget: every run, triage's and the judge's too, is charged to `budget` (default:
-    `DEFAULT_BUDGET_USD`) and the first to pass it ends the panel with `BudgetExceeded`. Raises
+    ran out of budget: every run, triage's, the gate's and the judge's too, is charged to `budget`
+    (default: `DEFAULT_BUDGET_USD`) and the first to pass it ends the panel with `BudgetExceeded`.
+    When the panel has a judge-gate agent it runs after the reviewers, and when it is sure the
+    judge is not run: `judgement` and `assessment` are then `None` and the gate's verdict decides
+    `ship`. Raises
     `ToolNotFoundError` for an unknown repository or ref, `FactoryError` (exit 1) when every
     reviewer failed, and whatever the judge's run raises.
     """
@@ -455,14 +713,32 @@ def run_panel(
             "diff_context": {"base": base, "head": head, "diff": diff},
         }
     )
-    judgement = runner(
-        panel.judge,
-        judge_input.model_dump(mode="json"),
-        shared,
-        repo_path=repo_path,
-        pipeline_run_id=run_id,
-        budget=budget,
+    gated = (
+        run_judge_gate(
+            panel.gate,
+            panel.judge,
+            results,
+            judge_input,
+            trace,
+            run_id,
+            jev_runner=jev_runner,
+            budget=budget,
+        )
+        if panel.gate is not None
+        else GATE_DISABLED
     )
+    judgement: BaseModel | None = None
+    assessment: Assessment | None = None
+    if not gated.skipped:
+        judgement = runner(
+            panel.judge,
+            judge_input.model_dump(mode="json"),
+            shared,
+            repo_path=repo_path,
+            pipeline_run_id=run_id,
+            budget=budget,
+        )
+        assessment = assess(panel.judge, judgement)
     return PanelResult(
         pipeline_run_id=run_id,
         base=base,
@@ -470,10 +746,11 @@ def run_panel(
         reviewers=results,
         judge=panel.judge,
         judgement=judgement,
-        assessment=assess(panel.judge, judgement),
+        assessment=assessment,
         total_cost_usd=trace.cost_by_pipeline_run(run_id),
         duration_ms=round((time.monotonic() - start) * 1000),
         triage=triaged,
+        gate=gated,
     )
 
 
@@ -486,19 +763,26 @@ def command(
     reviewers: Sequence[str] | None = None,
     allow_unpublished: bool = False,
     no_triage: bool = False,
+    no_judge_gate: bool = False,
     budget_usd: float | None = None,
 ) -> int:
     """Run `factory review`: review `base..head` of `repo_path` with the panel and report it.
 
     `no_triage` skips the Jev call. Triage needs `TYPESAFE_API_KEY` only to work: without it the
-    run records a `jev_error` and the reviewers still run.
+    run records a `jev_error` and the reviewers still run. `no_judge_gate` skips the judge-gate
+    call, so the judge always runs; the gate fails the same way, escalating to the judge.
 
     Prose goes to stderr under `as_json`, where stdout gets exactly one JSON document, also when
     the change does not ship. Without it the text report goes to stdout. Returns 0 when the change
     ships and 1 when it does not. `budget_usd` caps the spend of the whole run (default:
     `DEFAULT_BUDGET_USD`); passing it raises `BudgetExceeded`, exit 1, with the spend so far.
     """
-    panel = resolve_panel(reviewers, allow_unpublished=allow_unpublished, triage=not no_triage)
+    panel = resolve_panel(
+        reviewers,
+        allow_unpublished=allow_unpublished,
+        triage=not no_triage,
+        judge_gate=not no_judge_gate,
+    )
     if not os.environ.get(API_KEY_ENV):
         raise AuthOrConfigError(
             f"{API_KEY_ENV} is not set",

@@ -104,5 +104,21 @@
     "truncated": false,
     "route_only": true,
     "error": null
+  },
+  "judge_gate": {
+    "status": "not_run",
+    "ref": "judge-gate@0.1.0",
+    "decision": {
+      "skip": false,
+      "escalate": true,
+      "route": [],
+      "reason": "reviewer_failed"
+    },
+    "probabilities": null,
+    "truncated": false,
+    "path": "escalated",
+    "verdict": null,
+    "judge_cost_estimate_usd": null,
+    "error": null
   }
 }
