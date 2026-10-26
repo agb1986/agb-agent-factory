@@ -795,3 +795,21 @@ def test_a_failed_run_is_charged_and_keeps_its_own_error(triage: JevSpec, trace:
 
 def test_the_attempt_count_is_the_module_constant() -> None:
     assert MAX_ATTEMPTS == 3
+
+
+# --- the trace tag -------------------------------------------------------------------------------
+
+
+def _tags(trace: Trace) -> list[str | None]:
+    trace.ensure_schema()
+    return [row[0] for row in trace._connect().execute("SELECT tag FROM traces").fetchall()]
+
+
+def test_the_tag_is_written_to_the_trace_row(triage: JevSpec, trace: Trace) -> None:
+    go(triage, FakeTransport(response()), trace, tag="eval:run-1")
+    assert _tags(trace) == ["eval:run-1"]
+
+
+def test_a_run_without_a_tag_writes_none(triage: JevSpec, trace: Trace) -> None:
+    go(triage, FakeTransport(response()), trace)
+    assert _tags(trace) == [None]

@@ -36,6 +36,9 @@ JEV_ERROR = "jev_error"
 NO_GATE = "no_gate"
 """`Decision.reason` when no gate fired and no routing entry matched."""
 
+JUDGE_GATE = "judge_gate"
+"""`Decision.reason` when the judge-gate agent was sure enough to skip the judge."""
+
 
 @dataclass(frozen=True, slots=True)
 class Decision:
@@ -93,6 +96,20 @@ def decide(spec: JevSpec, output: JevOutput, truncated: bool) -> Decision:
         route=route,
         reason=reason,
     )
+
+
+def decide_judge_gate(spec: JevSpec, output: JevOutput, truncated: bool) -> Decision:
+    """Decide whether the panel may skip the judge, from the answers of the judge-gate agent.
+
+    This is `decide` with one rename: a skip is reported with reason `judge_gate`, whichever skip
+    gate of the manifest fired, so a trace row says the judge was skipped by the gate and not by
+    which threshold. An escalation keeps the reason `decide` gives (the escalating gate, or
+    `truncated`), and a truncated input never skips.
+    """
+    decision = decide(spec, output, truncated)
+    if not decision.skip:
+        return decision
+    return Decision(skip=True, escalate=False, route=decision.route, reason=JUDGE_GATE)
 
 
 def _fires(gate: Gate, output: JevOutput) -> bool:
