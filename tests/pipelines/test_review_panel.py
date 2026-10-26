@@ -1,5 +1,6 @@
 """Tests for pipelines/review_panel.py: `run_panel`, the pipeline document and `factory review`."""
 
+import asyncio
 import json
 import threading
 from collections.abc import Iterator, Mapping
@@ -546,6 +547,48 @@ def test_a_reviewer_that_hits_the_budget_ends_the_panel(
     with pytest.raises(BudgetExceeded):
         _run(panel, repo, trace, runner, budget=Budget(1.0))
     assert JUDGE[0] not in {call["spec"].name for call in runner.calls}
+    # The other reviewers finish, so their rows and charges are in before the panel ends.
+    assert runner.reviewers_called() == {name for name, _ in REVIEWERS}
+    assert trace.cost_by_pipeline_run(RUN_ID) == 0.25 * (len(REVIEWERS) - 1)
+
+
+def test_the_first_error_in_report_order_is_the_one_raised(
+    panel: Panel, repo: Path, trace: Trace
+) -> None:
+    first, second = BudgetExceeded(1.0, 1.1), BudgetExceeded(1.0, 1.2)
+    runner = FakeRunner(failing={"code-reviewer": first, "perf-reviewer": second})
+    with pytest.raises(BudgetExceeded) as raised:
+        _run(panel, repo, trace, runner, budget=Budget(1.0))
+    assert raised.value is first
+
+
+def test_the_default_runner_runs_the_reviewers_on_arun_on_one_loop(
+    panel: Panel, repo: Path, trace: Trace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = FakeRunner()
+    started: list[str] = []
+    loops: set[int] = set()
+    everyone_in = asyncio.Event()
+
+    async def fake_arun(
+        spec: LLMSpec, payload: Mapping[str, Any], trace: Trace, **kwargs: Any
+    ) -> BaseModel:
+        loops.add(id(asyncio.get_running_loop()))
+        started.append(spec.name)
+        if len(started) == len(REVIEWERS):
+            everyone_in.set()
+        # Only opens when all three reviewers are awaiting together on the loop.
+        await asyncio.wait_for(everyone_in.wait(), timeout=10)
+        return runner(spec, payload, trace, **kwargs)
+
+    monkeypatch.setattr(review_panel, "_RUN", runner)
+    monkeypatch.setattr(review_panel, "arun", fake_arun)
+    result = _run(panel, repo, trace, runner)
+    assert sorted(started) == sorted(name for name, _ in REVIEWERS)
+    assert len(loops) == 1
+    assert len(set(runner.threads.values())) == 1
+    assert runner.calls[-1]["spec"].name == JUDGE[0]
+    assert result.judgement is not None
 
 
 def test_a_judge_that_hits_the_budget_ends_the_panel(

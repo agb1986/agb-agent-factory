@@ -14,6 +14,7 @@ verdict comes from the gate; otherwise, and whenever anything is in doubt, the j
 always did.
 """
 
+import asyncio
 import json
 import os
 import re
@@ -22,7 +23,6 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,6 +36,7 @@ from registry.common_schemas import ReviewInput, ReviewOutput
 from registry.jev_spec import JevOutput, JevSpec
 from registry.resolver import resolve
 from registry.spec import LLMSpec
+from runtime.async_runner import arun
 from runtime.budget import DEFAULT_BUDGET_USD, Budget, BudgetExceeded
 from runtime.gates import ROUTE_ONLY, Decision, decide, decide_judge_gate, jev_error
 from runtime.jev_runner import run_jev
@@ -310,11 +311,16 @@ class PanelResult:
         return "\n".join(lines)
 
 
-class _LockedTrace(Trace):
-    """A view of a `Trace` whose writes are safe to make from the panel's worker threads.
+_RUN = run
+"""The real runner. When the panel is given it, the reviewers run on `arun` on one event loop."""
 
-    A `Trace` holds one DuckDB connection and is not thread-safe, so every write goes through the
-    wrapped trace under a lock. The view itself never opens a connection.
+
+class _LockedTrace(Trace):
+    """A view of a `Trace` whose writes are safe to make from the reviewers' threads and loop.
+
+    A plain `Trace` serialises its own calls, but the trace a caller passes in may be a subclass
+    that does not, and a runner other than `run` writes from a worker thread. Every write goes
+    through the wrapped trace under a lock. The view itself never opens a connection.
     """
 
     def __init__(self, inner: Trace) -> None:
@@ -659,9 +665,12 @@ def run_panel(
 
     When the panel has a triage agent, `jev_runner` triages the diff first under the same
     `pipeline_run_id` and the `Decision` goes into the result and the trace. While `ROUTE_ONLY`
-    holds the decision is information only and every selected reviewer runs. The reviewers run in
-    a thread pool, and each `runner` call gets the same `pipeline_run_id`, as does the judge's, so
-    the trace holds one row per agent under that id. A reviewer that raises is reported in the
+    holds the decision is information only and every selected reviewer runs. The reviewers run at
+    the same time under `asyncio.gather`: with the default `runner`, each on
+    `runtime.async_runner.arun` on one event loop, and any other `runner` on a worker thread. Each
+    call gets the same `pipeline_run_id`, as does the judge's, so the trace holds one row per agent
+    under that id. `run_panel` runs that loop itself, so it is called from synchronous code, not
+    from a coroutine. A reviewer that raises is reported in the
     judge's input as failed, and the panel goes on, as it does when triage fails, except one that
     ran out of budget: every run, triage's, the gate's and the judge's too, is charged to `budget`
     (default: `DEFAULT_BUDGET_USD`) and the first to pass it ends the panel with `BudgetExceeded`.
@@ -685,19 +694,35 @@ def run_panel(
     shared = _LockedTrace(trace)
     payload = ReviewInput(repo_path=str(repo_path), base=base, head=head).model_dump(mode="json")
 
-    def review(spec: LLMSpec) -> ReviewerResult:
+    async def review(spec: LLMSpec) -> ReviewerResult:
+        kwargs: dict[str, Any] = {
+            "repo_path": repo_path,
+            "pipeline_run_id": run_id,
+            "budget": budget,
+        }
         try:
-            output = runner(
-                spec, payload, shared, repo_path=repo_path, pipeline_run_id=run_id, budget=budget
-            )
+            if runner is _RUN:
+                output = await arun(spec, payload, shared, **kwargs)
+            else:
+                output = await asyncio.to_thread(runner, spec, payload, shared, **kwargs)
             return ReviewerResult(spec, ReviewOutput.model_validate(output.model_dump()), None)
         except BudgetExceeded:
             raise
         except Exception as exc:  # noqa: BLE001 - a failed reviewer is reported, not fatal
             return ReviewerResult(spec, None, f"{type(exc).__name__}: {exc}")
 
-    with ThreadPoolExecutor(max_workers=len(panel.reviewers)) as pool:
-        results = tuple(pool.map(review, panel.reviewers))
+    async def review_all() -> list[ReviewerResult | BaseException]:
+        # Every reviewer finishes before an error is raised, so each one's trace row and charge
+        # are in before the panel ends; the first error in report order is the one raised.
+        return await asyncio.gather(
+            *(review(spec) for spec in panel.reviewers), return_exceptions=True
+        )
+
+    outcomes = asyncio.run(review_all())
+    for outcome in outcomes:
+        if isinstance(outcome, BaseException):
+            raise outcome
+    results = tuple(outcome for outcome in outcomes if isinstance(outcome, ReviewerResult))
     reviews = {r.spec.address: r.review for r in results if r.review is not None}
     if not reviews:
         errors = "; ".join(f"{r.spec.address}: {r.error}" for r in results)
