@@ -46,3 +46,35 @@ jobs:
       - name: Version bump
         if: github.event_name == 'pull_request'
         run: uv run python scripts/check_version_bump.py "origin/${{ github.base_ref }}"
+
+  # Builds the deployment image and fails when any layer or the image configuration holds a key.
+  # It needs no secret: the scan looks for the shape of a key, not for a value.
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t agb-agent-factory:ci .
+
+      - name: Run it
+        run: docker run --rm agb-agent-factory:ci --version
+
+      - name: Scan the image for key-like strings
+        run: python3 scripts/scan_image.py agb-agent-factory:ci
+
+      # The scan is only worth having if it fails on a key. The literals are assembled here, so
+      # this file holds none, and each lands in a layer and in the build history of a derived image.
+      - name: The scan fails on a planted key
+        run: |
+          set -u
+          for prefix in sk-ant- whk_; do
+            planted="${prefix}$(printf 'Z%.0s' $(seq 24))"
+            printf 'FROM agb-agent-factory:ci\nUSER root\nARG PLANT\nRUN echo "$PLANT" > /opt/planted\n' \
+              | docker build -q -t "planted:${prefix%[-_]}" --build-arg "PLANT=${planted}" -f - .
+            if python3 scripts/scan_image.py "planted:${prefix%[-_]}"; then
+              echo "scan passed an image with a planted ${prefix} key" >&2
+              exit 1
+            fi
+          done

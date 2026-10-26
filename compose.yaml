@@ -1,0 +1,73 @@
+# The factory on one host: `docker compose build`, then `docker compose run --rm factory --version`.
+# Setup, upgrade and the CasaOS import are in docs/deploy.md.
+#
+# No port is published by default. The `api` profile adds a small HTTP trigger on 127.0.0.1 only,
+# and it has no authentication (docs/deploy.md).
+
+name: agb-agent-factory
+
+services:
+  factory:
+    image: agb-agent-factory:latest
+    build:
+      context: .
+      args:
+        # 1 adds the docker CLI for the fix loop. Read "Sandbox containers" in docs/deploy.md first.
+        WITH_DOCKER_CLI: "0"
+    # Keys come from this file at run time and are never baked into the image. Copy
+    # .env.example to .env and fill it in; .env is git-ignored.
+    env_file: .env
+    environment:
+      # Pinned here so a stray value in .env cannot turn request ids or bodies into log lines.
+      TYPESAFE_LOG_LEVEL: warning
+    volumes:
+      # Traces (FACTORY_TRACE_DB=/app/data/traces.duckdb) survive upgrades in this named volume.
+      - factory-data:/app/data
+      # Repositories to review, read-only. Review /repos/<name>.
+      - ${REVIEW_REPOS:-./repos}:/repos:ro
+      # Fix loop only, with WITH_DOCKER_CLI=1: the docker socket is root on the host, and the work
+      # tree must have the same path inside and outside. See "Sandbox containers" in docs/deploy.md.
+      # - /var/run/docker.sock:/var/run/docker.sock
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # The limits of one factory container. Each sandbox container the fix loop starts is a sibling,
+    # not a child, and carries its own 1 CPU, 512m and 128 pids (tools/sandbox.py).
+    cpus: 2
+    mem_limit: 1g
+    pids_limit: 256
+    restart: "no"
+
+  api:
+    profiles: [api]
+    image: agb-agent-factory:latest
+    env_file: .env
+    environment:
+      TYPESAFE_LOG_LEVEL: warning
+    entrypoint: [uvicorn, api.app:app, --host, 0.0.0.0, --port, "8000"]
+    command: []
+    volumes:
+      - factory-data:/app/data
+      - ${REVIEW_REPOS:-./repos}:/repos:ro
+    # Loopback only, because the API has no authentication. Do not widen this.
+    ports:
+      - "127.0.0.1:8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 2
+    mem_limit: 1g
+    pids_limit: 256
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  factory-data:

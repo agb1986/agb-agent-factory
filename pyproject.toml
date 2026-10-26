@@ -14,14 +14,19 @@ dependencies = [
 
 [project.optional-dependencies]
 jev = ["typesafe-sdk==0.7.5"]
+# The optional HTTP trigger in `api/`; docs/deploy.md.
+api = ["fastapi", "uvicorn"]
 
 [project.scripts]
 factory = "factory.cli:main"
 
 [dependency-groups]
 dev = [
-    # The Jev extra, so `uv sync` can type-check and test `runtime/jev_transport.py`.
-    "agb-agent-factory[jev]",
+    # The Jev extra, so `uv sync` can type-check and test `runtime/jev_transport.py`, and the API extra
+    # for `api/`.
+    "agb-agent-factory[jev,api]",
+    # Starlette's TestClient, for api/.
+    "httpx",
     "pre-commit",
     "pytest",
     "pytest-cov",
@@ -36,7 +41,7 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 # Flat layout: `factory/` sits at the repository root next to `registry/`, `runtime/` and the rest.
 module-root = ""
-module-name = ["evals", "factory", "pipelines", "registry", "runtime", "tools"]
+module-name = ["api", "evals", "factory", "pipelines", "registry", "runtime", "tools"]
 
 [tool.ruff]
 line-length = 100
@@ -56,5 +61,5 @@ markers = [
 
 [tool.coverage.run]
 # `fixtures/` is measured too, but its source trees are data, not code under test.
-source = ["evals", "factory", "fixtures", "pipelines", "registry", "runtime", "tools"]
+source = ["api", "evals", "factory", "fixtures", "pipelines", "registry", "runtime", "tools"]
 omit = ["fixtures/src/*", "fixtures/handmade/*", "fixtures/repos/*"]
