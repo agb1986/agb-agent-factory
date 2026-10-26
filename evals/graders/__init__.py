@@ -7,7 +7,8 @@ failed on the spot and the judge is never called. Only an answer that passes the
 grader the case names.
 
 The `sandbox_tests` grader adds checks that run commands: see `evals.graders.sandbox_tests`. It
-needs the repository the agent worked on, so `grade` takes its path.
+needs the repository the agent worked on, so `grade` takes its path. The `jev` grader is a Jev
+noul question, `evals.graders.jev`; `grade` takes the judge for it apart from the LLM judge.
 """
 
 from collections.abc import Mapping
@@ -39,11 +40,10 @@ class Grade:
     deterministic: Deterministic
     judge: JudgeVerdict | None = None
 
-
-def ensure_supported(grader: str) -> None:
-    """Raise `NotImplementedError` for a grader that does not exist yet (`jev`, until #19)."""
-    if grader == "jev":
-        raise NotImplementedError("the jev grader arrives with #19; use `grader: llm_judge`")
+    @property
+    def grader_fallback(self) -> bool:
+        """Whether the `jev` grader failed and another judge graded this answer instead."""
+        return bool(getattr(self.judge, "grader_fallback", False))
 
 
 def check_deterministic(expected: Expected, actual: Mapping[str, Any]) -> Deterministic:
@@ -94,16 +94,23 @@ def _rank(finding: Mapping[str, Any]) -> int:
 
 
 def grade(
-    case: Case, actual: Mapping[str, Any], judge: Judge, repo_path: str | Path | None = None
+    case: Case,
+    actual: Mapping[str, Any],
+    judge: Judge,
+    repo_path: str | Path | None = None,
+    *,
+    jev_judge: Judge | None = None,
 ) -> Grade:
     """Grade `actual` against `case`: deterministic checks first, then the case's grader.
 
     A failed check returns a failed grade with score 0.0 and the failures as the reason, without
-    calling `judge`. The `sandbox_tests` grader adds the checks of `expected.run`, which run
-    commands in the work tree at `repo_path` and so need it. Raises `NotImplementedError` for the
-    `jev` grader and `UsageError` for `sandbox_tests` without a `repo_path`.
+    calling a judge. The `sandbox_tests` grader adds the checks of `expected.run`, which run
+    commands in the work tree at `repo_path` and so need it. A case with the `jev` grader goes to
+    `jev_judge` and every other case to `judge`. Raises `UsageError` for `sandbox_tests` without a
+    `repo_path` and for `jev` without a `jev_judge`.
     """
-    ensure_supported(case.grader)
+    if case.grader == "jev" and jev_judge is None:
+        raise UsageError("the jev grader needs a jev_judge to grade with")
     checks = check_deterministic(case.expected, actual)
     if case.grader == "sandbox_tests" and case.expected.run is not None:
         if repo_path is None:
@@ -112,5 +119,6 @@ def grade(
         checks = Deterministic(checks.passed and not ran, (*checks.failures, *ran))
     if not checks.passed:
         return Grade(False, 0.0, "; ".join(checks.failures), checks)
-    verdict = judge(case.expected, actual)
+    chosen = jev_judge if case.grader == "jev" and jev_judge is not None else judge
+    verdict = chosen(case.expected, actual)
     return Grade(verdict.passed, verdict.score, verdict.reason, checks, verdict)

@@ -6,8 +6,10 @@ from typing import Any
 import pytest
 
 from evals.cases import Case, Expected
-from evals.graders import check_deterministic, ensure_supported, grade
+from evals.graders import check_deterministic, grade
+from evals.graders.jev import JevVerdict
 from evals.graders.llm_judge import JudgeVerdict
+from factory.exit import UsageError
 
 EXPECTED = Expected.model_validate(
     {
@@ -150,8 +152,19 @@ def test_a_deterministic_pass_goes_to_the_judge_and_takes_its_verdict() -> None:
     assert result.deterministic.passed
 
 
-def test_the_jev_grader_is_not_implemented_yet() -> None:
-    with pytest.raises(NotImplementedError, match="#19"):
-        ensure_supported("jev")
-    with pytest.raises(NotImplementedError, match="#19"):
+def test_the_jev_grader_needs_a_jev_judge() -> None:
+    with pytest.raises(UsageError, match="jev_judge"):
         grade(_case(grader="jev"), _answer(_finding()), _no_judge)
+
+
+def test_a_jev_case_goes_to_the_jev_judge_and_not_the_llm_judge() -> None:
+    jev = JevVerdict(passed=True, score=0.9, reason="matches", grader_fallback=True)
+    result = grade(_case(grader="jev"), _answer(_finding()), _no_judge, jev_judge=lambda *_: jev)
+    assert (result.passed, result.score, result.reason) == (True, 0.9, "matches")
+    assert result.grader_fallback is True
+
+
+def test_an_llm_judge_case_ignores_the_jev_judge() -> None:
+    llm = JudgeVerdict(passed=True, score=0.5, reason="llm")
+    result = grade(_case(), _answer(_finding()), lambda *_: llm, jev_judge=_no_judge)
+    assert (result.passed, result.grader_fallback) == (True, False)

@@ -5,6 +5,10 @@ trace tag `eval:<name>@<version>`, grades the answer (`evals.graders`), and retu
 `EvalReport`. Cases run on a thread pool; results keep the order of the cases file. `command` is
 what `factory eval <name>[@^M.m]` runs, and `python -m evals.run` is the same command.
 
+A Jev agent (`kind: jev`) is run through `run_jev` with the same tag, and its answers are flattened
+to `{question_id: picked}` (the noul `p`, the choice `answer`, the score `level` or `value`) for the
+graders; a case graded `jev` goes to the Jev grader, with the LLM judge as its fallback.
+
 A case whose agent run fails with a typed error (a refusal, a timeout, invalid output) is a failed
 case with that error, not a failed eval. A missing or rejected API key, and a payload the agent
 cannot accept, end the whole eval, since every other case would fail the same way.
@@ -30,15 +34,17 @@ from packaging.version import Version
 from pydantic import BaseModel
 
 from evals.cases import CASES_FILE, Case, load_cases
-from evals.graders import Deterministic, Grade, ensure_supported, grade
+from evals.graders import Deterministic, Grade, grade
+from evals.graders.jev import JevJudge
 from evals.graders.llm_judge import Judge, JudgeVerdict, LLMJudge
 from factory.exit import AuthOrConfigError, ExitCode, FactoryError, UsageError
 from fixtures.build import build
-from registry.jev_spec import JevSpec
+from registry.jev_spec import JevOutput, JevSpec
 from registry.resolver import AgentNotFound, resolve
 from registry.resolver import list_agents as _list_agents
 from registry.spec import LLMSpec
 from runtime.budget import DEFAULT_BUDGET_USD, Budget, BudgetExceeded
+from runtime.jev_runner import run_jev
 from runtime.runner import run
 from runtime.trace import Trace, TraceRow
 
@@ -46,6 +52,9 @@ DEFAULT_WORKERS = 4
 
 type Runner = Callable[..., BaseModel]
 """Anything called like `runtime.runner.run`; tests inject a fake."""
+
+type JevRunner = Callable[..., JevOutput]
+"""Anything called like `runtime.jev_runner.run_jev`; tests inject a fake."""
 
 
 class _SharedTrace(Trace):
@@ -90,6 +99,7 @@ class CaseResult:
             "reason": self.error if grade is None else grade.reason,
             "deterministic": {"passed": checks.passed, "failures": list(checks.failures)},
             "judge": None if judge is None else _judge_json(judge),
+            "grader_fallback": grade is not None and grade.grader_fallback,
             "error": self.error,
             "duration_ms": self.duration_ms,
         }
@@ -173,6 +183,8 @@ def evaluate(
     *,
     runner: Runner = run,
     judge: Judge | None = None,
+    jev_runner: JevRunner = run_jev,
+    jev_judge: Judge | None = None,
     workers: int = DEFAULT_WORKERS,
     eval_run_id: str | None = None,
     fixture_paths: Mapping[str, Path] | None = None,
@@ -182,23 +194,22 @@ def evaluate(
 
     `runner` is called as `runtime.runner.run` is, with `tag` set to `eval:<address>` and the eval's
     id as `pipeline_run_id`; `judge` grades the answers that pass the deterministic checks and
-    defaults to an `LLMJudge` on `trace`. `fixture_paths` maps fixture names to built repositories;
+    defaults to an `LLMJudge` on `trace`. A Jev agent is run by `jev_runner`, called as
+    `runtime.jev_runner.run_jev` is, and its answer reaches the checks as a dict with each
+    question id mapped to what it picked: `p` for a noul question, `answer` for a choice, `level`
+    for a score. Cases with `grader: jev` are graded by `jev_judge`, which defaults to a `JevJudge`
+    that falls back to `judge`. `fixture_paths` maps fixture names to built repositories;
     by default every fixture the cases use is built into a temporary directory first, so a missing
     one is a `FixtureNotFound` before any model is called. The input model's `repo_path` field, when
-    it has one, is set to the fixture's path. Every `runner` call is charged to `budget` (default:
-    a new `Budget(DEFAULT_BUDGET_USD)`); the grader's `LLMJudge` calls are not. A case that runs
+    it has one, is set to the fixture's path. Every `runner` and `jev_runner` call is charged to
+    `budget` (default: a new `Budget(DEFAULT_BUDGET_USD)`); the graders' calls are not. A case that runs
     out of budget is not a failed case: the evaluation ends with `BudgetExceeded`.
 
-    Raises `UsageError` for `workers` below 1 or a JevSpec, `NotImplementedError` for a `jev`
-    grader, `AuthOrConfigError` for a missing or rejected key, `BudgetExceeded`, and
-    `FixtureNotFound` or `BuildError` from the fixture build.
+    Raises `UsageError` for `workers` below 1, `AuthOrConfigError` for a missing or rejected key,
+    `BudgetExceeded`, and `FixtureNotFound` or `BuildError` from the fixture build.
     """
     if workers < 1:
         raise UsageError(f"--workers must be at least 1, not {workers}")
-    if isinstance(spec, JevSpec):
-        raise NotImplementedError("evaluating a jev agent arrives with #19")
-    for case in cases:
-        ensure_supported(case.grader)
     eval_run_id = eval_run_id or str(uuid.uuid4())
     budget = budget or Budget(DEFAULT_BUDGET_USD)
     tag = f"eval:{spec.address}"
@@ -209,13 +220,18 @@ def evaluate(
     try:
         with tempfile.TemporaryDirectory(prefix="factory-eval-") as scratch:
             paths = fixture_paths or _build_fixtures(cases, Path(scratch))
+            llm = judge if judge is not None else _required(llm_judge)
+            if jev_judge is None:
+                jev_judge = JevJudge(shared, llm, tag=tag, pipeline_run_id=eval_run_id)
             results = _run_all(
                 spec,
                 cases,
                 paths,
                 shared,
                 runner,
-                judge if judge is not None else _required(llm_judge),
+                jev_runner,
+                llm,
+                jev_judge,
                 workers,
                 eval_run_id,
                 tag,
@@ -247,12 +263,14 @@ def _build_fixtures(cases: Sequence[Case], dest: Path) -> dict[str, Path]:
 
 
 def _run_all(
-    spec: LLMSpec,
+    spec: LLMSpec | JevSpec,
     cases: Sequence[Case],
     paths: Mapping[str, Path],
     trace: Trace,
     runner: Runner,
+    jev_runner: JevRunner,
     judge: Judge,
+    jev_judge: Judge,
     workers: int,
     eval_run_id: str,
     tag: str,
@@ -260,7 +278,17 @@ def _run_all(
 ) -> list[CaseResult]:
     def one(case: Case) -> CaseResult:
         return _run_case(
-            spec, case, paths[case.fixture], trace, runner, judge, eval_run_id, tag, budget
+            spec,
+            case,
+            paths[case.fixture],
+            trace,
+            runner,
+            jev_runner,
+            judge,
+            jev_judge,
+            eval_run_id,
+            tag,
+            budget,
         )
 
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="eval") as pool:
@@ -273,40 +301,58 @@ def _run_all(
 
 
 def _run_case(
-    spec: LLMSpec,
+    spec: LLMSpec | JevSpec,
     case: Case,
     repo_path: Path,
     trace: Trace,
     runner: Runner,
+    jev_runner: JevRunner,
     judge: Judge,
+    jev_judge: Judge,
     eval_run_id: str,
     tag: str,
     budget: Budget,
 ) -> CaseResult:
     start = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="factory-eval-case-") as scratch:
-        if spec.sandbox:
-            repo_path = _private_copy(repo_path, Path(scratch))
         payload = dict(case.payload)
-        if "repo_path" in spec.input_class.model_fields:
-            payload["repo_path"] = str(repo_path)
         try:
-            output = runner(
-                spec,
-                payload,
-                trace,
-                repo_path=repo_path,
-                pipeline_run_id=eval_run_id,
-                tag=tag,
-                budget=budget,
-            )
-            graded = grade(case, output.model_dump(mode="json"), judge, repo_path)
+            if isinstance(spec, JevSpec):
+                answers = jev_runner(
+                    spec, payload, trace, pipeline_run_id=eval_run_id, budget=budget, tag=tag
+                )
+                actual = _jev_answers(answers)
+            else:
+                if spec.sandbox:
+                    repo_path = _private_copy(repo_path, Path(scratch))
+                if "repo_path" in spec.input_class.model_fields:
+                    payload["repo_path"] = str(repo_path)
+                output = runner(
+                    spec,
+                    payload,
+                    trace,
+                    repo_path=repo_path,
+                    pipeline_run_id=eval_run_id,
+                    tag=tag,
+                    budget=budget,
+                )
+                actual = output.model_dump(mode="json")
+            graded = grade(case, actual, judge, repo_path, jev_judge=jev_judge)
         except AuthOrConfigError, BudgetExceeded, UsageError:
             raise
         except FactoryError as exc:
             message = f"{type(exc).__name__}: {exc.message}"
             return CaseResult(case, False, _elapsed(start), error=message)
     return CaseResult(case, graded.passed, _elapsed(start), grade=graded)
+
+
+def _jev_answers(output: JevOutput) -> dict[str, Any]:
+    """Flatten a Jev output to what each question picked, so the checks read `verdict` like any other."""
+    picked: dict[str, Any] = {}
+    for question_id, answer in output:
+        dumped = answer.model_dump(mode="json")
+        picked[question_id] = next(dumped[key] for key in ("answer", "level", "p") if key in dumped)
+    return picked
 
 
 def _private_copy(repo_path: Path, scratch: Path) -> Path:
