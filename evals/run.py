@@ -21,7 +21,6 @@ copy after the agent is done.
 import shutil
 import sys
 import tempfile
-import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -60,14 +59,14 @@ type JevRunner = Callable[..., JevOutput]
 class _SharedTrace(Trace):
     """A view of a `Trace` whose writes are safe to make from the eval's worker threads.
 
-    A `Trace` holds one DuckDB connection and is not thread-safe, so every write goes through the
-    wrapped trace under a lock. The view itself never opens a connection.
+    A plain `Trace` serialises its own calls, but the trace a caller passes in may be a subclass
+    that does not, so every write goes through the wrapped trace under the view's lock. The view
+    itself never opens a connection.
     """
 
     def __init__(self, inner: Trace) -> None:
         super().__init__(inner.path)
         self._inner = inner
-        self._lock = threading.Lock()
 
     def record(self, row: TraceRow) -> None:
         """Write one run to the wrapped trace, one thread at a time."""
@@ -202,8 +201,10 @@ def evaluate(
     by default every fixture the cases use is built into a temporary directory first, so a missing
     one is a `FixtureNotFound` before any model is called. The input model's `repo_path` field, when
     it has one, is set to the fixture's path. Every `runner` and `jev_runner` call is charged to
-    `budget` (default: a new `Budget(DEFAULT_BUDGET_USD)`); the graders' calls are not. A case that runs
-    out of budget is not a failed case: the evaluation ends with `BudgetExceeded`.
+    `budget` (default: a new `Budget(DEFAULT_BUDGET_USD)`), and so are the calls of the default
+    `LLMJudge` and `JevJudge`; a `judge` or `jev_judge` passed in is charged only if it was built
+    with the budget. A case that runs out of budget is not a failed case: the evaluation ends with
+    `BudgetExceeded`.
 
     Raises `UsageError` for `workers` below 1, `AuthOrConfigError` for a missing or rejected key,
     `BudgetExceeded`, and `FixtureNotFound` or `BuildError` from the fixture build.
@@ -216,13 +217,17 @@ def evaluate(
     start = time.monotonic()
     shared = _SharedTrace(trace)
     own_judge = judge is None
-    llm_judge = LLMJudge(shared, tag=tag, pipeline_run_id=eval_run_id) if own_judge else None
+    llm_judge = (
+        LLMJudge(shared, tag=tag, pipeline_run_id=eval_run_id, budget=budget) if own_judge else None
+    )
     try:
         with tempfile.TemporaryDirectory(prefix="factory-eval-") as scratch:
             paths = fixture_paths or _build_fixtures(cases, Path(scratch))
             llm = judge if judge is not None else _required(llm_judge)
             if jev_judge is None:
-                jev_judge = JevJudge(shared, llm, tag=tag, pipeline_run_id=eval_run_id)
+                jev_judge = JevJudge(
+                    shared, llm, tag=tag, pipeline_run_id=eval_run_id, budget=budget
+                )
             results = _run_all(
                 spec,
                 cases,

@@ -4,7 +4,8 @@ One structured-output call to `JUDGE_MODEL` sees the case's expectation and the 
 returns `pass`, a `score` from 0 to 1 and a `reason`. The call follows the request rules in
 "Request fields" in docs/CONVENTIONS.md (no sampling parameters, structured output through
 `output_config.format`). An answer that fails validation is retried once with the errors, then
-raises `JudgeError`. Every call writes one trace row under the eval's tag.
+raises `JudgeError`. Every call writes one trace row under the eval's tag, and is charged to the
+eval's `Budget` when the judge has one (see `runtime.budget`).
 """
 
 import json
@@ -21,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from evals.cases import Expected
 from factory.exit import AuthOrConfigError, FactoryError
+from runtime.budget import Budget
 from runtime.pricing import TokenUsage, cost_usd
 from runtime.trace import Trace, TraceRow
 
@@ -89,8 +91,10 @@ class LLMJudge:
     """The real judge: calls `JUDGE_MODEL` and traces every call.
 
     The client is built on first use from `ANTHROPIC_API_KEY` (a missing key raises
-    `AuthOrConfigError`) unless one is passed in. It is safe to call from several threads.
-    `close()` closes a client this object built.
+    `AuthOrConfigError`) unless one is passed in. With a `budget`, a call is refused with
+    `BudgetExceeded` once the budget is spent, before anything is sent or traced, and each call's
+    cost is charged to it once the trace row is written, as an agent run is charged. It is safe to
+    call from several threads. `close()` closes a client this object built.
     """
 
     def __init__(
@@ -100,8 +104,10 @@ class LLMJudge:
         tag: str | None = None,
         pipeline_run_id: str | None = None,
         client: anthropic.Anthropic | None = None,
+        budget: Budget | None = None,
     ) -> None:
         self._trace = trace
+        self._budget = budget
         self._tag = tag
         self._pipeline_run_id = pipeline_run_id
         self._client = client
@@ -117,22 +123,33 @@ class LLMJudge:
 
     def __call__(self, expected: Expected, actual: Mapping[str, Any]) -> JudgeVerdict:
         """Return the judge's verdict on `actual`, tracing the call whether it succeeds or not."""
+        if self._budget is not None:
+            self._budget.check()
         payload = {
             "expected": expected.model_dump(mode="json", exclude_none=True, exclude={"run"}),
             "actual": dict(actual),
         }
         started_at = datetime.now(UTC)
         start = time.monotonic()
-        usage = TokenUsage(0, 0, 0, 0)
+        # Each reply's usage is kept as it arrives, so a call that fails after a reply is still
+        # traced and charged for the tokens it spent.
+        replies: list[TokenUsage] = []
         verdict: JudgeVerdict | None = None
         error: BaseException | None = None
         try:
-            verdict, usage = self._judge(payload)
+            verdict = self._judge(payload, replies)
             return verdict
         except BaseException as exc:
             error = exc
             raise
         finally:
+            usage = TokenUsage(
+                sum(reply.input_tokens or 0 for reply in replies),
+                sum(reply.output_tokens or 0 for reply in replies),
+                sum(reply.cache_read_tokens or 0 for reply in replies),
+                sum(reply.cache_write_tokens or 0 for reply in replies),
+            )
+            cost = cost_usd(JUDGE_MODEL, usage)
             self._trace.record(
                 TraceRow(
                     run_id=str(uuid.uuid4()),
@@ -146,12 +163,18 @@ class LLMJudge:
                     output_tokens=usage.output_tokens,
                     cache_read_tokens=usage.cache_read_tokens,
                     cache_write_tokens=usage.cache_write_tokens,
-                    cost_usd=cost_usd(JUDGE_MODEL, usage),
+                    cost_usd=cost,
                     output_json=None if verdict is None else verdict.model_dump(mode="json"),
                     error=None if error is None else f"{type(error).__name__}: {error}",
                     tag=self._tag,
                 )
             )
+            if self._budget is not None:
+                # A failed call only adds its cost, so the budget never hides the error.
+                if error is None:
+                    self._budget.charge(cost)
+                else:
+                    self._budget.add(cost)
 
     def _get_client(self) -> anthropic.Anthropic:
         with self._lock:
@@ -164,20 +187,13 @@ class LLMJudge:
                 self._client = anthropic.Anthropic()
             return self._client
 
-    def _judge(self, payload: dict[str, Any]) -> tuple[JudgeVerdict, TokenUsage]:
+    def _judge(self, payload: dict[str, Any], replies: list[TokenUsage]) -> JudgeVerdict:
         client = self._get_client()
         messages: list[dict[str, Any]] = [{"role": "user", "content": json.dumps(payload)}]
-        usage = TokenUsage(0, 0, 0, 0)
         for attempt in (1, 2):
-            text, call_usage = self._ask(client, messages)
-            usage = TokenUsage(
-                (usage.input_tokens or 0) + (call_usage.input_tokens or 0),
-                (usage.output_tokens or 0) + (call_usage.output_tokens or 0),
-                (usage.cache_read_tokens or 0) + (call_usage.cache_read_tokens or 0),
-                (usage.cache_write_tokens or 0) + (call_usage.cache_write_tokens or 0),
-            )
+            text = self._ask(client, messages, replies)
             try:
-                return JudgeVerdict.model_validate_json(text), usage
+                return JudgeVerdict.model_validate_json(text)
             except ValidationError as exc:
                 problems = "; ".join(
                     f"{'.'.join(str(part) for part in err['loc']) or '(root)'}: {err['msg']}"
@@ -200,8 +216,8 @@ class LLMJudge:
         raise AssertionError("unreachable")  # pragma: no cover
 
     def _ask(
-        self, client: anthropic.Anthropic, messages: list[dict[str, Any]]
-    ) -> tuple[str, TokenUsage]:
+        self, client: anthropic.Anthropic, messages: list[dict[str, Any]], replies: list[TokenUsage]
+    ) -> str:
         try:
             message = client.messages.create(**build_request(messages), timeout=JUDGE_TIMEOUT_S)
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as exc:
@@ -213,18 +229,19 @@ class LLMJudge:
             raise JudgeError(
                 f"the Messages API failed for the judge: {type(exc).__name__}: {exc.message}"
             ) from exc
-        usage = TokenUsage(
-            input_tokens=message.usage.input_tokens,
-            output_tokens=message.usage.output_tokens,
-            cache_read_tokens=message.usage.cache_read_input_tokens or 0,
-            cache_write_tokens=message.usage.cache_creation_input_tokens or 0,
+        replies.append(
+            TokenUsage(
+                input_tokens=message.usage.input_tokens,
+                output_tokens=message.usage.output_tokens,
+                cache_read_tokens=message.usage.cache_read_input_tokens or 0,
+                cache_write_tokens=message.usage.cache_creation_input_tokens or 0,
+            )
         )
         if message.stop_reason == "refusal":
             raise JudgeError("the judge refused to grade this answer")
         if message.stop_reason != "end_turn":
             raise JudgeError(f"the judge stopped with {message.stop_reason!r} before it answered")
-        text = "".join(block.text for block in message.content if block.type == "text")
-        return text, usage
+        return "".join(block.text for block in message.content if block.type == "text")
 
 
 def build_request(messages: list[dict[str, Any]]) -> dict[str, Any]:

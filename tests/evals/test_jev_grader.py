@@ -27,7 +27,7 @@ from evals.run import evaluate
 from factory.exit import AuthOrConfigError, UsageError
 from registry.jev_spec import JevOutput, JevSpec
 from registry.resolver import resolve
-from runtime.budget import Budget
+from runtime.budget import Budget, BudgetExceeded
 from runtime.jev_runner import JevError, JevTransportError, NoulResult
 from runtime.trace import Trace
 from tests.pipelines.test_review_panel import GATE_ANSWERS
@@ -129,6 +129,26 @@ def test_a_jev_failure_falls_back_and_says_so(trace: Trace) -> None:
     assert verdict.reason.startswith("jev grader failed (")
     assert verdict.reason.endswith("llm judged")
     assert fallback.calls == 1
+
+
+def test_a_jev_call_is_charged_to_the_budget(trace: Trace) -> None:
+    budget = Budget(1.0)
+    JevJudge(trace, FakeLLM(), pipeline_run_id="run-1", budget=budget, transport=matches(0.9))(
+        EXPECTED, {"a": 1}
+    )
+    assert budget.spent == pytest.approx(trace.cost_by_pipeline_run("run-1"))
+    assert budget.spent > 0
+
+
+def test_a_spent_budget_is_not_a_fallback(trace: Trace) -> None:
+    budget = Budget(1.0)
+    budget.add(1.0)
+    transport = matches(0.9)
+    fallback = FakeLLM()
+    with pytest.raises(BudgetExceeded):
+        JevJudge(trace, fallback, budget=budget, transport=transport)(EXPECTED, {"a": 1})
+    assert transport.calls == []
+    assert fallback.calls == 0
 
 
 def test_a_failed_key_is_not_a_fallback(trace: Trace) -> None:
@@ -357,6 +377,44 @@ def test_a_default_jev_judge_falls_back_to_the_given_judge(
             )
         )
     assert llm.calls == 0
+
+
+def test_the_default_graders_are_charged_to_the_eval_budget(
+    gate_spec: JevSpec,
+    gate_cases: list[Case],
+    trace: Trace,
+    paths: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    budgets: dict[str, Budget | None] = {}
+
+    class RecordingLLM(FakeLLM):
+        def __init__(self, *_: Any, budget: Budget | None = None, **__: Any) -> None:
+            super().__init__()
+            budgets["llm"] = budget
+
+        def close(self) -> None:
+            pass
+
+    class RecordingJev:
+        def __init__(self, *_: Any, budget: Budget | None = None, **__: Any) -> None:
+            budgets["jev"] = budget
+
+        def __call__(self, expected: Expected, actual: Mapping[str, Any]) -> JevVerdict:
+            return JevVerdict(passed=True, score=0.9, reason="ok")
+
+    monkeypatch.setattr(eval_run, "LLMJudge", RecordingLLM)
+    monkeypatch.setattr(eval_run, "JevJudge", RecordingJev)
+    budget = Budget(5.0)
+    evaluate(
+        gate_spec,
+        gate_cases[:1],
+        trace,
+        jev_runner=FakeJevRunner(gate_spec, SHIP),
+        fixture_paths=paths,
+        budget=budget,
+    )
+    assert budgets == {"llm": budget, "jev": budget}
 
 
 def _without_key(call: Any) -> Any:
