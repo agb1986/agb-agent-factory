@@ -17,6 +17,7 @@ Each section states one rule and gives a minimal example. A ticket that has to i
 | Gates and routing | [Gates](#gates) | `runtime/gates.py`, `pipelines/triage.py` (#18) |
 | Trace row | [Trace row](#trace-row) | `runtime/trace.py` (#6) |
 | Secrets | [Secrets](#secrets) | `runtime/runner.py` (#5), `runtime/jev_runner.py` (#17) |
+| Deployment image | [Deployment](#deployment) | `Dockerfile`, `compose.yaml`, `scripts/scan_image.py` (#28) |
 | CLI shape | [CLI shape](#cli-shape) | `factory/cli.py` |
 | Exit codes and errors | [Exit codes](#exit-codes), [Errors](#errors) | `factory/exit.py` |
 
@@ -417,9 +418,9 @@ A `Trace` holds one DuckDB connection for its lifetime and opens it on first use
 `ANTHROPIC_API_KEY` and the Jev key are read from the environment and from nowhere else. The Jev key is `TYPESAFE_API_KEY`, confirmed by #15 in [jev-sdk.md](jev-sdk.md).
 
 - Store keys with `agb sys secrets set <NAME>`, which writes them to a mode-600 `secrets.env`.
-- The factory never reads that file. Whoever starts the factory exports the key: the shell, CI, or the `agb factory` wrapper (#30).
+- The factory never reads that file. Whoever starts the factory exports the key: the shell, CI, or the `agb factory` wrapper (#30). In a container the same variables come from an env file, `.env` copied from `.env.example`, passed with `--env-file` or Compose's `env_file` ([Deployment](#deployment)).
 - A missing key raises `AuthOrConfigError` (exit 4) with a hint that names the variable, never its value. So does a key the API rejects with a 401 or 403, with the same hint.
-- No secret goes into the repository, a test, a config file, a container image, a trace row, a log line or an error message.
+- No secret goes into the repository, a test, a config file, a container image, a trace row, a log line or an error message. The `typesafe_sdk` logger logs each request id at INFO, so a deployed factory runs it at WARNING (`TYPESAFE_LOG_LEVEL=warning`, which the SDK reads at import) and never at DEBUG.
 - Tests that need a live key carry a marker, and `tests/conftest.py` skips each marker when its variable is unset: `live` needs `ANTHROPIC_API_KEY` and `live_jev` needs `TYPESAFE_API_KEY`. The two are independent, so having one key does not run the other's tests.
 
 ```python
@@ -429,6 +430,10 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
         hint="store it with `agb sys secrets set ANTHROPIC_API_KEY` and export it",
     )
 ```
+
+## Deployment
+
+The factory ships as one image (`Dockerfile`, multi-stage, uv from `uv.lock`, non-root user, `ENTRYPOINT ["factory"]`, `/app/data` as the volume that holds `FACTORY_TRACE_DB`) and runs from `compose.yaml` with `env_file: .env`. A key is passed at run time and is never a `COPY`, an `ARG`, an `ENV` or a file in the image. `scripts/scan_image.py` greps every layer and the image configuration for `sk-ant-` and `whk_` strings and CI fails the pull request on a match, so a change that touches the `Dockerfile` or `.dockerignore` keeps `uv run pytest tests/deploy` and that scan green. The default container publishes no port and has no Docker socket; the optional HTTP trigger in `api/` runs only under the `api` profile, on `127.0.0.1`, without authentication. Build, rotate, upgrade and the CasaOS import are in [deploy.md](deploy.md).
 
 ## CLI shape
 
