@@ -29,6 +29,7 @@ import yaml
 from evals.cases import CASES_FILE, Expected, load_cases
 from evals.graders.llm_judge import Judge, JudgeVerdict
 from registry.jev_spec import JevSpec, ProbabilityGate
+from runtime.budget import Budget
 from runtime.jev_runner import JevError, JevTransport, run_jev
 from runtime.trace import Trace
 
@@ -77,8 +78,10 @@ def threshold_of(spec: JevSpec) -> float:
 class JevJudge:
     """Grade an answer with the Jev grader agent, falling back to `fallback` when Jev fails.
 
-    `trace`, `tag` and `pipeline_run_id` go to the Jev trace row. `transport` is for tests; by
-    default the SDK transport is used. It is safe to call from several threads when `trace` is.
+    `trace`, `tag` and `pipeline_run_id` go to the Jev trace row. `budget` is passed to `run_jev`,
+    so each Jev call is checked against it and charged to it; `fallback` is charged by its own
+    budget, if it has one. `transport` is for tests; by default the SDK transport is used. It is
+    safe to call from several threads when `trace` is.
     """
 
     def __init__(
@@ -90,9 +93,11 @@ class JevJudge:
         pipeline_run_id: str | None = None,
         transport: JevTransport | None = None,
         spec: JevSpec | None = None,
+        budget: Budget | None = None,
     ) -> None:
         self._trace = trace
         self._fallback = fallback
+        self._budget = budget
         self._tag = tag
         self._pipeline_run_id = pipeline_run_id
         self._transport = transport
@@ -115,6 +120,7 @@ class JevJudge:
                 pipeline_run_id=self._pipeline_run_id,
                 transport=self._transport,
                 tag=self._tag,
+                budget=self._budget,
             )
         except JevError as exc:
             verdict = self._fallback(expected, actual)

@@ -12,6 +12,8 @@ import pytest
 from evals.cases import Expected
 from evals.graders.llm_judge import JUDGE_MODEL, JUDGE_REF, JudgeError, LLMJudge, build_request
 from factory.exit import AuthOrConfigError
+from runtime.budget import Budget, BudgetExceeded
+from runtime.pricing import TokenUsage, cost_usd
 from runtime.trace import Trace
 
 EXPECTED = Expected(verdict="approve")
@@ -50,10 +52,17 @@ class FakeClient:
         self.closed = True
 
 
-def _judge(trace: Trace, client: FakeClient) -> LLMJudge:
+def _judge(trace: Trace, client: FakeClient, budget: Budget | None = None) -> LLMJudge:
     return LLMJudge(
-        trace, tag="eval:x@1.0.0", pipeline_run_id="run-1", client=cast(anthropic.Anthropic, client)
+        trace,
+        tag="eval:x@1.0.0",
+        pipeline_run_id="run-1",
+        client=cast(anthropic.Anthropic, client),
+        budget=budget,
     )
+
+
+REPLY_COST = cost_usd(JUDGE_MODEL, TokenUsage(100, 20, 0, 0)) or 0.0
 
 
 @pytest.fixture
@@ -163,3 +172,52 @@ def test_close_leaves_a_client_that_was_passed_in_open(trace: Trace) -> None:
     client = FakeClient()
     _judge(trace, client).close()
     assert not client.closed
+
+
+def test_a_call_is_charged_to_the_budget(trace: Trace) -> None:
+    budget = Budget(1.0)
+    _judge(trace, FakeClient(_reply(GOOD)), budget)(EXPECTED, ACTUAL)
+    assert REPLY_COST > 0
+    assert budget.spent == pytest.approx(REPLY_COST)
+
+
+def test_a_retried_call_is_charged_for_both_replies(trace: Trace) -> None:
+    budget = Budget(1.0)
+    client = FakeClient(_reply('{"pass": true, "score": 7, "reason": "r"}'), _reply(GOOD))
+    _judge(trace, client, budget)(EXPECTED, ACTUAL)
+    assert budget.spent == pytest.approx(2 * REPLY_COST)
+
+
+def test_a_spent_budget_refuses_the_call_before_anything_is_sent_or_traced(trace: Trace) -> None:
+    budget = Budget(1.0)
+    budget.add(1.0)
+    client = FakeClient(_reply(GOOD))
+    with pytest.raises(BudgetExceeded):
+        _judge(trace, client, budget)(EXPECTED, ACTUAL)
+    assert client.requests == []
+    trace.ensure_schema()
+    assert _rows(trace) == []
+
+
+def test_a_call_that_passes_the_cap_is_traced_then_raises(trace: Trace) -> None:
+    budget = Budget(REPLY_COST / 2)
+    with pytest.raises(BudgetExceeded):
+        _judge(trace, FakeClient(_reply(GOOD)), budget)(EXPECTED, ACTUAL)
+    assert [row[4] for row in _rows(trace)] == [None]
+    assert budget.spent == pytest.approx(REPLY_COST)
+
+
+def test_a_failed_call_only_adds_its_cost_so_its_error_is_kept(trace: Trace) -> None:
+    budget = Budget(REPLY_COST / 2)
+    with pytest.raises(JudgeError):
+        _judge(trace, FakeClient(_reply("nope"), _reply("still nope")), budget)(EXPECTED, ACTUAL)
+    assert budget.spent == pytest.approx(2 * REPLY_COST)
+
+
+def test_a_refused_call_is_traced_and_charged_for_its_reply(trace: Trace) -> None:
+    budget = Budget(1.0)
+    with pytest.raises(JudgeError):
+        _judge(trace, FakeClient(_reply("", stop_reason="refusal")), budget)(EXPECTED, ACTUAL)
+    (tokens,) = trace._connect().execute("SELECT input_tokens FROM traces").fetchall()
+    assert tokens == (100,)
+    assert budget.spent == pytest.approx(REPLY_COST)

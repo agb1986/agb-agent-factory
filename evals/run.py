@@ -202,8 +202,10 @@ def evaluate(
     by default every fixture the cases use is built into a temporary directory first, so a missing
     one is a `FixtureNotFound` before any model is called. The input model's `repo_path` field, when
     it has one, is set to the fixture's path. Every `runner` and `jev_runner` call is charged to
-    `budget` (default: a new `Budget(DEFAULT_BUDGET_USD)`); the graders' calls are not. A case that runs
-    out of budget is not a failed case: the evaluation ends with `BudgetExceeded`.
+    `budget` (default: a new `Budget(DEFAULT_BUDGET_USD)`), and so are the calls of the default
+    `LLMJudge` and `JevJudge`; a `judge` or `jev_judge` passed in is charged only if it was built
+    with the budget. A case that runs out of budget is not a failed case: the evaluation ends with
+    `BudgetExceeded`.
 
     Raises `UsageError` for `workers` below 1, `AuthOrConfigError` for a missing or rejected key,
     `BudgetExceeded`, and `FixtureNotFound` or `BuildError` from the fixture build.
@@ -216,13 +218,17 @@ def evaluate(
     start = time.monotonic()
     shared = _SharedTrace(trace)
     own_judge = judge is None
-    llm_judge = LLMJudge(shared, tag=tag, pipeline_run_id=eval_run_id) if own_judge else None
+    llm_judge = (
+        LLMJudge(shared, tag=tag, pipeline_run_id=eval_run_id, budget=budget) if own_judge else None
+    )
     try:
         with tempfile.TemporaryDirectory(prefix="factory-eval-") as scratch:
             paths = fixture_paths or _build_fixtures(cases, Path(scratch))
             llm = judge if judge is not None else _required(llm_judge)
             if jev_judge is None:
-                jev_judge = JevJudge(shared, llm, tag=tag, pipeline_run_id=eval_run_id)
+                jev_judge = JevJudge(
+                    shared, llm, tag=tag, pipeline_run_id=eval_run_id, budget=budget
+                )
             results = _run_all(
                 spec,
                 cases,
