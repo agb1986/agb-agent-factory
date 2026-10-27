@@ -1,0 +1,24 @@
+from accounts.db import add_user, connect, find_by_name, get_user
+
+
+def test_add_then_get() -> None:
+    conn = connect()
+    user_id = add_user(conn, "ada", "ada@example.com")
+    assert get_user(conn, user_id) == (user_id, "ada", "ada@example.com")
+
+
+def test_missing_user_is_none() -> None:
+    assert get_user(connect(), 99) is None
+
+
+def test_find_by_name() -> None:
+    conn = connect()
+    user_id = add_user(conn, "ada", "ada@example.com")
+    add_user(conn, "grace", "grace@example.com")
+    assert find_by_name(conn, "ada") == [(user_id, "ada", "ada@example.com")]
+
+
+def test_find_by_name_treats_the_name_as_data() -> None:
+    conn = connect()
+    add_user(conn, "ada", "ada@example.com")
+    assert find_by_name(conn, "' OR '1'='1") == []
