@@ -455,6 +455,8 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
 
 The factory ships as one image (`Dockerfile`, multi-stage, uv from `uv.lock`, non-root user, `ENTRYPOINT ["factory"]`, `/app/data` as the volume that holds `FACTORY_TRACE_DB`) and runs from `compose.yaml` with `env_file: .env`. A key is passed at run time and is never a `COPY`, an `ARG`, an `ENV` or a file in the image. `scripts/scan_image.py` greps every layer and the image configuration for `sk-ant-` and `whk_` strings and CI fails the pull request on a match, so a change that touches the `Dockerfile` or `.dockerignore` keeps `uv run pytest tests/deploy` and that scan green. The default container publishes no port and has no Docker socket; the optional HTTP trigger in `api/` runs only under the `api` profile, on `127.0.0.1`, without authentication. Build, rotate, upgrade and the CasaOS import are in [deploy.md](deploy.md).
 
+## Changelog and releases
+
 Every change adds a line under `## [Unreleased]` in `CHANGELOG.md`, in the same pull request, in Keep a Changelog 1.1.0 form and written for a user, not as a commit title. The package version lives only in `version` in `pyproject.toml`; code reads it with `importlib.metadata.version('agb-agent-factory')` and never carries a `__version__` literal. The release steps, and what counts as a patch, minor or major release, are in [releasing.md](releasing.md).
 
 ## CLI shape
