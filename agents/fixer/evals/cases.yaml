@@ -52,3 +52,57 @@ cases:
         production: unchanged
         tests: unchanged
     grader: sandbox_tests
+
+  - id: free-shipping-boundary
+    fixture: mixed-red
+    payload:
+      finding:
+        file: shop/shipping.py
+        line_start: 12
+        line_end: 12
+        severity: major
+        category: logic
+        title: Free shipping no longer applies at exactly the threshold
+        body: >-
+          The docstring and the previous code give free shipping at or above the threshold. The new
+          comparison charges 499 for an order of exactly 5000.
+        suggested_fix: "subtotal >= FREE_SHIPPING_THRESHOLD"
+      test_files: [tests/test_shop.py]
+    expected:
+      verdict: null
+      criteria: >-
+        The summary names the comparison in shipping_cost as the cause and says it was changed in
+        shop/shipping.py. Only shop/shipping.py changes: shop/format.py, whose camelCase local is a
+        style nit and not part of this finding, and shop/config.py are left as they were.
+      run:
+        suite: pass
+        production: changed
+        tests: unchanged
+    grader: sandbox_tests
+
+  - id: name-interpolated-into-sql
+    fixture: sql-injection-red
+    payload:
+      finding:
+        file: accounts/db.py
+        line_start: 30
+        line_end: 31
+        severity: blocker
+        category: security
+        title: SQL injection through the name argument
+        body: >-
+          The caller-supplied name is formatted into the SQL text. A name such as ' OR '1'='1 returns
+          every user. Use a placeholder: WHERE name = ?, with (name,) as the parameters.
+        suggested_fix: "conn.execute(\"SELECT id, name, email FROM users WHERE name = ?\", (name,))"
+      test_files: [tests/test_db.py]
+    expected:
+      verdict: null
+      criteria: >-
+        The summary names the formatted SQL text in find_by_name as the cause and says the query now
+        uses a placeholder with the name passed as a parameter. Only accounts/db.py changes, and the
+        other queries in it are left as they were.
+      run:
+        suite: pass
+        production: changed
+        tests: unchanged
+    grader: sandbox_tests

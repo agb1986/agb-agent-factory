@@ -50,3 +50,79 @@ cases:
         new_tests: pass
         production: unchanged
     grader: sandbox_tests
+
+  - id: free-shipping-boundary
+    fixture: mixed
+    payload:
+      finding:
+        file: shop/shipping.py
+        line_start: 12
+        line_end: 12
+        severity: major
+        category: logic
+        title: Free shipping no longer applies at exactly the threshold
+        body: >-
+          The docstring and the previous code give free shipping at or above the threshold. The new
+          comparison charges 499 for a standard order (no express delivery) of exactly 5000.
+        suggested_fix: "subtotal >= FREE_SHIPPING_THRESHOLD"
+    expected:
+      verdict: null
+      criteria: >-
+        The new test checks shipping_cost at exactly the free-shipping threshold, 5000, and expects 0.
+        The summary says the test fails on the current code because the comparison excludes the
+        threshold itself.
+      run:
+        new_tests: fail
+        passes_on_base: true
+        production: unchanged
+    grader: sandbox_tests
+
+  - id: name-interpolated-into-sql
+    fixture: sql-injection
+    payload:
+      finding:
+        file: accounts/db.py
+        line_start: 30
+        line_end: 31
+        severity: blocker
+        category: security
+        title: SQL injection through the name argument
+        body: >-
+          The caller-supplied name is formatted into the SQL text. A name such as ' OR '1'='1 returns
+          every user. Use a placeholder: WHERE name = ?, with (name,) as the parameters.
+    expected:
+      verdict: null
+      criteria: >-
+        The new test passes a hostile name such as ' OR '1'='1 to find_by_name and expects no rows,
+        or only the row whose name is exactly that string. The summary says the test fails on the
+        current code because the name is formatted into the SQL text.
+      run:
+        new_tests: fail
+        production: unchanged
+    grader: sandbox_tests
+
+  - id: filename-escapes-root
+    fixture: path-traversal
+    payload:
+      finding:
+        file: uploads/storage.py
+        line_start: 15
+        line_end: 15
+        severity: blocker
+        category: path-traversal
+        title: Path traversal through the file name
+        body: >-
+          A name such as ../../etc/passwd, or an absolute path, resolves outside the upload root, so
+          read returns any file the process can open. Use Path(filename).name as save does, or
+          resolve the path and check that it stays under the root.
+    expected:
+      verdict: null
+      criteria: >-
+        The new test puts a file outside the upload root, for example in the parent of a temporary
+        directory, and expects read of a name such as ../secret.txt not to return its bytes. The
+        summary says the test fails on the current code because read joins the name onto the root
+        without checking where it lands.
+      run:
+        new_tests: fail
+        production: unchanged
+    grader: sandbox_tests

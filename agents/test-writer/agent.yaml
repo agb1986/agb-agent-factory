@@ -1,5 +1,5 @@
 name: test-writer
-version: 0.1.0
+version: 0.1.1
 kind: llm
 description: Writes a test that reproduces a reported defect and runs it in the sandbox to see it fail.
 model: claude-sonnet-5-5 # verified by tests/live/test_test_writer_live.py
