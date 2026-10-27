@@ -2,7 +2,7 @@
 
 How the diff-triage skip threshold is calibrated (#20): the labelled diffs, the sweep that picks the threshold, how the result goes into the manifest, and the shadow period before anything is skipped. Every fact below was checked on 2026-10-27 against the code and files linked in its section.
 
-The live steps have not run. The Anthropic and TypeSafe keys were revoked on 2026-10-27 while the labelled set was being built, so the panel labelling pass, the live model-id check and the real sweep are still owed. [Results](#results) and [Shadow results](#shadow-results) are placeholders until they run. Everything that needs no key is in place: the labels, [scripts/calibrate.py](../scripts/calibrate.py), [scripts/shadow_report.py](../scripts/shadow_report.py) and their tests against fakes.
+The live steps ran on 2026-10-27: the panel labelling pass over the `needs_panel` rows, the live model-id check and the real sweep. [Results](#results) records the sweep. [Shadow results](#shadow-results) stays a placeholder until the calibrated gate is merged and published.
 
 ## Dataset
 
@@ -14,33 +14,35 @@ A diff is risky when its worst finding would be major or blocker on the reviewer
 
 | Count | Value |
 | --- | --- |
-| Diffs | 126: 91 safe, 35 risky |
-| Worst finding | none 45, minor 46, major 33, blocker 2 |
-| `needs_panel` | 28: 21 risky, 7 safe |
+| Diffs | 126: 104 safe, 22 risky |
+| Worst finding | none 54, minor 50, major 20, blocker 2 |
 | Private | 94 |
-| Label source | every row `reader`; no `panel` labels yet |
-| Labelling spend | $0.00 of the $15 budget |
+| Label source | `reader` 98, `panel` 28 |
+| Panel labels | 28: 8 risky, 20 safe |
+| Labelling spend | $9.10 of the $15 budget |
 
 | Repository | Safe | Risky | Private |
 | --- | --- | --- | --- |
-| agb-agent-factory | 22 | 1 | 23 |
+| agb-agent-factory | 23 | 0 | 23 |
 | agb-tools | 10 | 3 | 13 |
-| agb-trader | 11 | 10 | 21 |
-| ai-data-store | 3 | 4 | 0 |
-| cannabot | 12 | 6 | 18 |
+| agb-trader | 18 | 3 | 21 |
+| ai-data-store | 4 | 3 | 0 |
+| cannabot | 13 | 5 | 18 |
 | finance-agent | 3 | 0 | 0 |
-| torrent-agent | 14 | 8 | 0 |
-| xelpfin | 16 | 3 | 19 |
+| torrent-agent | 15 | 7 | 0 |
+| xelpfin | 18 | 1 | 19 |
 
-Every label is a reader label: someone read the diff and judged whether a careful reviewer would raise a major or blocker finding. Docs-only, test-only and dependency-bump diffs were labelled from their file lists and contents; the rest were read in full. A row the reader was unsure of carries `needs_panel: true`. Where the doubt was whether a major finding exists at all, the row is labelled risky at major, so doubt can only make the measured recall stricter. The 28 `needs_panel` rows should be checked against a full panel run before the real sweep, and their `source` set to `panel`.
+A reader label means someone read the diff and judged whether a careful reviewer would raise a major or blocker finding. Docs-only, test-only and dependency-bump diffs were labelled from their file lists and contents; the rest were read in full. The reader marked 28 rows `needs_panel`, and where the doubt was whether a major finding exists at all, labelled the row risky at major, so doubt could only make the measured recall stricter: 21 of the 28 were risky.
+
+On 2026-10-27 each of the 28 went through a full review panel (judge@2.0.0 over code-reviewer@1.2.0, security-reviewer@1.0.0 and perf-reviewer@0.3.0), and the worst finding the judge kept became the label, with `source: panel` and `needs_panel` cleared. The panel kept a major finding in 8 of the 21 risky rows and found minor or nothing in the other 13; the 7 safe rows stayed safe. That is why the set moved from 35 risky to 22. The panel runs cost $9.10, a mean of $0.29 a run, including one first attempt that stopped when code-reviewer hit its turn limit and was run again.
 
 Fetched diffs are untrusted data. They are handed to the triage agent as text and never run, and neither script prints a diff, a file name or a finding's text.
 
 ### Truncation
 
-Checked 2026-10-27 with `uv run python scripts/calibrate.py --dry-run`, which fetches the diffs and measures them without a Jev call.
+Checked 2026-10-27 with `uv run python scripts/calibrate.py --dry-run`, which fetches the diffs and measures them without a Jev call, and again by the real sweep the same day.
 
-The manifest's `input.max_chars` is 24000. Rendered sizes have a median of 5948 characters, a 90th percentile of 19431 and a maximum of 649532. Five of the 126 diffs exceed `max_chars`, four safe and one risky. A truncated input is always reviewed (`runtime.gates.decide`), so no threshold can skip more than 87 of the 91 safe diffs: 95.6%.
+The manifest's `input.max_chars` is 24000. Rendered sizes have a median of 5948 characters, a 90th percentile of 19431 and a maximum of 649532. Five of the 126 diffs exceed `max_chars`, four safe and one risky. A truncated input is always reviewed (`runtime.gates.decide`), so no threshold can skip more than 100 of the 104 safe diffs: 96.2%.
 
 ## Method
 
@@ -61,24 +63,42 @@ At each threshold the sweep reports:
 
 The chosen threshold is the one that skips the most safe diffs among those whose recall reaches the manifest's `evals.min_recall_risky` (0.98). A tie goes to the lower threshold, which leaves more margin. A diff whose Jev call failed is left out of every number, listed, and makes the script exit 1, so an incomplete sweep is never mistaken for a result. A rejected key stops the run at the first call with exit 4.
 
-Run it from the repository root once the keys work and the `needs_panel` rows are settled:
+Run it from the repository root:
 
 ```sh
 set -a; source ~/.config/agb/secrets.env; set +a
-uv run python scripts/calibrate.py --panel-cost-usd 0.35 --json --trace /tmp/calibrate.duckdb
+uv run python scripts/calibrate.py --panel-cost-usd 0.29 --json --trace /tmp/calibrate.duckdb
 ```
 
-`--panel-cost-usd` is the cost of one full panel review; take it from recent panel runs with `factory cost --since <date> --by pipeline`. Without it, the cost column is the Jev cost alone.
+`--panel-cost-usd` is the cost of one full panel review; take it from recent panel runs with `factory cost --since <date> --by pipeline`. The 2026-10-27 sweep used $0.29, the mean of the 28 labelling runs. Without it, the cost column is the Jev cost alone.
 
-Point `--trace` at a scratch file and delete it afterwards. The Jev runner records its full payload, the diff, as `input_json` in the trace store, so a run against the default store copies every labelled diff, private ones included, into `data/traces.duckdb`. Some labelled diffs contain credentials committed in their own repositories: the sweep sends them to TypeSafe and the trace store keeps them, so rotate those credentials before the real sweep.
+Point `--trace` at a scratch file and delete it afterwards. The Jev runner records its full payload, the diff, as `input_json` in the trace store, so a run against the default store copies every labelled diff, private ones included, into `data/traces.duckdb`. Some labelled diffs contain credentials committed in their own repositories. The sweep sends each diff to TypeSafe and the trace store keeps it, so a run copies those credentials to both. The 2026-10-27 sweep sent them to TypeSafe, and its scratch trace store was deleted afterwards. Rotating a credential is up to the repository that committed it and is not tracked here.
 
-At jev-1.14.0 prices, $0.042 per million input tokens with output free ([runtime/pricing.py](../runtime/pricing.py)), and with input cut at 24000 characters, one call is at most about 6000 tokens, or about $0.00025. The whole set should cost well under $0.05. This is an estimate, not a measurement.
+At jev-1.14.0 prices, $0.042 per million input tokens with output free ([runtime/pricing.py](../runtime/pricing.py)), and with input cut at 24000 characters, one call is at most about 6000 tokens, or about $0.00025. The 2026-10-27 sweep cost $0.0155 for the 126 calls, $0.00012 a diff.
 
 Exit codes: 0 a threshold reaches the recall, 1 none does or a call failed, 2 bad arguments, 3 no labels file, 4 a missing or rejected key, or `gh` cannot read a repository.
 
 ## Results
 
-Not run: keys revoked 2026-10-27. When the sweep runs, record here the date, the model id, the number of diffs measured and truncated, the table the script prints, the chosen threshold and the risky diffs any lower-recall threshold missed.
+Run on 2026-10-27 with the command in [Method](#method), against diff-triage@0.1.0 with no skip gate yet. Every response carried the manifest's model id, `jev-1.14.0`. 126 diffs measured, 5 truncated, none failed; Jev cost $0.0155 in all.
+
+| Threshold | Recall on risky diffs | Skip rate on safe diffs | Cost per diff | Missed |
+| --- | --- | --- | --- | --- |
+| 0.02 | 1.000 (22/22) | 0.000 (0/104) | $0.2901 | none |
+| 0.05 | 1.000 (22/22) | 0.000 (0/104) | $0.2901 | none |
+| 0.1 | 1.000 (22/22) | 0.000 (0/104) | $0.2901 | none |
+| 0.15 | 1.000 (22/22) | 0.000 (0/104) | $0.2901 | none |
+| 0.2 | 1.000 (22/22) | 0.000 (0/104) | $0.2901 | none |
+| 0.25 | 1.000 (22/22) | 0.010 (1/104) | $0.2878 | none |
+| 0.3 | 1.000 (22/22) | 0.019 (2/104) | $0.2855 | none |
+| 0.4 | 1.000 (22/22) | 0.067 (7/104) | $0.2740 | none |
+| **0.5** | 1.000 (22/22) | 0.077 (8/104) | $0.2717 | none |
+
+The cost column includes the $0.29 panel for every diff still reviewed. No threshold skipped a risky diff, so every row reaches the 0.98 recall and the chosen threshold is 0.5, the one that skips the most safe diffs.
+
+0.5 is the top of the default grid, so this sweep cannot say whether a higher threshold would also reach the recall. The lowest `needs_review` probability on a risky diff was 0.66, which leaves a margin of 0.16 above the threshold. With 22 risky diffs a single miss drops recall to 0.955, below the target, so the set is too small to spend that margin.
+
+The skip rate is held down by the `unsure` gate rather than by the threshold. That gate escalates when the `reviewers` confidence is below 0.6, and it escalated 75 of the 126 diffs, 59 of them safe. Of the 20 safe diffs with `needs_review` below 0.5, 12 were escalated and none was truncated, which leaves the 8 that skip. The sweep moves only the skip gate, so the `unsure` value is not calibrated here.
 
 ## Writing the manifest snippet
 
@@ -95,7 +115,7 @@ When a threshold reaches the recall, `calibrate.py` prints the gate to paste und
 
 Replace the placeholder comment above `gates:` at the same time.
 
-A gate alters behaviour, so the same commit bumps the minor version, 0.1.0 to 0.2.0 (docs/CONVENTIONS.md, "Agent address"). `scripts/check_version_bump.py` compares only the prompt, the schemas and the `questions` block, so it does not catch a gate change made without a bump. The agent has one version directory, so after the bump nothing matches `diff-triage@^0.1`, and the same commit must also change the range to `^0.2` in `TRIAGE` in [pipelines/review_panel.py](../pipelines/review_panel.py) and in [tests/live/test_jev_live.py](../tests/live/test_jev_live.py). [tests/live/test_triage_live.py](../tests/live/test_triage_live.py) asserts that its sample diff does not skip because there is no skip gate yet; check that assertion against the new gate.
+A gate alters behaviour, so it needs a minor version bump, 0.1.0 to 0.2.0 (docs/CONVENTIONS.md, "Agent address"). `scripts/check_version_bump.py` compares only the prompt, the schemas and the `questions` block, so it does not catch a gate change made without a bump. The agent has one version directory, so after the bump nothing matches `diff-triage@^0.1`, and the bump must also change the range to `^0.2` in `TRIAGE` in [pipelines/review_panel.py](../pipelines/review_panel.py) and in [tests/live/test_jev_live.py](../tests/live/test_jev_live.py). The 2026-10-27 gate was committed at 0.1.0 and the bump follows in its own commit, so the two can merge back to back; `ROUTE_ONLY` keeps the gate from skipping anything in between. [tests/live/test_triage_live.py](../tests/live/test_triage_live.py) asserts that the sample diff's `skip` matches the manifest's skip gate: below the threshold, not escalated and not truncated.
 
 The panel resolves with `published_only=True`. Until `factory publish-check diff-triage@^0.2` publishes 0.2.0, a panel run stops with exit 3 (`NotPublished`) unless it is given `--allow-unpublished`, so publish right after the merge.
 
