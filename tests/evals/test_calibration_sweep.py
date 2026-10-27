@@ -146,8 +146,11 @@ def test_the_question_defaults_to_the_manifests_skip_gate(spec: JevSpec) -> None
 
 
 def test_no_skip_gate_and_no_question_is_a_usage_error(spec: JevSpec) -> None:
+    data = spec.model_dump()
+    data["gates"] = [gate for gate in data["gates"] if gate["action"] != "skip"]
+    ungated = JevSpec.model_validate(data)
     with pytest.raises(SweepError, match="no skip gate") as info:
-        sweep(spec, _set(spec), [0.05])
+        sweep(ungated, _set(spec), [0.05])
     assert exit_code(info.value) == ExitCode.USAGE
 
 

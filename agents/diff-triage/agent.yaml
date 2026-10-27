@@ -18,14 +18,21 @@ questions:
     text: Which reviewers should see this diff?
     options: [code, code-security, code-perf, all]
 
-# Route only: no skip gate until #20 calibrates thresholds against the eval set. The thresholds
-# below are placeholders and #20 sets them.
+# #20 calibrated the low_risk threshold against the labelled set (docs/jev-calibration.md). The
+# unsure value is not calibrated: the sweep moves only the skip gate, and unsure escalates 75 of
+# the 126 labelled diffs, which clears their skip.
 gates:
   - name: unsure
     question: reviewers
     rule: confidence_below
     value: 0.6
     action: escalate
+  # Calibrated 2026-10-27 on 126 labelled diffs (22 risky): recall 1.000, safe skip rate 0.077 (scripts/calibrate.py).
+  - name: low_risk
+    question: needs_review
+    rule: p_below
+    value: 0.5
+    action: skip
 
 routing:
   - when: reviewers=code
