@@ -75,6 +75,9 @@ _MAX_ARG_CHARS = 32_768
 _WORKDIR = "/work"
 _CONTAINER_PREFIX = "factory-sandbox-"
 
+ROOT_LABEL = "factory.sandbox.root"
+"""Docker label each sandbox container carries, set to the work tree it mounts (`kill_sandboxes`)."""
+
 
 @dataclass(frozen=True, slots=True)
 class SandboxResult:
@@ -175,7 +178,8 @@ def docker_argv(root: Path, argv: Sequence[str], name: str) -> list[str]:
 
     The container has no network, a read-only root filesystem, one CPU, 512 MiB, 128 processes, no
     capabilities and the host user's uid. The work tree is the only writable mount, and its `.git`
-    is mounted again read-only on top, so a command can change files but not history or hooks.
+    is mounted again read-only on top, so a command can change files but not history or hooks. The
+    `ROOT_LABEL` label names the work tree, so `kill_sandboxes` can find the container again.
     """
     return [
         "docker",
@@ -183,6 +187,8 @@ def docker_argv(root: Path, argv: Sequence[str], name: str) -> list[str]:
         "--rm",
         "--name",
         name,
+        "--label",
+        f"{ROOT_LABEL}={root}",
         "--network",
         "none",
         "--cpus",
@@ -253,6 +259,33 @@ def run_in_sandbox(
     return SandboxResult(
         tuple(items), proc.returncode, proc.stdout + proc.stderr, time.monotonic() - start
     )
+
+
+def kill_sandboxes(repo_path: str | Path) -> int:
+    """Kill every sandbox container still running over the work tree `repo_path`; return how many.
+
+    A command ends its own container, and `run_in_sandbox` kills one that times out, but a process
+    interrupted while it waits on `docker run` leaves the container running. A pipeline calls this
+    when it is done with a work tree, often while another error is on its way out, so it never
+    raises: missing Docker, or a Docker that cannot list containers in time, counts as nothing to
+    kill, and a kill that fails is left to `--rm` and the daemon.
+    """
+    if shutil.which("docker") is None:
+        return 0
+    root = Path(repo_path).resolve()
+    try:
+        proc = subprocess.run(
+            ["docker", "ps", "--quiet", "--filter", f"label={ROOT_LABEL}={root}"],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        ids = proc.stdout.decode("ascii", errors="replace").split() if proc.returncode == 0 else []
+        if ids:
+            subprocess.run(["docker", "kill", *ids], capture_output=True, timeout=30, check=False)
+    except OSError, subprocess.SubprocessError:
+        return 0
+    return len(ids)
 
 
 def sandbox_image() -> str:

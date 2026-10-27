@@ -2,6 +2,8 @@
 
 import shutil
 import subprocess
+import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -11,11 +13,13 @@ from tools import PathEscapeError, ToolInputError, ToolUnavailableError
 from tools.sandbox import (
     ALLOWED_PROGRAMS,
     MAX_WRITE_BYTES,
+    ROOT_LABEL,
     SANDBOX_IMAGE,
     SANDBOX_IMAGE_ENV,
     TIMEOUT_EXIT_CODE,
     check_argv,
     docker_argv,
+    kill_sandboxes,
     require_image,
     run_command,
     run_in_sandbox,
@@ -186,6 +190,7 @@ def test_docker_argv_isolates_the_container(
     assert "no-new-privileges" in joined
     assert f"{tmp_path}:/work:rw" in joined
     assert f"{tmp_path}/.git:/work/.git:ro" in joined
+    assert f"--label {ROOT_LABEL}={tmp_path}" in joined
     assert argv[-4:] == [SANDBOX_IMAGE, "python", "-m", "pytest"][-4:]
     assert argv.index(SANDBOX_IMAGE) < argv.index("python")
 
@@ -266,6 +271,67 @@ def test_missing_image_is_unavailable_with_a_build_hint(monkeypatch: pytest.Monk
     )
 
 
+# kill_sandboxes without docker
+
+
+def _fake_docker(
+    monkeypatch: pytest.MonkeyPatch, ps: subprocess.CompletedProcess[bytes] | Exception
+) -> list[list[str]]:
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/docker")
+    seen: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_kw: object) -> subprocess.CompletedProcess[bytes]:
+        seen.append(argv)
+        if argv[1] == "ps":
+            if isinstance(ps, Exception):
+                raise ps
+            return ps
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return seen
+
+
+def test_kill_sandboxes_kills_the_containers_labelled_with_the_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    listed = subprocess.CompletedProcess([], 0, b"abc123\ndef456\n", b"")
+    seen = _fake_docker(monkeypatch, listed)
+    assert kill_sandboxes(tmp_path) == 2
+    assert seen == [
+        ["docker", "ps", "--quiet", "--filter", f"label={ROOT_LABEL}={tmp_path.resolve()}"],
+        ["docker", "kill", "abc123", "def456"],
+    ]
+
+
+@pytest.mark.parametrize(
+    "ps",
+    [
+        subprocess.CompletedProcess([], 0, b"", b""),
+        subprocess.CompletedProcess([], 1, b"", b"Cannot connect to the Docker daemon"),
+        subprocess.TimeoutExpired(["docker", "ps"], 30),
+        OSError("docker vanished"),
+    ],
+    ids=["nothing-running", "ps-fails", "ps-times-out", "ps-cannot-start"],
+)
+def test_kill_sandboxes_with_nothing_to_kill_returns_0(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ps: subprocess.CompletedProcess[bytes] | Exception,
+) -> None:
+    seen = _fake_docker(monkeypatch, ps)
+    assert kill_sandboxes(tmp_path) == 0
+    assert [argv[1] for argv in seen] == ["ps"]
+
+
+def test_kill_sandboxes_without_docker_returns_0(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    monkeypatch.setattr(subprocess, "run", lambda *_a, **_kw: pytest.fail("ran docker"))
+    assert kill_sandboxes(tmp_path) == 0
+
+
 # run_in_sandbox with docker
 
 
@@ -323,3 +389,28 @@ def test_sandbox_timeout_kills_the_container(repo: Repo) -> None:
         text=True,
     ).stdout
     assert names.strip() == ""
+
+
+@needs_image
+def test_kill_sandboxes_stops_a_container_left_running(repo: Repo) -> None:
+    root = repo.root.resolve()
+    argv = docker_argv(
+        root, ["python", "-c", "import time; time.sleep(60)"], f"test-{uuid.uuid4()}"
+    )
+    proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            listed = subprocess.run(
+                ["docker", "ps", "--quiet", "--filter", f"label={ROOT_LABEL}={root}"],
+                capture_output=True,
+                check=False,
+            )
+            if listed.stdout.strip():
+                break
+            time.sleep(0.2)
+        assert kill_sandboxes(root) == 1
+        assert proc.wait(timeout=20) != 0
+        assert kill_sandboxes(root) == 0
+    finally:
+        proc.kill()
