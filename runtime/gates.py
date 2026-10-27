@@ -4,6 +4,9 @@
 manifest's and no model decides them. Three rules hold whatever the gates say: a truncated input
 never skips, an escalation clears `skip`, and a Jev failure escalates (`jev_error`). See "Gates" in
 docs/CONVENTIONS.md.
+
+`skip_gate` and `with_skip_threshold` read and replace the one threshold calibration tunes, the
+manifest's `p_below` skip gate (docs/jev-calibration.md).
 """
 
 from dataclasses import dataclass
@@ -62,6 +65,61 @@ class Decision:
             "route": list(self.route),
             "reason": self.reason,
         }
+
+
+SKIP_GATE_NAME = "low_risk"
+"""The name `with_skip_threshold` gives a skip gate when the manifest has none to keep."""
+
+
+def skip_gate(spec: JevSpec) -> ProbabilityGate | None:
+    """Return the skip threshold of `spec`: its one `p_below` gate with action `skip`.
+
+    Calibration tunes this gate (#20) and shadow mode reads it. Returns `None` when the manifest
+    has no skip gate. Raises `ValueError` when it has more than one skip gate, or a skip gate of
+    another rule, because then no single threshold says when the agent skips.
+    """
+    gates = [gate for gate in spec.gates if gate.action == "skip"]
+    if not gates:
+        return None
+    (gate, *others) = gates
+    if others or not isinstance(gate, ProbabilityGate) or gate.rule != "p_below":
+        names = ", ".join(g.name for g in gates)
+        raise ValueError(
+            f"{spec.address} has skip gates {names}; calibration needs exactly one, of rule p_below"
+        )
+    return gate
+
+
+def with_skip_threshold(
+    spec: JevSpec, value: float, *, question: str | None = None, option: str | None = None
+) -> JevSpec:
+    """Return a copy of `spec` whose only skip gate is `p_below` at `value`, validated again.
+
+    The new gate keeps the name, question and option of the manifest's skip gate (`skip_gate`).
+    With no skip gate it is named `low_risk` and reads `question` (and `option`, for a choice or
+    score question), which is then required. Passing `question` replaces the question and option
+    of an existing gate. The escalating gates and the routing are kept, so an escalation still
+    clears the skip. Raises `ValueError` when no question is known or the copy does not validate.
+    """
+    current = skip_gate(spec)
+    if question is None:
+        if current is None:
+            raise ValueError(f"{spec.address} has no skip gate, so pass the question it reads")
+        question, option = current.question, current.option
+    gate = {
+        "name": current.name if current is not None else SKIP_GATE_NAME,
+        "question": question,
+        "rule": "p_below",
+        "value": value,
+        "action": "skip",
+        "option": option,
+    }
+    gates = [g.model_dump() for g in spec.gates]
+    if current is None:
+        gates.append(gate)
+    else:
+        gates[spec.gates.index(current)] = gate
+    return JevSpec.model_validate({**spec.model_dump(), "gates": gates})
 
 
 def jev_error() -> Decision:
