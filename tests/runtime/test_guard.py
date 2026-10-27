@@ -299,7 +299,7 @@ def test_build_guard_hook_needs_a_guard(trace: Trace) -> None:
 def test_a_jev_guard_is_not_wired(trace: Trace) -> None:
     spec = resolve("action-guard", "^0.1")
     assert isinstance(spec, LLMSpec)
-    triage = resolve("diff-triage", "^0.1")
+    triage = resolve("diff-triage", "^0.2")
     jev_spec = spec.model_copy(update={"guard": f"diff-triage@^{triage.version.rsplit('.', 1)[0]}"})
     with pytest.raises(UsageError, match="only the llm guard form is wired"):
         build_guard_hook(jev_spec, trace, parent_run_id="p")
