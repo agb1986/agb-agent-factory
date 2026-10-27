@@ -113,6 +113,9 @@ Quality bar (definition of done for every ticket):
   short paragraph under the right heading.
 - For agents: manifest validates, output round-trips through structured outputs,
   at least four eval cases, a trace row with cost, version bumped.
+- For Jev agents with gates, the eval also reports `recall_risky`, `skip_rate`
+  and `escalation_rate`, and fails below `evals.min_recall_risky` when the
+  manifest sets it (docs/CONVENTIONS.md, "Eval cases").
 
 Finish:
 - Commit in small logical commits. Commit messages are normal prose with a
