@@ -5,8 +5,11 @@ spend is involved; only the triage call is real. It checks what holds whatever t
 the decision is logged in a trace row under the pipeline run id, every reviewer still runs because
 triage is route only (#18), the Jev cost is in the pipeline total, and `skip` agrees with the
 `diff-triage` gates. The manifest has no skip gate yet (#20), so `skip` is expected to be false.
+The pinned model id is checked through the response's `model` field in the Jev run's trace row,
+because `GET /v1/models` lists only the aliases (docs/CONVENTIONS.md).
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -24,7 +27,7 @@ RUN_ID = "live-triage-1"
 def test_the_docs_only_diff_is_triaged_logged_and_still_reviewed(tmp_path: Path) -> None:
     panel = resolve_panel(allow_unpublished=True)
     assert panel.triage is not None
-    assert {panel.triage.model, "jev-latest"} <= available_models()
+    assert "jev-latest" in available_models()
 
     (fixture,) = build(["docs-only"], dest=tmp_path / "repos")
     runner = FakeRunner()
@@ -35,7 +38,7 @@ def test_the_docs_only_diff_is_triaged_logged_and_still_reviewed(tmp_path: Path)
         rows = (
             trace._connect()
             .execute(
-                "SELECT tag, pipeline_run_id, cost_usd, error FROM traces "
+                "SELECT tag, pipeline_run_id, cost_usd, error, decision_json FROM traces "
                 "WHERE kind = 'jev' ORDER BY started_at"
             )
             .fetchall()
@@ -52,6 +55,8 @@ def test_the_docs_only_diff_is_triaged_logged_and_still_reviewed(tmp_path: Path)
     assert {row[1] for row in rows} == {RUN_ID}
     assert [row[0] for row in rows].count("triage:decision") == 1
     assert all(row[3] is None for row in rows)
+    (jev_run,) = [row for row in rows if row[0] != "triage:decision"]
+    assert json.loads(jev_run[4])["model"] == panel.triage.model
 
     # route only: the decision is information, every reviewer ran
     assert runner.reviewers_called() == {name for name, _ in REVIEWERS}
