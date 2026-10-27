@@ -1,7 +1,7 @@
 """Grade one agent answer against a case's expectations.
 
 Deterministic checks run first and are cheap and exact: the verdict must match, unless the case
-expects none, and every expected defect must be matched by some finding in the same file, on
+expects none, so must a Jev agent's expected answers and gate decision, and every expected defect must be matched by some finding in the same file, on
 overlapping lines, at or above the defect's `severity_floor`. A case that fails them is graded
 failed on the spot and the judge is never called. Only an answer that passes them goes to the
 grader the case names.
@@ -51,11 +51,18 @@ def check_deterministic(expected: Expected, actual: Mapping[str, Any]) -> Determ
 
     Reads `verdict` and `findings` (each with `file`, `line_start`, `line_end`, `severity`) from
     the output; a judge's output has `merged_findings` instead, read the same way. A null expected
-    verdict skips the verdict check. A finding with an unknown severity matches nothing.
+    verdict skips the verdict check. A finding with an unknown severity matches nothing. Each of
+    `expected.answers` is compared with what that question picked, and `expected.decision` with
+    the `decision` key the eval runner adds for a Jev agent, both the way the verdict is.
     """
     failures: list[str] = []
     if expected.verdict is not None and actual.get("verdict") != expected.verdict:
         failures.append(f"verdict is {actual.get('verdict')!r}, expected {expected.verdict!r}")
+    for question_id, option in (expected.answers or {}).items():
+        if actual.get(question_id) != option:
+            failures.append(f"{question_id} is {actual.get(question_id)!r}, expected {option!r}")
+    if expected.decision is not None and actual.get("decision") != expected.decision:
+        failures.append(f"decision is {actual.get('decision')!r}, expected {expected.decision!r}")
     findings = actual.get("findings", actual.get("merged_findings")) or []
     failures.extend(
         problem

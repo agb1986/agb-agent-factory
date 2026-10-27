@@ -6,6 +6,10 @@
   "eval_run_id": "eval-run-1",
   "min_pass_rate": 0.75,
   "pass_rate": 0.75,
+  "min_recall_risky": null,
+  "recall_risky": null,
+  "skip_rate": null,
+  "escalation_rate": null,
   "passed": true,
   "total": 4,
   "passed_count": 3,
@@ -29,6 +33,7 @@
         "reason": "judged"
       },
       "grader_fallback": false,
+      "decision": null,
       "error": null,
       "duration_ms": 0
     },
@@ -49,6 +54,7 @@
         "reason": "judged"
       },
       "grader_fallback": false,
+      "decision": null,
       "error": null,
       "duration_ms": 0
     },
@@ -69,6 +75,7 @@
         "reason": "judged"
       },
       "grader_fallback": false,
+      "decision": null,
       "error": null,
       "duration_ms": 0
     },
@@ -89,6 +96,7 @@
       },
       "judge": null,
       "grader_fallback": false,
+      "decision": null,
       "error": null,
       "duration_ms": 0
     }

@@ -1,0 +1,99 @@
+# Eval cases for diff-triage. Each one triages a fixture repository from fixtures/src/: the runner
+# replaces `{$fixture: diff}` with the diff from base to head and `{$fixture: files}` with the
+# changed paths, one per line. diff-triage has no verdict, so `verdict` is null; `decision` is what
+# runtime.gates.decide must return on the answers, and `risky` marks a diff a reviewer must see,
+# which is what `recall_risky` counts.
+cases:
+  - id: docs-only
+    fixture: docs-only
+    payload:
+      files: {$fixture: files}
+      diff: {$fixture: diff}
+    expected:
+      verdict: null
+      decision: skip
+      risky: false
+      criteria: The decision is skip.
+    grader: jev
+
+  - id: test-only
+    fixture: test-only
+    payload:
+      files: {$fixture: files}
+      diff: {$fixture: diff}
+    expected:
+      verdict: null
+      decision: skip
+      risky: false
+      criteria: The decision is skip.
+    grader: jev
+
+  # The refactor renames and splits production functions without changing behaviour, so a reviewer
+  # would raise nothing major. docs/jev-calibration.md labels such a diff safe, and the calibrated
+  # low_risk gate exists to skip safe diffs, so the expected decision is skip. It is not risky:
+  # whichever way triage goes, no defect ships, so the case does not count towards recall_risky.
+  - id: clean-refactor
+    fixture: clean-refactor
+    payload:
+      files: {$fixture: files}
+      diff: {$fixture: diff}
+    expected:
+      verdict: null
+      decision: skip
+      risky: false
+      criteria: The decision is skip.
+    grader: jev
+
+  - id: sql-injection
+    fixture: sql-injection
+    payload:
+      files: {$fixture: files}
+      diff: {$fixture: diff}
+    expected:
+      verdict: null
+      answers:
+        reviewers: code-security
+      decision: review
+      risky: true
+      criteria: The decision is review and reviewers is code-security.
+    grader: jev
+
+  - id: path-traversal
+    fixture: path-traversal
+    payload:
+      files: {$fixture: files}
+      diff: {$fixture: diff}
+    expected:
+      verdict: null
+      answers:
+        reviewers: code-security
+      decision: review
+      risky: true
+      criteria: The decision is review and reviewers is code-security.
+    grader: jev
+
+  - id: n-plus-one
+    fixture: n-plus-one
+    payload:
+      files: {$fixture: files}
+      diff: {$fixture: diff}
+    expected:
+      verdict: null
+      answers:
+        reviewers: code-perf
+      decision: review
+      risky: true
+      criteria: The decision is review and reviewers is code-perf.
+    grader: jev
+
+  - id: off-by-one
+    fixture: off-by-one
+    payload:
+      files: {$fixture: files}
+      diff: {$fixture: diff}
+    expected:
+      verdict: null
+      decision: review
+      risky: true
+      criteria: The decision is review.
+    grader: jev

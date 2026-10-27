@@ -329,6 +329,10 @@ def test_the_document_has_the_documented_keys(
         "eval_run_id",
         "min_pass_rate",
         "pass_rate",
+        "min_recall_risky",
+        "recall_risky",
+        "skip_rate",
+        "escalation_rate",
         "passed",
         "total",
         "passed_count",
@@ -346,6 +350,7 @@ def test_the_document_has_the_documented_keys(
         "deterministic",
         "judge",
         "grader_fallback",
+        "decision",
         "error",
         "duration_ms",
     }
@@ -461,8 +466,10 @@ def test_factory_eval_missing_agent_exits_3(capsys: pytest.CaptureFixture[str]) 
 
 
 def test_factory_eval_agent_without_cases_exits_3_with_the_envelope(
-    capsys: pytest.CaptureFixture[str],
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Every agent in the repository has cases, so point the runner at a file none of them has.
+    monkeypatch.setattr(eval_run, "CASES_FILE", Path("evals") / "missing.yaml")
     assert main(["eval", "diff-triage", "--json"]) == ExitCode.NOT_FOUND
     out, err = capsys.readouterr()
     assert out == ""

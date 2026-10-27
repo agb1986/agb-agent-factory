@@ -44,6 +44,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Async runtime on `AsyncAnthropic`, with the reviewers run concurrently (#26).
 - Continuous integration for lint, type checks and tests, with a coverage floor (#27).
 - Docker image for the deployment, with a data volume, secrets from an env file and an image key scan (#28).
+- Eval cases for `diff-triage@0.2.1`, with `$fixture` payloads, expected answers and gate decisions, and the `recall_risky`, `skip_rate` and `escalation_rate` metrics, gated on `evals.min_recall_risky` (#66).
 
 <!-- Until the first tag, the Unreleased link points at the commits on main. At the first tag, docs/releasing.md moves these entries under the new version and changes this link to compare the tag with HEAD. -->
 [Unreleased]: https://github.com/agb1986/agb-agent-factory/commits/main
