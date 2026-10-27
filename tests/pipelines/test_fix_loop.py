@@ -34,7 +34,7 @@ from pipelines.fix_loop import (
     resolve_fix_agents,
     run_fix,
 )
-from pipelines.sandbox import DirtyRepositoryError
+from pipelines.sandbox import DirtyRepositoryError, checkout, clean
 from registry.spec import LLMSpec
 from runtime.budget import Budget, BudgetExceeded
 from runtime.hooks import ToolCall
@@ -46,6 +46,7 @@ from tests.pipelines.test_review_panel import (
     FakeRunner,
     _judgement,
 )
+from tools._common import ToolExecutionError, resolve_commit
 from tools.sandbox import SandboxResult
 
 FINDING: dict[str, Any] = {
@@ -81,7 +82,8 @@ def _fixed(clone: Path) -> str:
 class FixRunner(FakeRunner):
     """`FakeRunner` with a test-writer and a fixer that change files in the clone.
 
-    The test-writer writes `tests` (path to content). The fixer asks its hook about each of
+    The test-writer writes `tests` (path to content) and reports `claimed` as changed too, without
+    writing it. The fixer asks its hook about each of
     `fixes` (default: the real fix to `series/rolling.py`) and writes it when allowed, then writes
     `unhooked` without asking, as a script run through `shell.run` would. Both trace a row and
     charge `0.25` to the budget, as the real runner does after a run.
@@ -94,9 +96,11 @@ class FixRunner(FakeRunner):
         tests: Mapping[str, str] | None = None,
         fixes: Mapping[str, str] | None = None,
         unhooked: Mapping[str, str] | None = None,
+        claimed: Sequence[str] = (),
     ) -> None:
         super().__init__(judgement)
         self.tests = {TEST_PATH: TEST_SOURCE} if tests is None else dict(tests)
+        self.claimed = list(claimed)
         self.fixes = None if fixes is None else dict(fixes)
         self.unhooked = dict(unhooked or {})
 
@@ -113,7 +117,8 @@ class FixRunner(FakeRunner):
                 _write(clone, path, content)
             output: dict[str, Any] = {
                 "files_changed": [
-                    {"path": path, "action": "created", "summary": "A test."} for path in self.tests
+                    {"path": path, "action": "created", "summary": "A test."}
+                    for path in [*self.tests, *self.claimed]
                 ],
                 "commands_run": [],
                 "test_files": list(self.tests),
@@ -377,10 +382,42 @@ def test_the_guard_refuses_a_path_the_test_writer_changed(tmp_path: Path, trace:
         guard.before_tool(ToolCall("fs.write_file", {"path": "data/cases.json"}, "fixer@0.1.0"))
 
 
+CONFIGURES = "the file configures the test run"
+SHADOWS = "the path shadows the test runner"
+
+
+@pytest.mark.parametrize(
+    ("path", "reason"),
+    [
+        ("pytest.ini", CONFIGURES),
+        ("./pyproject.toml", CONFIGURES),
+        ("setup.cfg", CONFIGURES),
+        ("tox.ini", CONFIGURES),
+        ("pytest.py", SHADOWS),
+        ("pluggy.cpython-312.pyc", SHADOWS),
+        ("pytest/__init__.py", SHADOWS),
+        ("_pytest/python.py", SHADOWS),
+    ],
+)
+def test_the_guard_refuses_what_controls_the_test_run(
+    path: str, reason: str, tmp_path: Path, trace: Trace
+) -> None:
+    guard = TestFileGuard(tmp_path.resolve(), frozenset(), trace, RUN_ID)
+    with pytest.raises(TestFileWriteError, match=reason):
+        guard.before_tool(ToolCall("fs.write_file", {"path": path}, "fixer@0.1.0"))
+    ((_, _, _, decision, _),) = _refusals(trace)
+    assert json.loads(decision)["reason"] == reason
+
+
 @pytest.mark.parametrize(
     ("name", "arguments"),
     [
         ("fs.write_file", {"path": "series/rolling.py"}),
+        ("fs.write_file", {"path": "series/pyproject.toml"}),
+        ("fs.write_file", {"path": "series/pytest/helpers.py"}),
+        ("fs.write_file", {"path": "pytest.md"}),
+        ("fs.write_file", {"path": "pytest_helpers.py"}),
+        ("fs.write_file", {"path": "py.typed"}),
         ("fs.write_file", {"path": "../outside/tests/test_x.py"}),
         ("fs.write_file", {"content": "no path"}),
         ("shell.run", {"argv": ["python", "-m", "pytest", "-q"]}),
@@ -514,6 +551,96 @@ def test_a_file_the_test_writer_wrote_outside_tests_is_protected(
         _fix(agents, repo, trace, tmp_path, runner=runner)
 
 
+def test_what_the_test_writer_only_reports_is_not_protected(
+    agents: FixAgents, repo: Path, trace: Trace, tmp_path: Path
+) -> None:
+    result = _fix(agents, repo, trace, tmp_path, runner=FixRunner(claimed=[SOURCE]))
+    assert result.ship
+    assert (SOURCE, "modified", ("fixer",)) in result.files_changed
+    assert _refusals(trace) == []
+
+
+@pytest.mark.parametrize(
+    ("path", "content", "reason"),
+    [
+        ("pyproject.toml", "[tool.pytest.ini_options]\naddopts = '-k nothing'\n", CONFIGURES),
+        ("pytest.ini", "[pytest]\n", CONFIGURES),
+        ("pytest.py", "raise SystemExit(0)\n", SHADOWS),
+    ],
+)
+def test_a_change_to_the_test_run_by_another_route_is_refused_after_the_fixer(
+    path: str,
+    content: str,
+    reason: str,
+    agents: FixAgents,
+    repo: Path,
+    trace: Trace,
+    tmp_path: Path,
+) -> None:
+    sandbox = FakeSandbox()
+    with pytest.raises(TestFileWriteError, match=reason):
+        _fix(
+            agents,
+            repo,
+            trace,
+            tmp_path,
+            runner=FixRunner(unhooked={path: content}),
+            sandbox=sandbox,
+        )
+    ((_, _, _, decision, _),) = _refusals(trace)
+    assert json.loads(decision) == {
+        "allow": False,
+        "path": path,
+        "reason": reason,
+        "check": "post-check",
+    }
+    assert sandbox.runs == []
+
+
+def test_the_suite_runs_over_the_commits_alone(
+    agents: FixAgents, repo: Path, trace: Trace, tmp_path: Path
+) -> None:
+    left = ["series/__pycache__/rolling.cpython-312.pyc", "local/conf.py"]
+    seen: dict[str, bool] = {}
+
+    class LookingSandbox(FakeSandbox):
+        def run(self, root: Path, argv: Sequence[str]) -> SandboxResult:
+            seen.update({path: (root / path).exists() for path in [*left, ".gitignore"]})
+            seen["fixed"] = "len(values) - 1" not in (root / SOURCE).read_text(encoding="utf-8")
+            return super().run(root, argv)
+
+    runner = FixRunner(unhooked={".gitignore": "local/\n", **dict.fromkeys(left, "")})
+    result = _fix(agents, repo, trace, tmp_path, runner=runner, sandbox=LookingSandbox())
+    assert seen == {left[0]: False, left[1]: False, ".gitignore": True, "fixed": True}
+    assert result.ship
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_clean_fails_on_what_it_cannot_delete_and_the_clone_still_goes(
+    repo: Path, tmp_path: Path
+) -> None:
+    work = _work_dir(tmp_path)
+    with checkout(repo, resolve_commit(repo, "HEAD"), work_dir=work) as clone:
+        (clone / "locked").mkdir()
+        (clone / "locked" / "left.txt").write_text("", encoding="utf-8")
+        (clone / "locked").chmod(0o500)
+        with pytest.raises(ToolExecutionError, match="could not be cleaned: locked/left.txt"):
+            clean(clone)
+    assert list(work.iterdir()) == []
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_a_clone_with_unreadable_directories_is_deleted(repo: Path, tmp_path: Path) -> None:
+    work = _work_dir(tmp_path)
+    with checkout(repo, resolve_commit(repo, "HEAD"), work_dir=work) as clone:
+        deeper = clone / "locked" / "deeper"
+        deeper.mkdir(parents=True)
+        (deeper / "left.txt").write_text("", encoding="utf-8")
+        deeper.chmod(0o500)
+        (clone / "locked").chmod(0o000)
+    assert list(work.iterdir()) == []
+
+
 def test_a_run_that_changes_nothing_is_an_error(
     agents: FixAgents, repo: Path, trace: Trace, tmp_path: Path
 ) -> None:
@@ -561,6 +688,17 @@ def test_a_work_dir_that_is_not_a_directory_is_a_usage_error(
 ) -> None:
     with pytest.raises(UsageError, match="is not a directory"):
         _fix(agents, repo, trace, tmp_path, work_dir=tmp_path / "missing")
+
+
+def test_a_work_dir_with_a_colon_is_a_usage_error(
+    agents: FixAgents, repo: Path, trace: Trace, tmp_path: Path
+) -> None:
+    work = tmp_path / "a:b"
+    work.mkdir()
+    runner = FixRunner()
+    with pytest.raises(UsageError, match="has a ':' in its path"):
+        _fix(agents, repo, trace, tmp_path, runner=runner, work_dir=work)
+    assert runner.calls == []
 
 
 def test_head_picks_the_commit_to_start_from(

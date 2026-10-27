@@ -6,17 +6,23 @@ uncommitted changes, so that the head the agents start from is exactly what was 
 sandboxed command and every commit happens in the clone, and the clone is deleted at the end, on an
 error too. The source repository gets no commit, ref, hook or config.
 
+`clean` puts the clone back to its HEAD commit before a run that has to see the commits alone,
+such as the whole suite: an earlier command can leave untracked or ignored files, bytecode among
+them, that the commits do not carry.
+
 `Sandbox` is the seam between the pipeline and Docker: `DockerSandbox` runs commands through
 `tools.sandbox.run_in_sandbox` (no network, CPU and memory limits, the work tree as the only
 writable mount and its `.git` read-only), and the unit tests pass a fake. Git runs on the host,
-through `tools._common.git`, with fsmonitor, hooks, external diff drivers and text conversion off.
+through `tools._common.git`, with hooks and fsmonitor off, and the diffs use no external diff
+driver or text conversion. The status of the source repository in `require_clean` may still run
+the clean filters its owner configured, which are theirs and trusted.
 """
 
 import os
 import shutil
 import tempfile
 from collections.abc import Generator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Protocol
 
@@ -33,7 +39,7 @@ from tools._common import (
 from tools.sandbox import SandboxResult, kill_sandboxes, require_image, run_in_sandbox
 
 SUITE_TIMEOUT_S = 600
-"""Wall-clock limit for the full test suite in the sandbox, container start included. Configuration."""
+"""Wall-clock limit for the whole suite in the sandbox, container start included. Configuration."""
 
 _NO_HOOKS = ["-c", f"core.hooksPath={os.devnull}"]
 _COMMITTER = [
@@ -55,7 +61,7 @@ class Sandbox(Protocol):
     """Where a pipeline runs commands over a work tree. `DockerSandbox` is the real one."""
 
     def check(self) -> None:
-        """Raise `ToolUnavailableError` when commands cannot run at all, before any money is spent."""
+        """Raise `ToolUnavailableError` when commands cannot run at all, before money is spent."""
         ...
 
     def run(self, root: Path, argv: Sequence[str]) -> SandboxResult:
@@ -152,7 +158,59 @@ def checkout(root: Path, commit: str, *, work_dir: str | Path | None = None) -> 
             raise ToolExecutionError("git remote remove failed", hint=fail_hint(proc))
         yield clone
     finally:
-        shutil.rmtree(parent, ignore_errors=True)
+        _remove(parent)
+
+
+def clean(clone: Path) -> None:
+    """Reset the work tree of `clone` to its HEAD commit, so a run over it sees the commits alone.
+
+    Changes to tracked files are undone, and every untracked and ignored file is deleted, such as
+    bytecode in a `__pycache__` or an ignored module that an earlier command left and that would
+    change what a test run imports. Raises `ToolExecutionError` when git fails or something is
+    left that could not be deleted.
+    """
+    proc = git([*_NO_HOOKS, "reset", "--hard", "--quiet", "HEAD"], clone)
+    if proc.returncode != 0:
+        raise ToolExecutionError("git reset failed in the checkout", hint=fail_hint(proc))
+    # `git clean` exits 1 when it cannot delete a file, such as one in a read-only directory; the
+    # status below says what is left.
+    removed = git(["clean", "-ffdxq"], clone)
+    proc = git(["status", "--porcelain=v1", "-z", "--ignored", "--untracked-files=all"], clone)
+    if proc.returncode != 0:
+        raise ToolExecutionError("git status failed in the checkout", hint=fail_hint(proc))
+    left = [
+        entry[3:] for entry in proc.stdout.decode("utf-8", errors="replace").split("\0") if entry
+    ]
+    if left:
+        shown = ", ".join(left[:5])
+        more = f" and {len(left) - 5} more" if len(left) > 5 else ""
+        raise ToolExecutionError(
+            f"the checkout could not be cleaned: {shown}{more}", hint=fail_hint(removed)
+        )
+
+
+def _remove(path: Path) -> None:
+    """Delete the directory tree at `path`, read-only directories in it included, and never raise.
+
+    A command in the sandbox runs as the user and can take the write bit off a directory it made,
+    which stops `shutil.rmtree`. The second pass gives every directory, symbolic links aside, its
+    owner's permissions back first; whatever still cannot be deleted is left.
+    """
+    try:
+        shutil.rmtree(path)
+    except OSError:
+        pass
+    else:
+        return
+    with suppress(OSError):
+        path.chmod(0o700)
+    for top, dirs, _ in os.walk(path):
+        for name in dirs:
+            sub = os.path.join(top, name)
+            if not os.path.islink(sub):
+                with suppress(OSError):
+                    os.chmod(sub, 0o700)
+    shutil.rmtree(path, ignore_errors=True)
 
 
 def commit_all(clone: Path, message: str) -> str:

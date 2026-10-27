@@ -6,11 +6,14 @@ repository (`pipelines.sandbox.checkout`):
 
 1. `test-writer` writes tests that pin the finding down; its work is committed in the clone.
 2. `fixer` changes the code until the suite passes. It may not touch a test: `TestFileGuard`
-   refuses a write to a path the test-writer changed or one in the test layout
-   (`evals.graders.sandbox_tests.is_test_file`), and a check on the host refuses the same paths
-   when they changed by another route, such as a script run through `shell.run`. Either refusal
-   writes a trace row tagged `TEST_WRITE_REFUSED_TAG` and ends the run with `TestFileWriteError`.
-3. The whole suite runs in the sandbox; a failure ends the run with `SuiteFailedError`.
+   refuses a write to a path the test-writer changed, one in the test layout
+   (`evals.graders.sandbox_tests.is_test_file`), pytest's configuration at the root of the
+   clone, or a root module named like one the runner imports, and a check on the host refuses
+   the same paths when they changed by another route, such as a script run through `shell.run`.
+   Either refusal writes a trace row tagged `TEST_WRITE_REFUSED_TAG` and ends the run with
+   `TestFileWriteError`.
+3. The clone is put back to the fixer's commit, untracked and ignored files gone, and the whole
+   suite runs in the sandbox; a failure ends the run with `SuiteFailedError`.
 4. The review panel (`pipelines.review_panel`) reviews the change from the starting commit to the
    fixed one, with triage and the judge gate as in `factory review`.
 
@@ -24,6 +27,7 @@ import json
 import os
 import posixpath
 import sys
+import tempfile
 import time
 import uuid
 from collections.abc import Mapping
@@ -43,6 +47,7 @@ from pipelines.sandbox import (
     Sandbox,
     changed_between,
     checkout,
+    clean,
     commit_all,
     diff_patch,
     require_clean,
@@ -75,6 +80,26 @@ SUITE_TAIL_CHARS = 2000
 """How much of the end of the suite's output the report keeps."""
 
 _GUARDED_TOOL = "fs.write_file"
+
+_RUN_CONFIG = frozenset(
+    {
+        "pytest.ini",
+        ".pytest.ini",
+        "pytest.toml",
+        ".pytest.toml",
+        "pyproject.toml",
+        "setup.cfg",
+        "tox.ini",
+    }
+)
+"""The files at the root of the clone that pytest takes its configuration from."""
+
+_RUNNER_MODULES = frozenset({"pytest", "_pytest", "pluggy", "py", "iniconfig", "pygments"})
+"""The modules `python -m pytest` imports from the image, which a module or package of the same
+name at the root of the clone would replace, since the working directory comes first on
+`sys.path`."""
+
+_MODULE_SUFFIXES = (".py", ".pyc", ".so")
 
 
 class FixError(FactoryError):
@@ -188,11 +213,13 @@ class TestFileGuard:
     """The fixer's hook: refuse every `fs.write_file` to a test, before the action guard sees it.
 
     A path is a test when `evals.graders.sandbox_tests.is_test_file` says so or it is in
-    `protected`, the paths the test-writer changed. The path is checked as written, after `.` and
-    `..` are folded, and again after symlinks are resolved inside `clone`; either match refuses
-    it. A path that does not resolve is let through, and `fs.write_file` refuses it itself. A
-    refusal writes a row tagged `TEST_WRITE_REFUSED_TAG` and raises `TestFileWriteError`, which
-    ends the fixer's run. Every other tool is allowed and left to the action guard.
+    `protected`, the paths the test-writer changed. Files that control the test run count too:
+    pytest's configuration files at the root of the clone, and a root module or package named
+    like one `python -m pytest` imports, which would replace it. The path is checked as written,
+    after `.` and `..` are folded, and again after symlinks are resolved inside `clone`; either
+    match refuses it. A path that does not resolve is let through, and `fs.write_file` refuses it
+    itself. A refusal writes a row tagged `TEST_WRITE_REFUSED_TAG` and raises `TestFileWriteError`,
+    which ends the fixer's run. Every other tool is allowed and left to the action guard.
     """
 
     __test__ = False  # not a pytest test class, despite the name
@@ -255,6 +282,17 @@ def _test_reason(path: str, protected: frozenset[str]) -> str | None:
         return "the test-writer changed this path"
     if is_test_file(path):
         return "the path is in the test layout"
+    parts = PurePosixPath(path).parts
+    if len(parts) == 1 and parts[0] in _RUN_CONFIG:
+        return "the file configures the test run"
+    if parts and parts[0] in _RUNNER_MODULES and len(parts) > 1:
+        return "the path shadows the test runner"
+    if (
+        len(parts) == 1
+        and parts[0].split(".", 1)[0] in _RUNNER_MODULES
+        and parts[0].endswith(_MODULE_SUFFIXES)
+    ):
+        return "the path shadows the test runner"
     return None
 
 
@@ -392,7 +430,8 @@ def run_fix(
     the report, `<pipeline run id>.json`, is written whenever the panel ran. The fixer reporting
     `nothing_to_fix` does not stop the run: whatever the two agents changed, tests alone
     included, goes to the panel. Raises `UsageError` for a `work_dir` that is not a directory or
-    an `out_dir` that cannot be made, the sandbox's `ToolUnavailableError` before any agent runs,
+    whose path has a `:`, which Docker cannot mount, or an `out_dir` that cannot be made, the
+    sandbox's `ToolUnavailableError` before any agent runs,
     `TestFileWriteError` when the fixer changes a test, `FixError` when neither agent changed
     anything, `SuiteFailedError` when the suite fails, and whatever an agent's run or the panel
     raises, `BudgetExceeded` among them.
@@ -403,6 +442,12 @@ def run_fix(
     sandbox = sandbox or DockerSandbox()
     if work_dir is not None and not Path(work_dir).is_dir():
         raise UsageError(f"--work-dir {work_dir} is not a directory")
+    where = Path(work_dir or tempfile.gettempdir()).resolve()
+    if ":" in str(where):
+        raise UsageError(
+            f"the work directory {where} has a ':' in its path, which Docker cannot mount",
+            hint="pass --work-dir a directory whose path has no ':'",
+        )
     out = Path(out_dir)
     try:
         out.mkdir(parents=True, exist_ok=True)
@@ -426,13 +471,7 @@ def run_fix(
             tests_sha = commit_all(clone, f"test-writer: {finding.title}")
             by_tests = changed_between(clone, head_sha, tests_sha)
             written = tests_output.model_dump(mode="json")
-            protected = frozenset(
-                [
-                    *by_tests,
-                    *written.get("test_files", []),
-                    *(change["path"] for change in written.get("files_changed", [])),
-                ]
-            )
+            protected = frozenset([*by_tests, *written.get("test_files", [])])
 
             fixer_output = runner(
                 agents.fixer,
@@ -469,6 +508,7 @@ def run_fix(
                     hint="check the finding still applies at the head commit",
                 )
 
+            clean(clone)
             suite = sandbox.run(clone, PYTEST)
             if suite.exit_code != 0:
                 raise SuiteFailedError(
