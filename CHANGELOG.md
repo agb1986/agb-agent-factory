@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- CI runs on ubuntu-24.04 instead of ubuntu-latest, whose move to ubuntu-26.04 made the image key scan overrun the job timeout.
+
 ### Added
 
 - Documented conventions for manifests, agent layout, output, gates, the trace row and secrets (#1).

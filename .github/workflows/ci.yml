@@ -13,8 +13,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Both jobs pin ubuntu-24.04. On 2026-10-27 the ubuntu-latest label moved to ubuntu-26.04, where
+  # `docker save` takes about five minutes per image instead of five seconds, and the three scans
+  # in the image job then overrun its timeout. Move the pin on once a scan on 26.04 is fast again.
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -50,7 +53,7 @@ jobs:
   # Builds the deployment image and fails when any layer or the image configuration holds a key.
   # It needs no secret: the scan looks for the shape of a key, not for a value.
   image:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
