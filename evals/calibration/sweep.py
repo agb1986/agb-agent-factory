@@ -183,6 +183,7 @@ def sweep(
             f"no {missing} diff was measured, so the sweep has nothing to divide by",
             hint="label more diffs, or drop --limit",
         )
+    # Failed diffs are left out of the mean; any failure already exits 1 via SweepIncomplete.
     jev_cost = sum(diff.cost_usd for diff in measured) / len(measured)
     rows = tuple(
         _row(copy, threshold, measured, jev_cost, panel_cost_usd)
