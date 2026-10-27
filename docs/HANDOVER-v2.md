@@ -202,5 +202,5 @@ Each task has acceptance criteria. Do the phases in order, because each one unbl
 - [ ] `review_panel` runs triage → routed reviewers → judge-gate/judge end to end
 - [ ] Triage thresholds are calibrated on 100+ real diffs, skip none with a major+ finding, and have run 2 weeks in shadow mode
 - [ ] Every agent (both kinds) has evals that meet their thresholds
-- [ ] `cost_by_agent()` shows Jev and Claude costs, with the triage saving measured against `--no-triage`
+- [x] `cost_by_agent()` shows Jev and Claude costs, with the triage saving measured against `--no-triage` (`factory cost --by kind`; [jev-calibration.md](jev-calibration.md#measured-against---no-triage))
 - [ ] The fix loop runs in a sandbox with `action-guard` on and has fixed at least one fixture bug autonomously
