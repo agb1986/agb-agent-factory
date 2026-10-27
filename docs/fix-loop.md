@@ -27,12 +27,12 @@ factory fix ./repo --finding @review.json --finding-index 0 --json
 Every agent call carries the same `pipeline_run_id` and is charged to the same `Budget`.
 
 1. The sandbox is checked (Docker and the image) before any money is spent. The repository must have nothing uncommitted, staged, unstaged or untracked, or the run stops with `DirtyRepositoryError`. Ignored files do not count.
-2. The head commit is cloned into a new directory under `--work-dir` with `--no-hardlinks`, checked out detached, and the clone's `origin` remote is removed. Git runs on the host with hooks, fsmonitor, external diff drivers and text conversion off. The source repository gets no commit, ref, hook or config.
+2. The head commit is cloned into a new directory under `--work-dir` with `--no-hardlinks`, checked out detached, and the clone's `origin` remote is removed. Git runs on the host with hooks and fsmonitor off, and its diffs use no external diff driver or text conversion. The source repository gets no commit, ref, hook or config.
 3. The test-writer runs over the clone, behind its action guard, and whatever it changed is committed in the clone.
 4. The fixer runs over the clone with two hooks in front of its tools: `TestFileGuard`, then the action guard. See [The test-file rule](#the-test-file-rule).
 5. On the host, every path changed in the clone is checked against the same rule, and then the fixer's work is committed.
 6. If the two commits together changed nothing, the run stops with `FixError`.
-7. The whole suite, `python -m pytest -q`, runs over the clone in the sandbox with a 600 s limit (`SUITE_TIMEOUT_S`), container start included. A non-zero exit, 124 for a timeout among them, stops the run with `SuiteFailedError`, whose hint carries the end of the output.
+7. The clone is reset to the fixer's commit and its untracked and ignored files are deleted (`pipelines.sandbox.clean`), so the suite sees the two commits and nothing an earlier command left behind; a clone that cannot be cleaned stops the run with `ToolExecutionError` (exit 1). Then the whole suite, `python -m pytest -q`, runs over the clone in the sandbox with a 600 s limit (`SUITE_TIMEOUT_S`), container start included. A non-zero exit, 124 for a timeout among them, stops the run with `SuiteFailedError`, whose hint carries the end of the output.
 8. The panel reviews the diff from the head commit to the fixer's commit in the clone: triage in route-only mode, the three reviewers, the judge gate and the judge, as `factory review` runs them.
 9. The patch is written only when the panel approves. The report is written whenever the panel ran.
 10. However the run ends, `sandbox.cleanup` kills any container still running over the clone (found by its `factory.sandbox.root` label), and the clone is deleted.
@@ -54,7 +54,7 @@ Both files are named after the pipeline run id, in `--out-dir`:
 | --- | --- |
 | 0 | The panel approved the fix and the patch was written |
 | 1 | The panel did not approve; or `TestFileWriteError`, `SuiteFailedError`, `FixError` (nothing changed) or `BudgetExceeded` |
-| 2 | Usage: a bad option or finding, uncommitted changes (`DirtyRepositoryError`), a `--work-dir` that is not a directory, an `--out-dir` that cannot be made |
+| 2 | Usage: a bad option or finding, uncommitted changes (`DirtyRepositoryError`), a `--work-dir` that is not a directory or whose path has a `:`, which Docker cannot mount, an `--out-dir` that cannot be made |
 | 3 | An unknown agent, version, repository or ref |
 | 4 | `ANTHROPIC_API_KEY` not set, Docker missing or unreachable, or the sandbox image absent |
 
@@ -62,7 +62,14 @@ On exit 1 from the loop itself (not from the panel's verdict) no report is writt
 
 ## The test-file rule
 
-The fixer may change production code only. A path is a test when `evals.graders.sandbox_tests.is_test_file` says so (anything under a `tests` directory, `conftest.py`, `test_*.py`, `*_test.py`) or when the test-writer changed it. The rule lives in the pipeline, not in `fs.write_file`, because only the pipeline knows what the test-writer wrote.
+The fixer may change production code only. A path counts as a test, and the fixer may not change it, when:
+
+- `evals.graders.sandbox_tests.is_test_file` says so: anything under a `tests` directory, `conftest.py`, `test_*.py`, `*_test.py`;
+- the test-writer changed it, as the commit of its work shows (what it only reports in `files_changed` protects nothing);
+- it configures the test run: `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `pyproject.toml`, `setup.cfg` or `tox.ini` at the root of the clone;
+- it would shadow the test runner: a package at the root named `pytest`, `_pytest`, `pluggy`, `py`, `iniconfig` or `pygments`, or a root module of one of those names ending in `.py`, `.pyc` or `.so`. `python -m pytest` puts the working directory first on `sys.path`, so such a module would replace the one in the image.
+
+A refusal names which of these applies. The rule lives in the pipeline, not in `fs.write_file`, because only the pipeline knows what the test-writer wrote.
 
 It is checked twice:
 
@@ -91,4 +98,8 @@ Every call is a row in the trace store under the run's `pipeline_run_id`: the te
 - Nothing stops the test-writer from changing production code. Whatever it changed becomes protected from the fixer, so such a change shows in the report's `files_changed` under `test-writer` and goes to the panel.
 - The clone runs under git's 30 s limit (`tools._common.TIMEOUT_S`), so a very large repository fails with a `ToolExecutionError` rather than cloning slowly.
 - `nothing_to_fix` does not end the run, as above; a finding the fixer judges wrong still costs a suite run and a panel.
+- A fix that needs a change to `pyproject.toml` or `setup.cfg`, such as a new dependency, is refused like a change to a test and needs a person.
+- The code under test runs in the suite's own process, so a fix can still skip tests or end the run early from production code. The panel, which reads the whole diff, is the check on that.
+- Filters configured in the user's own git config, such as Git LFS, can run on the source repository's status and on the clone's checkout and commits when the repository's `.gitattributes` names them. They are the user's and trusted. The clone has no config beyond git's defaults, so the repository brings no filter, hook or driver of its own.
+- `sandbox.cleanup` finds containers through `docker ps`. If the daemon fails at that moment, a container can outlive the run until its command ends; it still carries the `factory.sandbox.root` label, so `docker ps --filter label=factory.sandbox.root` finds it.
 - The live end-to-end test, `tests/live/test_fix_loop_live.py`, runs on the `off-by-one-red` fixture only.
