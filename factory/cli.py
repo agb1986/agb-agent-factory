@@ -147,7 +147,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--since", required=True, help="start date or datetime, in UTC if it has no offset"
     )
     cost_parser.add_argument(
-        "--by", choices=("agent", "pipeline"), default="agent", help="grouping (default: agent)"
+        "--by",
+        choices=("agent", "pipeline", "kind"),
+        default="agent",
+        help="group by agent version, pipeline run or runner kind (default: agent)",
     )
     cost_parser.add_argument(
         "--json", action="store_true", help="print one JSON document instead of text"
@@ -261,7 +264,7 @@ def _fix(args: argparse.Namespace) -> int:
 
 
 def _cost(args: argparse.Namespace) -> int:
-    """Print the spend recorded in the trace since a date, by agent or by pipeline run."""
+    """Print the spend recorded in the trace since a date, by agent, pipeline run or kind."""
     from runtime.cost import command
 
     return command(args.since, by=args.by, as_json=args.json)

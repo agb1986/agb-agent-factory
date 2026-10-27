@@ -28,7 +28,7 @@ BASE = TraceRow(
 
 @pytest.fixture
 def seeded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A trace file with a day of work: two pipelines, an eval run, a publish run, a loose run."""
+    """A trace file with a day of work: two pipelines, an eval run, a publish run, a loose Jev run."""
     path = tmp_path / "trace.duckdb"
     runs = [
         ("r1", "code-reviewer@1.2.0", "pipe-1", 0.012345, None),
@@ -42,11 +42,13 @@ def seeded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     ]
     with Trace(path) as trace:
         for run_id, agent_ref, pipeline, cost, tag in runs:
+            kind = "jev" if agent_ref.startswith("diff-triage@") else "llm"
             trace.record(
                 replace(
                     BASE,
                     run_id=run_id,
                     agent_ref=agent_ref,
+                    kind=kind,
                     pipeline_run_id=pipeline,
                     cost_usd=cost,
                     tag=tag,
@@ -74,6 +76,22 @@ def test_the_json_by_pipeline_matches_the_golden_file(
     assert main(["cost", "--since", SINCE, "--by", "pipeline", "--json"]) == ExitCode.OK
     out = capsys.readouterr().out
     assert json.loads(out) == json.loads((GOLDEN / "cost-by-pipeline.json").read_text())
+
+
+def test_the_json_by_kind_matches_the_golden_file(
+    seeded: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["cost", "--since", SINCE, "--by", "kind", "--json"]) == ExitCode.OK
+    out = capsys.readouterr().out
+    assert json.loads(out) == json.loads((GOLDEN / "cost-by-kind.json").read_text())
+
+
+def test_by_kind_names_llm_runs_claude(seeded: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    main(["cost", "--since", SINCE, "--by", "kind"])
+    out = capsys.readouterr().out
+    assert "  claude  " in out
+    assert "  jev  " in out
+    assert "llm" not in out
 
 
 def test_the_text_output_matches_the_golden_file(
@@ -113,7 +131,7 @@ def test_since_is_required(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["cost"]) == ExitCode.USAGE
 
 
-def test_by_accepts_only_agent_and_pipeline(capsys: pytest.CaptureFixture[str]) -> None:
+def test_by_accepts_only_agent_pipeline_and_kind(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["cost", "--since", SINCE, "--by", "model"]) == ExitCode.USAGE
 
 

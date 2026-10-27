@@ -259,7 +259,7 @@ def test_fix_json(
 # --- cost
 
 COST_T0 = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
-# A day of work: two pipelines, an eval run, a publish run and a loose, unpriced run.
+# A day of work: two pipelines, an eval run, a publish run and a loose, unpriced Jev run.
 COST_RUNS: list[tuple[str, str, str | None, float | None, str | None]] = [
     ("r1", "code-reviewer@1.2.0", "pipe-1", 0.012345, None),
     ("r2", "perf-reviewer@0.3.0", "pipe-1", 0.0231, None),
@@ -287,7 +287,7 @@ def test_cost_json(
                     run_id=run_id,
                     pipeline_run_id=pipeline,
                     agent_ref=agent_ref,
-                    kind="llm",
+                    kind="jev" if agent_ref.startswith("diff-triage@") else "llm",
                     started_at=COST_T0 + timedelta(minutes=minute),
                     duration_ms=900,
                     input_json={},
@@ -296,3 +296,6 @@ def test_cost_json(
                 )
             )
     golden("cost", _run(["cost", "--since", "2026-10-20", "--json"], capsys))
+    golden(
+        "cost-by-kind", _run(["cost", "--since", "2026-10-20", "--by", "kind", "--json"], capsys)
+    )
