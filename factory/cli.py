@@ -97,6 +97,47 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also use agent versions that have not passed `factory publish-check`",
     )
+    fix_parser = sub.add_parser(
+        "fix",
+        help="write a test for one finding, fix the code in the sandbox and review the fix",
+        epilog="example: factory fix ./repo --finding @review.json --finding-index 0 --json",
+    )
+    fix_parser.add_argument("repo_path", help="path of the git repository to fix; never changed")
+    fix_parser.add_argument(
+        "--finding",
+        required=True,
+        help="the finding as JSON, a `factory review --json` document, or @FILE holding either",
+    )
+    fix_parser.add_argument(
+        "--finding-index",
+        type=int,
+        default=0,
+        help="which of the judge's merged findings of a review document to fix "
+        "(default: %(default)s)",
+    )
+    fix_parser.add_argument(
+        "--head", default="HEAD", help="git ref to start from (default: %(default)s)"
+    )
+    fix_parser.add_argument(
+        "--out-dir", help="where the patch and the report go (default: data/fixes)"
+    )
+    fix_parser.add_argument(
+        "--work-dir",
+        help="directory for the throwaway clone (default: the system temporary directory)",
+    )
+    fix_parser.add_argument(
+        "--json", action="store_true", help="print one JSON document on stdout instead of text"
+    )
+    fix_parser.add_argument(
+        "--allow-unpublished",
+        action="store_true",
+        help="also use agent versions that have not passed `factory publish-check`",
+    )
+    fix_parser.add_argument(
+        "--budget-usd",
+        type=float,
+        help="stop the run once it has spent this many dollars (default: the pipeline default)",
+    )
     cost_parser = sub.add_parser(
         "cost",
         help="print what the agent runs in the trace cost since a date",
@@ -137,6 +178,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _review(args)
         if args.command == "triage":
             return _triage(args)
+        if args.command == "fix":
+            return _fix(args)
         if args.command == "cost":
             return _cost(args)
     except Exception as exc:  # noqa: BLE001 - the root handler maps every failure to a code
@@ -195,6 +238,23 @@ def _triage(args: argparse.Namespace) -> int:
         args.repo_path,
         base=args.base,
         head=args.head,
+        as_json=args.json,
+        allow_unpublished=args.allow_unpublished,
+    )
+
+
+def _fix(args: argparse.Namespace) -> int:
+    """Fix one finding in a throwaway clone and review the fix; the report goes to stdout."""
+    from pipelines.fix_loop import command  # imported here: it pulls in the Anthropic SDK
+
+    return command(
+        args.repo_path,
+        finding=args.finding,
+        finding_index=args.finding_index,
+        head=args.head,
+        out_dir=args.out_dir,
+        work_dir=args.work_dir,
+        budget_usd=args.budget_usd,
         as_json=args.json,
         allow_unpublished=args.allow_unpublished,
     )

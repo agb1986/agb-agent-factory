@@ -6,8 +6,9 @@ repository root and nowhere else. `shell.run` takes an argument list, never a sh
 starts only the programs in `ALLOWED_PROGRAMS`, inside a throwaway Docker container that has no
 network and sees only the work tree. This is option (a) of `docs/decisions/0001-fixer-runtime.md`.
 
-The container is built from `tools/sandbox.Dockerfile` and tagged `SANDBOX_IMAGE`. It must already
-hold the dependencies of the repository under test, because nothing can be installed at run time.
+The container is built from `tools/sandbox.Dockerfile` and tagged `SANDBOX_IMAGE`, or runs the image
+named by `FACTORY_SANDBOX_IMAGE` when that is set (`sandbox_image`). It must already hold the
+dependencies of the repository under test, because nothing can be installed at run time.
 """
 
 import os
@@ -31,6 +32,9 @@ from tools._common import (
 
 SANDBOX_IMAGE = "factory-sandbox:0.1"
 """Tag of the image built from `tools/sandbox.Dockerfile`. Configuration: bump it with the file."""
+
+SANDBOX_IMAGE_ENV = "FACTORY_SANDBOX_IMAGE"
+"""Environment variable naming a different sandbox image, such as one with a target's dependencies."""
 
 DOCKERFILE = Path(__file__).with_name("sandbox.Dockerfile")
 
@@ -70,6 +74,9 @@ _MAX_ARGS = 64
 _MAX_ARG_CHARS = 32_768
 _WORKDIR = "/work"
 _CONTAINER_PREFIX = "factory-sandbox-"
+
+ROOT_LABEL = "factory.sandbox.root"
+"""Docker label each sandbox container carries, set to the work tree it mounts (`kill_sandboxes`)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +178,8 @@ def docker_argv(root: Path, argv: Sequence[str], name: str) -> list[str]:
 
     The container has no network, a read-only root filesystem, one CPU, 512 MiB, 128 processes, no
     capabilities and the host user's uid. The work tree is the only writable mount, and its `.git`
-    is mounted again read-only on top, so a command can change files but not history or hooks.
+    is mounted again read-only on top, so a command can change files but not history or hooks. The
+    `ROOT_LABEL` label names the work tree, so `kill_sandboxes` can find the container again.
     """
     return [
         "docker",
@@ -179,6 +187,8 @@ def docker_argv(root: Path, argv: Sequence[str], name: str) -> list[str]:
         "--rm",
         "--name",
         name,
+        "--label",
+        f"{ROOT_LABEL}={root}",
         "--network",
         "none",
         "--cpus",
@@ -212,7 +222,7 @@ def docker_argv(root: Path, argv: Sequence[str], name: str) -> list[str]:
         f"{root / '.git'}:{_WORKDIR}/.git:ro",
         "--workdir",
         _WORKDIR,
-        SANDBOX_IMAGE,
+        sandbox_image(),
         *argv,
     ]
 
@@ -251,15 +261,52 @@ def run_in_sandbox(
     )
 
 
+def kill_sandboxes(repo_path: str | Path) -> int:
+    """Kill every sandbox container still running over the work tree `repo_path`; return how many.
+
+    A command ends its own container, and `run_in_sandbox` kills one that times out, but a process
+    interrupted while it waits on `docker run` leaves the container running. A pipeline calls this
+    when it is done with a work tree, often while another error is on its way out, so it never
+    raises: missing Docker, or a Docker that cannot list containers in time, counts as nothing to
+    kill, and a kill that fails is left to `--rm` and the daemon.
+    """
+    if shutil.which("docker") is None:
+        return 0
+    root = Path(repo_path).resolve()
+    try:
+        proc = subprocess.run(
+            ["docker", "ps", "--quiet", "--filter", f"label={ROOT_LABEL}={root}"],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        ids = proc.stdout.decode("ascii", errors="replace").split() if proc.returncode == 0 else []
+        if ids:
+            subprocess.run(["docker", "kill", *ids], capture_output=True, timeout=30, check=False)
+    except OSError, subprocess.SubprocessError:
+        return 0
+    return len(ids)
+
+
+def sandbox_image() -> str:
+    """Return the sandbox image: `FACTORY_SANDBOX_IMAGE` if set and not blank, else `SANDBOX_IMAGE`.
+
+    It is read on every call, so a test or a deployment can change it without a reload. In the
+    sibling-container setup of `docs/deploy.md` the name is resolved by the host's Docker daemon.
+    """
+    return os.environ.get(SANDBOX_IMAGE_ENV, "").strip() or SANDBOX_IMAGE
+
+
 def require_image() -> None:
-    """Raise `ToolUnavailableError` unless Docker runs and has `SANDBOX_IMAGE`."""
+    """Raise `ToolUnavailableError` unless Docker runs and has the image `sandbox_image` names."""
     if shutil.which("docker") is None:
         raise ToolUnavailableError("docker is not installed or not on PATH", hint="install docker")
+    image = sandbox_image()
     proc = subprocess.run(
-        ["docker", "image", "inspect", SANDBOX_IMAGE], capture_output=True, timeout=30, check=False
+        ["docker", "image", "inspect", image], capture_output=True, timeout=30, check=False
     )
     if proc.returncode != 0:
-        raise ToolUnavailableError(
-            f"sandbox image {SANDBOX_IMAGE} is missing",
-            hint=f"docker build -t {SANDBOX_IMAGE} -f {DOCKERFILE} {DOCKERFILE.parent}",
-        )
+        hint = f"docker build -t {image} -f {DOCKERFILE} {DOCKERFILE.parent}"
+        if image != SANDBOX_IMAGE:
+            hint = f"build or pull {image}, or unset {SANDBOX_IMAGE_ENV} to use {SANDBOX_IMAGE}"
+        raise ToolUnavailableError(f"sandbox image {image} is missing", hint=hint)

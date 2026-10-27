@@ -22,10 +22,11 @@ from factory import cli
 from factory.cli import main
 from factory.exit import ExitCode
 from fixtures.build import build
-from pipelines import review_panel, triage
+from pipelines import fix_loop, review_panel, triage
 from registry import AgentRef
 from registry.spec import LLMSpec
 from runtime.trace import Trace, TraceRow
+from tests.pipelines.test_fix_loop import FINDING, FakeSandbox, FixRunner
 from tests.pipelines.test_review_panel import FakeJev
 
 Golden = Callable[[str, Any], None]
@@ -226,6 +227,33 @@ def test_triage_json(
     (fixture,) = build(["mixed"], dest=tmp_path / "repos")
     argv = ["triage", str(fixture.path), "--base", "base", "--head", "head"]
     golden("triage", _run([*argv, "--allow-unpublished", "--json"], capsys))
+
+
+# --- fix
+
+
+def test_fix_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    golden: Golden,
+) -> None:
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(tmp_path / "traces.duckdb"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(fix_loop, "run", FixRunner())
+    monkeypatch.setattr(fix_loop, "run_jev", FakeJev())
+    monkeypatch.setattr(fix_loop, "DockerSandbox", FakeSandbox)
+    (fixture,) = build(["off-by-one-red"], dest=tmp_path / "repos")
+    out, work = tmp_path / "out", tmp_path / "work"
+    work.mkdir()
+    argv = ["fix", str(fixture.path), "--finding", json.dumps(FINDING), "--out-dir", str(out)]
+    document = _run([*argv, "--work-dir", str(work), "--allow-unpublished", "--json"], capsys)
+    # The paths are under tmp_path and name the run, and the fix commit is dated now.
+    document["repo_path"] = "<repo>"
+    document["patch_path"] = "<out-dir>/<pipeline-run-id>.patch"
+    document["report_path"] = "<out-dir>/<pipeline-run-id>.json"
+    document["panel"]["head"] = "<fix-sha>"
+    golden("fix", document)
 
 
 # --- cost

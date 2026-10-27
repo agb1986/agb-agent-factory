@@ -2,6 +2,8 @@
 
 Status: accepted, 2026-10-25. Issue: #21. Evidence: [prototypes/fixer/](../../prototypes/fixer/README.md).
 
+Implemented, 2026-10-27: #22 added the agents and the sandbox-only tools, #23 the action guard, and #24 the fix loop (`pipelines/fix_loop.py`, `pipelines/sandbox.py`). #24 also labels each sandbox container with the work tree it mounts, so `tools.sandbox.kill_sandboxes` can stop any left running when a run ends, and reads the image name from `FACTORY_SANDBOX_IMAGE`.
+
 This record answers the open question in [PLAN.md](../PLAN.md): whether the fixer runs on the Claude Agent SDK, on Managed Agents, or on the factory's own runtime with a hand-built Docker sandbox. Every fact below was checked on 2026-10-25, either by a live run of the prototype on this host or against the source linked in its section. Figures from a live run say so; the rest come from documentation.
 
 ## Decision in one line

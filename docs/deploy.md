@@ -117,13 +117,13 @@ The factory container has `cpus: 2`, `mem_limit: 1g` and `pids_limit: 256`, a re
 
 ## Sandbox containers
 
-The fix loop (#24) runs every model-written command in a throwaway `docker run`. The reviews this deployment serves do not, and `factory` has no fix command yet, so **the default image has no Docker CLI and the container has no Docker socket**.
+The fix loop (`factory fix`, #24) runs every model-written command and the test suite in a throwaway `docker run`. The reviews this deployment serves do not, so **the default image has no Docker CLI and the container has no Docker socket**, and `factory fix` run from it exits 4 because it cannot reach Docker.
 
-If a later release runs the fix loop from this image, the decision of [ADR 0001](decisions/0001-fixer-runtime.md) stands: sibling containers started through the host's socket, not Docker in Docker. To turn it on:
+To run the fix loop from this image, the decision of [ADR 0001](decisions/0001-fixer-runtime.md) stands: sibling containers started through the host's socket, not Docker in Docker. To turn it on:
 
 1. Build with `WITH_DOCKER_CLI: "1"` in `compose.yaml` (or `--build-arg WITH_DOCKER_CLI=1`) to add the `docker` client.
 2. Uncomment the socket mount in `compose.yaml`.
-3. Mount the work tree at the same path inside and outside the container, because `docker run -v` resolves a path on the host, not in the container.
+3. Mount the work tree at the same path inside and outside the container, because `docker run -v` resolves a path on the host, not in the container. `factory fix` clones the repository into a temporary directory and mounts the clone, so pass `--work-dir` a directory mounted at the same path on both sides; the default, the container's `/tmp`, is a tmpfs the host cannot see.
 
 Mounting `/var/run/docker.sock` gives the factory container root-equivalent control of the host: anything that can run a command in it can start a privileged container. That is why it is off, and why it should stay off on any host where the factory reads repositories you do not trust. The factory's own container still drops its capabilities and runs as uid 10001, but the socket makes that moot.
 
@@ -137,7 +137,7 @@ COPY uv.lock pyproject.toml /deps/
 RUN cd /deps && uv export --frozen --no-emit-project -o req.txt && uv pip install --system -r req.txt
 ```
 
-One target repository per host with this approach. Making the image name a parameter is a follow-up for #24, which owns `tools/sandbox.py`; this deployment does not change it.
+Or tag it under a name of its own and set `FACTORY_SANDBOX_IMAGE` to that name, in `.env` for the compose service or in the environment of one `factory fix` run; unset or blank, the sandbox uses `factory-sandbox:0.1`, so this deployment works unchanged. The host's Docker daemon resolves the name, so the image must be on the host, not in the factory container.
 
 ## Checks
 
