@@ -13,7 +13,7 @@
     "suggested_fix": null
   },
   "test_writer": {
-    "ref": "test-writer@0.1.0",
+    "ref": "test-writer@0.1.1",
     "output": {
       "files_changed": [
         {
@@ -31,7 +31,7 @@
     }
   },
   "fixer": {
-    "ref": "fixer@0.1.0",
+    "ref": "fixer@0.1.1",
     "output": {
       "files_changed": [
         {

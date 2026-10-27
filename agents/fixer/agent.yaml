@@ -1,5 +1,5 @@
 name: fixer
-version: 0.1.0
+version: 0.1.1
 kind: llm
 description: Fixes a reported defect in production code until its failing tests and the full suite pass.
 model: claude-sonnet-5-5 # verified by tests/live/test_fixer_live.py

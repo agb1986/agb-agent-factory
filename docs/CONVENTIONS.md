@@ -334,6 +334,8 @@ A reviewer that works on one kind of defect names the categories it may use in i
 
 Two variants serve the agents that write tests and fix code. `off-by-one-red` is `off-by-one` plus a test that fails on `head` and passes on `base`, the input of the fixer; it is the one fixture whose own suite is red on `head` (`tests/fixtures/test_fixtures_build.py` expects that). `untested-change-covered` is `untested-change` with a passing test file, so the fixer has nothing to fix and `defects.yaml` has `defects: []`. The fixtures have no `pyproject.toml`; their tests run with `python -m pytest -q` from the repository root.
 
+`mixed-red` and `sql-injection-red` are further fixer fixtures of the same kind (#65): `mixed` and `sql-injection` plus a test in `head` that fails on the planted defect, so their own suites are red on `head` too (`FAILS_ON_HEAD`). They are separate fixtures because a failing test added to `mixed` or `sql-injection` would show up in the diff the reviewers read and give the defect away. Their `defects.yaml` repeats the entries of the fixture they copy. `sql-injection` and `path-traversal` have no `base` state in which `find_by_name` or `read` exists, so a test-writer case on them cannot set `passes_on_base`; it checks `new_tests: fail` only.
+
 ```yaml
 fixture: off-by-one
 summary: Running-sum rewrite that drops the last window.

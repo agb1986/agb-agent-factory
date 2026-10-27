@@ -258,8 +258,8 @@ def _refusals(trace: Trace) -> list[tuple[Any, ...]]:
 
 
 def test_the_agents_resolve_to_sandboxed_workers_and_the_full_panel(agents: FixAgents) -> None:
-    assert agents.test_writer.address == "test-writer@0.1.0"
-    assert agents.fixer.address == "fixer@0.1.0"
+    assert agents.test_writer.address == "test-writer@0.1.1"
+    assert agents.fixer.address == "fixer@0.1.1"
     assert agents.test_writer.sandbox and agents.fixer.sandbox
     assert agents.fixer.guard is not None
     assert agents.panel.triage is not None and agents.panel.gate is not None
@@ -348,11 +348,11 @@ def test_the_guard_refuses_a_write_to_the_test_layout(
     path: str, tmp_path: Path, trace: Trace
 ) -> None:
     guard = TestFileGuard(tmp_path.resolve(), frozenset(), trace, RUN_ID)
-    call = ToolCall("fs.write_file", {"path": path, "content": ""}, "fixer@0.1.0")
+    call = ToolCall("fs.write_file", {"path": path, "content": ""}, "fixer@0.1.1")
     with pytest.raises(TestFileWriteError, match="in the test layout"):
         guard.before_tool(call)
     ((agent, run_id, cost, decision, error),) = _refusals(trace)
-    assert (agent, run_id, cost) == ("fixer@0.1.0", RUN_ID, 0.0)
+    assert (agent, run_id, cost) == ("fixer@0.1.1", RUN_ID, 0.0)
     assert json.loads(decision) == {
         "allow": False,
         "path": os.path.normpath(path),
@@ -371,7 +371,7 @@ def test_the_guard_refuses_an_absolute_path_and_a_symlink_into_tests(
     guard = TestFileGuard(clone, frozenset(), trace, RUN_ID)
     for path in (str(clone / "tests" / "test_x.py"), "alias/helpers.py"):
         with pytest.raises(TestFileWriteError):
-            guard.before_tool(ToolCall("fs.write_file", {"path": path}, "fixer@0.1.0"))
+            guard.before_tool(ToolCall("fs.write_file", {"path": path}, "fixer@0.1.1"))
     paths = [json.loads(row[3])["path"] for row in _refusals(trace)]
     assert paths == ["tests/test_x.py", "tests/helpers.py"]
 
@@ -379,7 +379,7 @@ def test_the_guard_refuses_an_absolute_path_and_a_symlink_into_tests(
 def test_the_guard_refuses_a_path_the_test_writer_changed(tmp_path: Path, trace: Trace) -> None:
     guard = TestFileGuard(tmp_path.resolve(), frozenset({"data/cases.json"}), trace, RUN_ID)
     with pytest.raises(TestFileWriteError, match="the test-writer changed this path"):
-        guard.before_tool(ToolCall("fs.write_file", {"path": "data/cases.json"}, "fixer@0.1.0"))
+        guard.before_tool(ToolCall("fs.write_file", {"path": "data/cases.json"}, "fixer@0.1.1"))
 
 
 CONFIGURES = "the file configures the test run"
@@ -406,7 +406,7 @@ def test_the_guard_refuses_what_controls_the_test_run(
 ) -> None:
     guard = TestFileGuard(tmp_path.resolve(), frozenset(), trace, RUN_ID)
     with pytest.raises(TestFileWriteError, match=reason):
-        guard.before_tool(ToolCall("fs.write_file", {"path": path}, "fixer@0.1.0"))
+        guard.before_tool(ToolCall("fs.write_file", {"path": path}, "fixer@0.1.1"))
     ((_, _, _, decision, _),) = _refusals(trace)
     assert json.loads(decision)["reason"] == reason
 
@@ -432,7 +432,7 @@ def test_the_guard_allows_everything_else(
     name: str, arguments: dict[str, Any], tmp_path: Path, trace: Trace
 ) -> None:
     guard = TestFileGuard(tmp_path.resolve(), frozenset(), trace, RUN_ID)
-    assert guard.before_tool(ToolCall(name, arguments, "fixer@0.1.0")).allowed
+    assert guard.before_tool(ToolCall(name, arguments, "fixer@0.1.1")).allowed
     assert _refusals(trace) == []
 
 
@@ -522,7 +522,7 @@ def test_the_fixer_writing_a_test_through_its_tools_is_refused(
     with pytest.raises(TestFileWriteError, match=f"test file {TEST_PATH}"):
         _fix(agents, repo, trace, tmp_path, runner=runner)
     ((agent, run_id, _, decision, _),) = _refusals(trace)
-    assert (agent, run_id) == ("fixer@0.1.0", RUN_ID)
+    assert (agent, run_id) == ("fixer@0.1.1", RUN_ID)
     assert json.loads(decision)["check"] == "hook"
     assert json.loads(decision)["reason"] == "the test-writer changed this path"
     assert list(_work_dir(tmp_path).iterdir()) == []
@@ -536,7 +536,7 @@ def test_a_test_changed_by_another_route_is_refused_after_the_fixer(
     with pytest.raises(TestFileWriteError, match="tests/test_rolling.py"):
         _fix(agents, repo, trace, tmp_path, runner=runner, sandbox=sandbox)
     ((agent, _, _, decision, _),) = _refusals(trace)
-    assert agent == "fixer@0.1.0"
+    assert agent == "fixer@0.1.1"
     assert json.loads(decision) == {
         "allow": False,
         "path": "tests/test_rolling.py",

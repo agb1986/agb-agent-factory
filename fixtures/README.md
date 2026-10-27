@@ -31,9 +31,9 @@ fixtures/build.py                the build script
 
 The trees are ordinary Python projects whose own tests pass on both refs (a test that fails on
 `head` would hand the reviewer the answer). The files are linted and type-checked with the rest of
-the repository, so a planted defect must be one ruff and ty accept. The one exception is
-`off-by-one-red`, a fixture for the fixer agent: its `head` has a test that fails on purpose, and
-`tests/fixtures` expects exactly that.
+the repository, so a planted defect must be one ruff and ty accept. The exceptions are
+`off-by-one-red`, `mixed-red` and `sql-injection-red`, fixtures for the fixer agent: their `head` has
+a test that fails on purpose, and `tests/fixtures` expects exactly that.
 
 ## Fixture names
 
@@ -47,6 +47,8 @@ fixture**; add a new one instead.
 | `clean-refactor` | Renames `calc` to `invoice_total`, extracts two helpers, same behaviour | none |
 | `untested-change` | Adds the public `apply_discount` with no test | 1 (minor, testing) |
 | `untested-change-covered` | `untested-change`, plus a passing test file for `apply_discount` (a fixer eval: nothing to fix) | none |
+| `mixed-red` | `mixed`, plus `test_order_at_the_threshold_ships_free`, which fails on `head` (a fixer eval: fix `shipping.py` only) | 2 (major logic, info style) |
+| `sql-injection-red` | `sql-injection`, plus a test that passes a hostile name to `find_by_name` and fails on `head` (a fixer eval) | 1 (blocker, security) |
 | `mixed` | Three files: a `>=` flipped to `>` (bug), a camelCase local (nit), comment-only edits (harmless) | 2 (major logic, info style) |
 | `docs-only` | Edits `README.md` and `docs/usage.md` | none |
 | `test-only` | Adds two test cases | none |

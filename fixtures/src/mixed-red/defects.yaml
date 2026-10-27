@@ -1,0 +1,27 @@
+fixture: mixed-red
+summary: >-
+  Three files change. shipping.py adds an express surcharge and flips >= to > (a real bug).
+  format.py renames locals in camelCase (a style nit). config.py only gains comments (harmless).
+  One test already checks an order of exactly the threshold, and it fails.
+defects:
+  - id: free-shipping-boundary
+    file: shop/shipping.py
+    line_start: 12
+    line_end: 12
+    severity: major
+    category: logic
+    title: Free shipping no longer applies at exactly the threshold
+    snippet: "subtotal > FREE_SHIPPING_THRESHOLD"
+    description: >-
+      The docstring and the previous code give free shipping at or above the threshold. The new
+      comparison charges 499 for an order of exactly 5000.
+  - id: camel-case-locals
+    file: shop/format.py
+    line_start: 6
+    line_end: 7
+    severity: info
+    category: style
+    title: camelCase local name in a snake_case module
+    snippet: "wholeUnits"
+    description: >-
+      The local wholeUnits should be whole_units, as everywhere else in the code.
