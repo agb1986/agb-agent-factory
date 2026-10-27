@@ -6,8 +6,9 @@ repository root and nowhere else. `shell.run` takes an argument list, never a sh
 starts only the programs in `ALLOWED_PROGRAMS`, inside a throwaway Docker container that has no
 network and sees only the work tree. This is option (a) of `docs/decisions/0001-fixer-runtime.md`.
 
-The container is built from `tools/sandbox.Dockerfile` and tagged `SANDBOX_IMAGE`. It must already
-hold the dependencies of the repository under test, because nothing can be installed at run time.
+The container is built from `tools/sandbox.Dockerfile` and tagged `SANDBOX_IMAGE`, or runs the image
+named by `FACTORY_SANDBOX_IMAGE` when that is set (`sandbox_image`). It must already hold the
+dependencies of the repository under test, because nothing can be installed at run time.
 """
 
 import os
@@ -31,6 +32,9 @@ from tools._common import (
 
 SANDBOX_IMAGE = "factory-sandbox:0.1"
 """Tag of the image built from `tools/sandbox.Dockerfile`. Configuration: bump it with the file."""
+
+SANDBOX_IMAGE_ENV = "FACTORY_SANDBOX_IMAGE"
+"""Environment variable naming a different sandbox image, such as one with a target's dependencies."""
 
 DOCKERFILE = Path(__file__).with_name("sandbox.Dockerfile")
 
@@ -212,7 +216,7 @@ def docker_argv(root: Path, argv: Sequence[str], name: str) -> list[str]:
         f"{root / '.git'}:{_WORKDIR}/.git:ro",
         "--workdir",
         _WORKDIR,
-        SANDBOX_IMAGE,
+        sandbox_image(),
         *argv,
     ]
 
@@ -251,15 +255,25 @@ def run_in_sandbox(
     )
 
 
+def sandbox_image() -> str:
+    """Return the sandbox image: `FACTORY_SANDBOX_IMAGE` if set and not blank, else `SANDBOX_IMAGE`.
+
+    It is read on every call, so a test or a deployment can change it without a reload. In the
+    sibling-container setup of `docs/deploy.md` the name is resolved by the host's Docker daemon.
+    """
+    return os.environ.get(SANDBOX_IMAGE_ENV, "").strip() or SANDBOX_IMAGE
+
+
 def require_image() -> None:
-    """Raise `ToolUnavailableError` unless Docker runs and has `SANDBOX_IMAGE`."""
+    """Raise `ToolUnavailableError` unless Docker runs and has the image `sandbox_image` names."""
     if shutil.which("docker") is None:
         raise ToolUnavailableError("docker is not installed or not on PATH", hint="install docker")
+    image = sandbox_image()
     proc = subprocess.run(
-        ["docker", "image", "inspect", SANDBOX_IMAGE], capture_output=True, timeout=30, check=False
+        ["docker", "image", "inspect", image], capture_output=True, timeout=30, check=False
     )
     if proc.returncode != 0:
-        raise ToolUnavailableError(
-            f"sandbox image {SANDBOX_IMAGE} is missing",
-            hint=f"docker build -t {SANDBOX_IMAGE} -f {DOCKERFILE} {DOCKERFILE.parent}",
-        )
+        hint = f"docker build -t {image} -f {DOCKERFILE} {DOCKERFILE.parent}"
+        if image != SANDBOX_IMAGE:
+            hint = f"build or pull {image}, or unset {SANDBOX_IMAGE_ENV} to use {SANDBOX_IMAGE}"
+        raise ToolUnavailableError(f"sandbox image {image} is missing", hint=hint)
