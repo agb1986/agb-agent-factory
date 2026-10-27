@@ -1,0 +1,1435 @@
+# Labelled diffs for calibrating the diff-triage skip threshold (#20). Schema:
+# evals/calibration/labels.py; method and results: docs/jev-calibration.md.
+#
+# Each row is a merged pull request, stored as its repository URL and a commit pair, never as
+# source: `base` is the first parent of the merge commit and `head` is the merge commit, so the diff
+# is exactly what the pull request merged. scripts/calibrate.py fetches it from GitHub at run time.
+# Most of the repositories are private (`private: true`), so a run needs a GitHub token that can
+# read them.
+#
+# A diff is risky when its worst finding would be major or blocker on the reviewers' scale
+# (agents/code-reviewer/system.md), and safe otherwise. `source` says which test decided it: `panel`
+# for the full review panel's findings, `reader` for a careful reading of the diff. Every label
+# here is a reader label: the panel labelling pass was not run because the API keys were revoked
+# while the set was built, so the labelling spend is $0.00 of the $15 budget. Docs-only, test-only
+# and dependency-bump diffs were labelled by hand from their file lists and contents; the rest were
+# read in full. Rows the reader was unsure of are marked `needs_panel: true`, to be checked against
+# a full panel run; where the doubt was whether a major finding exists at all, the row is labelled
+# risky at severity major, so the doubt can only make the measured recall stricter. A reason may
+# cite a later pull request that fixed the defect, as evidence the defect was real.
+
+diffs:
+- id: agb-agent-factory#31
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: 288dba475b21f4b05259e6f324b380acb5d6aaf8
+  head: 10abda56a969f8937df0f6055413f249d1428c49
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: README setup lines and a plan note; no code changes.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#32
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: 544d2086b85149a388596b3a619f7d7321e97871
+  head: e9349b6c70cc9cbb7bc520510861f736be639823
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: new conventions file describing layout, exit codes and errors; no code changes.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#33
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: 157a242f510c3a9196514d0250ccbcf1a5e143d3
+  head: 2908c82693b9d23f8857e6fbde04cfb53e936243
+  private: true
+  label: risky
+  severity: major
+  reason: Insert without a column list breaks every trace write once a migration adds a column; persistence and migration code.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: agb-agent-factory#34
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: 498df411e3c5dab31624d6685b5a87f1c1419d29
+  head: e3909a8a0fcf805a07af5dae527e69d8ea3b408d
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: one conventions paragraph on the tool contract.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#35
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: a830d22700ffe83c91cf0d2d6689e7bc17e6915a
+  head: 83573b8d7a1984a2cde11cde3460001abaa1260b
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: conventions text on resolver rules, list output and the error handler.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#36
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: 3cfa46dc0ac077e3bd18d12bf5b7eb7db4021abd
+  head: d78d7a199ebed22ec6312383491dc4f0faccbadf
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: conventions edits on score confidence and pinned model versions.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#37
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: d1b7055519e66a132b67cdb8efb8bda261f69006
+  head: a97d43e94ccc5e8ea4e5108dfeee210320b64827
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: fixtures section in the conventions and a fixtures readme.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#38
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: 201a33904ad2b55c685bf3c9bc4b2d496c571754
+  head: 838569b4f6ee449e009bd552fbe5414cbf5168aa
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: conventions text on the runner output, hooks and error table.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#39
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: 39c08477f12a872677ab09a86e5deee9a0098d1e
+  head: 4877df98f3df3759a12146e0b459b98415bcf6f4
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: conventions paragraph on manifest validation and an example model id.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#40
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: 2230fd4d359934902b0593126a06d74062bf07fc
+  head: b5222c6915138238701b18f67d67a879f49f91ae
+  private: true
+  label: safe
+  severity: minor
+  reason: Tests only; the live test asserts a prompt cache hit, which can be flaky.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#41
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: 582afa8b4130b6ebe32b55f2589c7cb48fd8b102
+  head: 5b1e5465d5ad37f475a283b6ea4cbb7a7224630d
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: conventions section on retries, truncation and the trace row.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#42
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: adcfaa876a282181c7b227599f5498be1c4e0286
+  head: a6de3aede11594670168db4b8410ed7669135698
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: conventions paragraphs on eval grading and the eval command.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#43
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: 0a63f4cfa9b8a0a6fa4722bd7657cbbb09baa792
+  head: b21b959001748b98fabcf53ae6e91c5242815f30
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: conventions text on decision records and prototypes.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#44
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: 1b28d6f8a93754b915912db867f24f71dfb948cc
+  head: a6105830d483145679a4bd09972b8ed72221dffc
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: one conventions paragraph on reviewer categories.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#45
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: 1d03dd61c23fb3b8e235de8510aaeb1146d61a70
+  head: 46a6554772f85405a5005328cddde0766e1312cc
+  private: true
+  label: safe
+  severity: minor
+  reason: Warning-only dirty tree check with a fixed git argument list; a git failure silently counts as clean.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#46
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: 8edf2282446cc106611a2feabc66ace6532d786e
+  head: facc1f945e4c044a90d62107c7495723d2066d79
+  private: true
+  label: safe
+  severity: minor
+  reason: Reviewer prompt wording on reachability, line counting and severity, plus one prompt test; no runtime code.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#47
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: 09c2efcd3b4a0ac47075e6e178cadeb1b4680ea6
+  head: 08bf1afbcc205493df404c9a8c6ff6775aa98ea7
+  private: true
+  label: safe
+  severity: minor
+  reason: Judge prompt wording on cited line windows and failed reviewers; no runtime code.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#48
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: 07a2490819d95a3ebd55b15f6b6dcd41e772bdf3
+  head: aeff1c9f03597c2ecc303c8abf1751f5c3e13f82
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: conventions text on the placeholder triage and the review command.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#49
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: 5fb43a707f476eb429f8571977e2e9a9a688728a
+  head: 27e5060eb2646bab5051e8b0bf0c27ab52655a42
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: conventions text on the guard field, read-only tools and guard errors.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#50
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: 0ab9e93f71f5cfe259bcc128ec26edc91080ae0f
+  head: cbba85d6f331f9fd9b8e867bec790def8d0680ff
+  private: true
+  label: safe
+  severity: minor
+  reason: Adds two file tools to the read-only set so the guard skips them; consistent, but file reads now bypass the guard check.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: agb-agent-factory#51
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: aed666b2d06f46bbcc4858ecb97b406f803f9507
+  head: a899d6aee6c1030911bc690fa0da8730eade2cca
+  private: true
+  label: safe
+  severity: none
+  reason: Only a comment in a workflow file changes; no behaviour change.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#52
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: bd7e59413a48b6d2772b00b54cc83e63c156e443
+  head: d6a202ef8b77065d467cc52858ec19fa5b7101cc
+  private: true
+  label: safe
+  severity: none
+  reason: Tests and golden files only; no production code changes.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-agent-factory#53
+  repo: https://github.com/agb1986/agb-agent-factory
+  base: b8b3d1c1d13381988706bd7739872df5296d0ff8
+  head: e1967af50b50ce7d081b55d6c54a57021bd1d3c9
+  private: true
+  label: safe
+  severity: none
+  reason: Docs, golden output and budget tests only; no runtime behaviour changes.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-tools#21
+  repo: https://github.com/agb1986/agb-tools
+  base: 91ec4a7f3081ba0d9e6e69c54b5fa65e8d727773
+  head: 75835588bef4a1e8885a808952679ef980f6d58e
+  private: true
+  label: safe
+  severity: minor
+  reason: Subprocess wrapper uses argv lists and timeouts; only minor gaps such as uncaught permission errors and non-UTF-8 output.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-tools#22
+  repo: https://github.com/agb1986/agb-tools
+  base: 75835588bef4a1e8885a808952679ef980f6d58e
+  head: 77ec495c226ee78d356462376452208fd5873802
+  private: true
+  label: safe
+  severity: minor
+  reason: Atomic write and append helpers are sound; only minor gaps like no directory fsync and a torn last line breaking reads.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-tools#23
+  repo: https://github.com/agb1986/agb-tools
+  base: 77ec495c226ee78d356462376452208fd5873802
+  head: 770f5bfb7137df53b45702f88cb48c07a3693914
+  private: true
+  label: risky
+  severity: major
+  reason: Release script checks the installed version after pushing tag and release; stale metadata likely fails every release midway.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: agb-tools#24
+  repo: https://github.com/agb1986/agb-tools
+  base: 770f5bfb7137df53b45702f88cb48c07a3693914
+  head: ddf9e389f0a1369d7e6dcf11da36c99eabab86fa
+  private: true
+  label: safe
+  severity: minor
+  reason: CI and pre-commit config only; actions pinned by tag rather than commit, a minor supply-chain note.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-tools#26
+  repo: https://github.com/agb1986/agb-tools
+  base: edf644c52d63afafabafaeae21fca01b439b5e6d
+  head: 0c0b6dd02e9177b0ffb0cc32b8cc87537ade0efa
+  private: true
+  label: safe
+  severity: minor
+  reason: Read-only schema dump of the command tree with tests; at most minor omissions like group-level options.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-tools#27
+  repo: https://github.com/agb1986/agb-tools
+  base: 655bf9df56446e971969e5d7df57d06a35d20c8a
+  head: edf644c52d63afafabafaeae21fca01b439b5e6d
+  private: true
+  label: safe
+  severity: none
+  reason: Type-checker ignore comment on an optional import and one extra test assertion.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-tools#28
+  repo: https://github.com/agb1986/agb-tools
+  base: 0c0b6dd02e9177b0ffb0cc32b8cc87537ade0efa
+  head: 55a0ac69bb08ca3ecd1347ddfa35bcfcea0ddfa5
+  private: true
+  label: safe
+  severity: minor
+  reason: Doctor runs local probes with short timeouts; permission check refactor still refuses wide modes; only a tiny race.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-tools#29
+  repo: https://github.com/agb1986/agb-tools
+  base: 55a0ac69bb08ca3ecd1347ddfa35bcfcea0ddfa5
+  head: ae0969df881d7b7c8ccf2606bf7fb9aff5946ab5
+  private: true
+  label: risky
+  severity: major
+  reason: 'Handoff read creates the data directory as a side effect (fixed later in #43); write with no flags can block on stdin.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-tools#35
+  repo: https://github.com/agb1986/agb-tools
+  base: e8e9d2bae1273b6c86d41d4f6a97e25b1b20c94a
+  head: a12012d13bab0367ad6931dcf9341863cfc040c8
+  private: true
+  label: safe
+  severity: minor
+  reason: Skill doc and installer; installer force-removes only its own skill folder before relinking, no wider deletion risk.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-tools#36
+  repo: https://github.com/agb1986/agb-tools
+  base: a12012d13bab0367ad6931dcf9341863cfc040c8
+  head: 9cb681c24fe19279effa71ff322b24359b8ec64d
+  private: true
+  label: risky
+  severity: major
+  reason: 'Sections run in threads; handoff read creating the data dir races the doctor check, so output depends on timing (fixed in #43).'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-tools#37
+  repo: https://github.com/agb1986/agb-tools
+  base: 9cb681c24fe19279effa71ff322b24359b8ec64d
+  head: 5193da6b49a94876ac67f513982582fa4efed5fd
+  private: true
+  label: safe
+  severity: none
+  reason: 'Tests only: loosens one help-text assertion; no production code.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-tools#42
+  repo: https://github.com/agb1986/agb-tools
+  base: fb4371ae5df5aa2b891bf25002a8a011a63a09e0
+  head: b81c0e6563d1b366e70dd7d12d1d290c2ec7de3a
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: README status and changelog for a release; no code.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-tools#43
+  repo: https://github.com/agb1986/agb-tools
+  base: 0ceed5b5d2371bcc66335029d127988b0204f10c
+  head: 11f9d2f59d708b9b03934d81bc809e825698ebf9
+  private: true
+  label: safe
+  severity: minor
+  reason: Dry-run stops before the statement fetch and writes nothing; handoff read no longer creates directories. Small and tested.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-trader#13
+  repo: https://github.com/agb1986/agb-trader
+  base: 6eadbd0a13d3c5a5a15b80259b68fbe1cabd0532
+  head: a39dd5c9c72272152342b66ab232984f78579df6
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: nine new architecture spec pages in Markdown; no code.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-trader#47
+  repo: https://github.com/agb1986/agb-trader
+  base: db2089166a13667c3416710862c9a137f71c0ee4
+  head: 808a58aa17f7cd61a429890cffd7ee51087b56c2
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: an operator setup checklist and a build-plan note; no code.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-trader#49
+  repo: https://github.com/agb1986/agb-trader
+  base: ffbf12b59e38ba7913d1a647e3d97fe92d33c25d
+  head: 0431352115ccf327bc9e78322902a8be87ce40da
+  private: true
+  label: risky
+  severity: major
+  reason: New trading cost model; fee constants and impact formulas need domain checking, and one regulatory fee may hit the wrong side.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: agb-trader#52
+  repo: https://github.com/agb1986/agb-trader
+  base: 0431352115ccf327bc9e78322902a8be87ce40da
+  head: c2c7af71965733ecd80204bfeb71ac01dc6a2967
+  private: true
+  label: safe
+  severity: none
+  reason: Build tooling picks a worker model and effort per ticket, plus docs; nothing touches trading, data or the runtime.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-trader#55
+  repo: https://github.com/agb1986/agb-trader
+  base: 0ad83642cbc51ec6a0d3cfa20492d74c631bf47d
+  head: 5e2c84bd962ffa43ea2af4d5094aaaa30eecfe33
+  private: true
+  label: risky
+  severity: major
+  reason: Memory tuning did not stop the bulk copy running out of memory and split partitions into many files; later PR 57 replaced it.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-trader#56
+  repo: https://github.com/agb1986/agb-trader
+  base: 5e2c84bd962ffa43ea2af4d5094aaaa30eecfe33
+  head: 7ec52e91221d2faed5e76520606a58a8f87ab60f
+  private: true
+  label: safe
+  severity: minor
+  reason: Adds a zip signature check and a clearer error with the key redacted, plus tests; touches only the failure path.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-trader#57
+  repo: https://github.com/agb1986/agb-trader
+  base: 7ec52e91221d2faed5e76520606a58a8f87ab60f
+  head: 0a67bc6a0a50f2be380ee4479ab22d565fdcfca0
+  private: true
+  label: risky
+  severity: major
+  reason: Rewrites the lake bulk load as yearly appends; correctness rests on append and memory behaviour, and only one table is tested.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: agb-trader#58
+  repo: https://github.com/agb1986/agb-trader
+  base: 0a67bc6a0a50f2be380ee4479ab22d565fdcfca0
+  head: b0d869fa6528f250668976ff85628f134698d3bc
+  private: true
+  label: safe
+  severity: minor
+  reason: Points query spill files beside a writable lake, with tests; a small setting with an obvious fallback.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-trader#60
+  repo: https://github.com/agb1986/agb-trader
+  base: 3b39b309ee068d3282dbf3d9a81b9040ff3f3b43
+  head: fc9df020d21b1696eb78b449d70d55ca91e656a2
+  private: true
+  label: risky
+  severity: major
+  reason: Lowers the pre-trade universe size gate; a looser band could let a truncated universe trade, justified only by one measurement.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: agb-trader#66
+  repo: https://github.com/agb1986/agb-trader
+  base: 0afe640bb194154dbf1bb5b70abdf0be733a70a5
+  head: 4ff324dc0aac8cbdfa0e016a3ae0a5d08feb2208
+  private: true
+  label: risky
+  severity: major
+  reason: Renames a migration to a new version; a database that already ran the old one may re-apply it or fail at deploy.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: agb-trader#77
+  repo: https://github.com/agb1986/agb-trader
+  base: a4d78bc9b81f1dabfd8c4e0fa6d7b3cd76241035
+  head: 6efd0c592d9ddeef4943e1dd1ae6002d2fee2733
+  private: true
+  label: risky
+  severity: major
+  reason: Recreates the audit view in a migration and changes liquidation token comparison; the view must match earlier definitions not shown.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: agb-trader#79
+  repo: https://github.com/agb1986/agb-trader
+  base: 6efd0c592d9ddeef4943e1dd1ae6002d2fee2733
+  head: 5c0af0cd82f5ba24664b234e1f3e93f60a24038b
+  private: true
+  label: safe
+  severity: none
+  reason: Comment changes in the compose file and an env example only; no behaviour changes.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-trader#80
+  repo: https://github.com/agb1986/agb-trader
+  base: 5c0af0cd82f5ba24664b234e1f3e93f60a24038b
+  head: 29e19ce573b4800c28e59d4f00bdba0dd43b524d
+  private: true
+  label: safe
+  severity: minor
+  reason: 'Live-only test and docs: strict parity replaced by bounded divergence checks; no production code changes.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-trader#85
+  repo: https://github.com/agb1986/agb-trader
+  base: 59239cfa4d685af6dccd093ae5cb77dfb3ed0096
+  head: 3d97364791181f3e66b7f213a1a818bff7bdc736
+  private: true
+  label: risky
+  severity: major
+  reason: Widens the fill read window by a day in reconcile; relies on dedup by execution id and on fills matching only this basket.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: agb-trader#86
+  repo: https://github.com/agb1986/agb-trader
+  base: 3d97364791181f3e66b7f213a1a818bff7bdc736
+  head: d25d0743be8220cb117a54e84e95e0de5dd16e2a
+  private: true
+  label: risky
+  severity: major
+  reason: Unauthenticated UI now binds every container interface; host port stays loopback but peer containers on its network can reach it.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: agb-trader#92
+  repo: https://github.com/agb1986/agb-trader
+  base: 970c3b7b409d744b37600581b500b4c62f4ec5f2
+  head: 06d77fb7dea5a41f5cd7b18574defe1dfd3bd8b0
+  private: true
+  label: safe
+  severity: none
+  reason: 'Tests only: one test reads the filing date back from the row instead of hard-coding it.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-trader#99
+  repo: https://github.com/agb1986/agb-trader
+  base: 27f04f79c4e0a4200639e3c08bd0f952ea4bb05e
+  head: 4d2d154c0274e98f124856df214e55a2604ecc5a
+  private: true
+  label: safe
+  severity: minor
+  reason: One-line column name fix in an operator check script; it only changes a printed line.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-trader#100
+  repo: https://github.com/agb1986/agb-trader
+  base: 4d2d154c0274e98f124856df214e55a2604ecc5a
+  head: 5e70eda163bd5bd42c09361fa75ac610887d5b7b
+  private: true
+  label: safe
+  severity: minor
+  reason: Raises one container's memory cap in the compose file with a comment; no logic changes.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-trader#101
+  repo: https://github.com/agb1986/agb-trader
+  base: 5e70eda163bd5bd42c09361fa75ac610887d5b7b
+  head: 64b1efc0609ccb8872faaa5fc41a2b3bd0a323a8
+  private: true
+  label: risky
+  severity: major
+  reason: Rewrites backtest per-name data loading and trims the certification window with no new tests; changes function signatures and gate inputs.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: agb-trader#102
+  repo: https://github.com/agb1986/agb-trader
+  base: 1b9cfe16fc94bb7dd5c34a3d3e516e9a0c4e35a6
+  head: f2450555479ad2ea4eb34bdd7cb735a320eefd0d
+  private: true
+  label: risky
+  severity: major
+  reason: New remote shell and SQL deploy script makes a trading model live over SSH; the new import guard may block legitimate server imports.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: agb-trader#103
+  repo: https://github.com/agb1986/agb-trader
+  base: 64b1efc0609ccb8872faaa5fc41a2b3bd0a323a8
+  head: 1b9cfe16fc94bb7dd5c34a3d3e516e9a0c4e35a6
+  private: true
+  label: safe
+  severity: minor
+  reason: Small, tested rounding fix to the backtest fill-price tick tolerance.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: ai-data-store#1
+  repo: https://github.com/agb1986/ai-data-store
+  base: 1511d25cc7648bb07b0f340e66f23deb8e340f59
+  head: fb35ef2a4c364ca599dac7b8d9aa1b84ba363829
+  private: false
+  label: risky
+  severity: major
+  reason: Existing installs keep their old env file, so the dashboard password is empty and Basic auth accepts an empty password.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: ai-data-store#2
+  repo: https://github.com/agb1986/ai-data-store
+  base: fb35ef2a4c364ca599dac7b8d9aa1b84ba363829
+  head: be253b6bba4c3cb0c7e6bea8f3fa1fd130e7af7b
+  private: false
+  label: risky
+  severity: blocker
+  reason: 'Endpoint calls the decorated MCP tool object, not a function, so every POST fails with 500 (fixed in #4); no input type checks.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: ai-data-store#3
+  repo: https://github.com/agb1986/ai-data-store
+  base: be253b6bba4c3cb0c7e6bea8f3fa1fd130e7af7b
+  head: d39eb969151a66053f1957fbfa538071015c0893
+  private: false
+  label: risky
+  severity: major
+  reason: 'Hook syntax crashes under host Python 3.9 (fixed in #9), misses stages written via Bash (#5); global settings rewritten non-atomically.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: ai-data-store#4
+  repo: https://github.com/agb1986/ai-data-store
+  base: d39eb969151a66053f1957fbfa538071015c0893
+  head: bc741c243b06b73ff8ae2356f3d5ff83cf65981b
+  private: false
+  label: safe
+  severity: minor
+  reason: Moves the insert into a plain helper shared by tool and endpoint; correct fix, only leftover gap is missing input type checks.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: ai-data-store#5
+  repo: https://github.com/agb1986/ai-data-store
+  base: bc741c243b06b73ff8ae2356f3d5ff83cf65981b
+  head: 9c374aa85e27de0a16faadc11d2d66687300569c
+  private: false
+  label: risky
+  severity: major
+  reason: Hook now trusts the first stdout line as a path, opened relative to its own cwd; any command echoing a path re-logs it as a duplicate.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: ai-data-store#8
+  repo: https://github.com/agb1986/ai-data-store
+  base: bf3f6b2ed53b2a2a5ce5bc73d3ee0071daf551fa
+  head: adb08a6b80d79fe032c6ab51138477fdd9bf4cbd
+  private: false
+  label: safe
+  severity: minor
+  reason: Standard CI workflow that builds and publishes an image; the local build fallback still works, so nothing existing breaks.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: ai-data-store#9
+  repo: https://github.com/agb1986/ai-data-store
+  base: adb08a6b80d79fe032c6ab51138477fdd9bf4cbd
+  head: f7ccbaa8ec9e1afc0cb8e1d54de51eaffd30b1b2
+  private: false
+  label: safe
+  severity: none
+  reason: One-line future-annotations import so newer type syntax parses on older Python; no behaviour change.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: cannabot#6
+  repo: https://github.com/agb1986/cannabot
+  base: acec64f004324f96e1eb11b00f27bc76a8044f3f
+  head: cce0c038f7e1e776fd29970d334feb5c5f201959
+  private: true
+  label: risky
+  severity: major
+  reason: Capture script skips TLS verification while sending account credentials, password on the command line; memo contradicts itself.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: cannabot#7
+  repo: https://github.com/agb1986/cannabot
+  base: cce0c038f7e1e776fd29970d334feb5c5f201959
+  head: 1bf85c7174c1908444a0bb157d5d54f5ed290598
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: a spike design note on device-control targets; no code.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: cannabot#8
+  repo: https://github.com/agb1986/cannabot
+  base: 1bf85c7174c1908444a0bb157d5d54f5ed290598
+  head: 399d6d5c671a087f8cd73188434cfe864b6be808
+  private: true
+  label: safe
+  severity: minor
+  reason: Docs, gitignore and a read-only offline flow parser that redacts keys; nothing writes to devices. Only a dangling promised dump.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: cannabot#9
+  repo: https://github.com/agb1986/cannabot
+  base: 399d6d5c671a087f8cd73188434cfe864b6be808
+  head: 87cb143c0560f34e64700ea87551f073af5edaec
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: a spike runbook section on interception; no code.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: cannabot#10
+  repo: https://github.com/agb1986/cannabot
+  base: 87cb143c0560f34e64700ea87551f073af5edaec
+  head: 5b5e99bf7644c1d370a9e8c156f67058d3b435d9
+  private: true
+  label: safe
+  severity: none
+  reason: 'Docs only: a spike runbook update on the emulator route; no code.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: cannabot#11
+  repo: https://github.com/agb1986/cannabot
+  base: 5b5e99bf7644c1d370a9e8c156f67058d3b435d9
+  head: 8ed2a2890f8961e82bce8f0f4494d7f0a792ca98
+  private: true
+  label: risky
+  severity: major
+  reason: 'First device-write tool: restore publishes with no dry run or commit guard, skips validation, targets first device not backed-up one.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: cannabot#18
+  repo: https://github.com/agb1986/cannabot
+  base: 8bbd2784f1bab11a1478f4393cd5d963386b7c3e
+  head: fdbd30a203ef6e28cb0e903a96f06ede06bc58f3
+  private: true
+  label: safe
+  severity: minor
+  reason: Device sweep stops at the pinned serial and health timestamps drop sub-seconds; small, obviously correct, tested.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: cannabot#23
+  repo: https://github.com/agb1986/cannabot
+  base: 730d6af7538c0dea67bf4496b9612383b463c1ac
+  head: 90c30884ff543b8a245892613d8a25203c1a65b4
+  private: true
+  label: safe
+  severity: none
+  reason: Compose forwards the metrics env vars, plus a test that every example env key reaches compose; config only, trivially correct.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: cannabot#24
+  repo: https://github.com/agb1986/cannabot
+  base: 90c30884ff543b8a245892613d8a25203c1a65b4
+  head: 19ae66c7aa12cb3d7f10c0a75106c0c5deb13330
+  private: true
+  label: safe
+  severity: minor
+  reason: Reading age measured against now and clamped at zero; telemetry only, tested. The clamp can hide clock skew, minor.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: cannabot#26
+  repo: https://github.com/agb1986/cannabot
+  base: 17a518f7759f25274720c96793984b36e86014a2
+  head: 77f6b2b99095bb58462e0965cbfb0e1727f83aac
+  private: true
+  label: safe
+  severity: minor
+  reason: Ramp start level clamped to the actuator's own band instead of 0 to 100; obviously correct narrowing with a test.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: cannabot#27
+  repo: https://github.com/agb1986/cannabot
+  base: 77f6b2b99095bb58462e0965cbfb0e1727f83aac
+  head: 3ec5d4345a5554cf7321be22458bbd27b4bf010f
+  private: true
+  label: safe
+  severity: minor
+  reason: Timeline reads the event list from the wrapped response and fails loudly on a non-array; small UI fix with shape tests.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: cannabot#29
+  repo: https://github.com/agb1986/cannabot
+  base: 7d171e1583d2f62b95108c6952936f687f24b2d7
+  head: 32fa56e6ed98243a72ad2c389355024fbb0639d3
+  private: true
+  label: risky
+  severity: major
+  reason: Grafana ships a default admin password and anonymous access, Prometheus lifecycle API is open, all bound to every interface.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: cannabot#32
+  repo: https://github.com/agb1986/cannabot
+  base: 42eedbd86df6163360d9bc0c5ceee342b27568cd
+  head: cfaa70d19bbf78c933478d755cf6076bc0bdedab
+  private: true
+  label: risky
+  severity: major
+  reason: 'Lets rules drive actuators from optional probes, widens API enums, edits shared console scripts; likely tied to break #33 fixed.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: cannabot#33
+  repo: https://github.com/agb1986/cannabot
+  base: cfaa70d19bbf78c933478d755cf6076bc0bdedab
+  head: 7acd94a9e77dacf8f2ab9f385bdc52170c146635
+  private: true
+  label: safe
+  severity: minor
+  reason: Serves console files with revalidation and tests for duplicate top-level names across scripts; small, contained fix.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: cannabot#34
+  repo: https://github.com/agb1986/cannabot
+  base: 7acd94a9e77dacf8f2ab9f385bdc52170c146635
+  head: 50f2e8808757c9def01e2dfacea4d514d06a72d5
+  private: true
+  label: safe
+  severity: none
+  reason: Android app shows four optional probe readings only when present; nullable fields with defaults, display only.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: cannabot#35
+  repo: https://github.com/agb1986/cannabot
+  base: 50f2e8808757c9def01e2dfacea4d514d06a72d5
+  head: 4a194247aaf0e30c88de8294f861e35ee747ef50
+  private: true
+  label: risky
+  severity: major
+  reason: Changes how managed rule decisions are logged and alerted, settled by matching heartbeat writes; skipped-pass paths unclear.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: cannabot#38
+  repo: https://github.com/agb1986/cannabot
+  base: cf0e7faf953beb100f9725d258be6242d5931af5
+  head: b8e20096a843a29e21b239fecf6c3802d630df76
+  private: true
+  label: safe
+  severity: minor
+  reason: Retries only a narrowly matched transient 400, at most three attempts with short backoff; other errors still raise. Tested.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: cannabot#40
+  repo: https://github.com/agb1986/cannabot
+  base: db8a9643a15c448ac64843bd64d3cb1936902e93
+  head: 3e482e867b775fd24ca8e29b9f3cfaf343aa7f02
+  private: true
+  label: risky
+  severity: major
+  reason: 'Fixes #39 by changing seeded heater thresholds; unclear existing grows get new defaults, and tick timestamp format changes.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: finance-agent#4
+  repo: https://github.com/agb1986/finance-agent
+  base: 70f585c06199f19166816981f734507bfe2ac862
+  head: 0e92a95a9e600bea8f89abd014c7382a70bb772f
+  private: false
+  label: safe
+  severity: none
+  reason: 'Docs only: README overview, skills and setup guide; no code.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: finance-agent#7
+  repo: https://github.com/agb1986/finance-agent
+  base: cfded95f1301c0782d3cc11ff03a250062e7ba60
+  head: 36aea1fed10a2d59ebfff713c1a7af1844ccd78b
+  private: false
+  label: safe
+  severity: minor
+  reason: Data-only trim of a news keyword filter; worst case is fewer or different articles matched.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: finance-agent#13
+  repo: https://github.com/agb1986/finance-agent
+  base: 83ffb5b9d48b3e320ae3b7ed4b7896122304bfa1
+  head: 1e5b9d38dea21c6538e10012d51098d32d1f0f9b
+  private: false
+  label: safe
+  severity: minor
+  reason: Adds a logging config file and README note; every description has a simpler fallback if formatting fails.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: torrent-agent#2
+  repo: https://github.com/agb1986/torrent-agent
+  base: 53ae921ed079c6f7c72e673a8a0e6b07020ef285
+  head: acde9fbc27b60712c2cf0f10b96c316051e53056
+  private: false
+  label: safe
+  severity: minor
+  reason: Merges two search sources with failures tolerated and a simple dedupe; the larger result cap only costs tokens.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: torrent-agent#3
+  repo: https://github.com/agb1986/torrent-agent
+  base: acde9fbc27b60712c2cf0f10b96c316051e53056
+  head: f4a08e159e48a0293cb65969ba569ebfd3594d49
+  private: false
+  label: safe
+  severity: minor
+  reason: Skill docs plus helper scripts; subprocess calls use argument lists and torrent removal keeps the downloaded data.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: torrent-agent#7
+  repo: https://github.com/agb1986/torrent-agent
+  base: 52312d579c6df4ff8ffe17f005926f5f7054998f
+  head: e53c4ef31e532a4f9a71fff4f1382876351f3bdb
+  private: false
+  label: safe
+  severity: minor
+  reason: Removal is scoped to explicit torrent ids, keeps the data, has a dry-run mode and is covered by tests.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: torrent-agent#10
+  repo: https://github.com/agb1986/torrent-agent
+  base: b18195a7c81254f3ff32417ea3b18f785db9a4ca
+  head: 4c94ee4f4cffd7ee7db37741548cadc69d7ff0fd
+  private: false
+  label: safe
+  severity: none
+  reason: Documentation and a host DNS config drop-in only; no application code changes.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: torrent-agent#11
+  repo: https://github.com/agb1986/torrent-agent
+  base: 4c94ee4f4cffd7ee7db37741548cadc69d7ff0fd
+  head: 851b3c83d8a89d92e60ee13fe89989851cf84e89
+  private: false
+  label: safe
+  severity: minor
+  reason: TOML parser fallback and future imports look correct, but whether the rest of the code runs on the older Python is not visible.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: torrent-agent#12
+  repo: https://github.com/agb1986/torrent-agent
+  base: 851b3c83d8a89d92e60ee13fe89989851cf84e89
+  head: e0ac1f2bdaa7231e1715a4e5e16f878a4df72b94
+  private: false
+  label: risky
+  severity: blocker
+  reason: The new leak test hardcodes the live bot token, committing a real credential; a later PR swaps in a fake one.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: torrent-agent#13
+  repo: https://github.com/agb1986/torrent-agent
+  base: e0ac1f2bdaa7231e1715a4e5e16f878a4df72b94
+  head: c1a9f1d03a5b90793e2539539a0c606bb9022944
+  private: false
+  label: safe
+  severity: none
+  reason: 'Tests only: a leak test''s token literal becomes an obvious fake; no production code.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: torrent-agent#14
+  repo: https://github.com/agb1986/torrent-agent
+  base: c1a9f1d03a5b90793e2539539a0c606bb9022944
+  head: 8dabb1d94341a5c1fbb4fa98b45f67af3f27ce24
+  private: false
+  label: risky
+  severity: major
+  reason: Empty host counts as local so files move on the wrong box; the merge move silently overwrites existing files and deletes the source.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: torrent-agent#15
+  repo: https://github.com/agb1986/torrent-agent
+  base: 8dabb1d94341a5c1fbb4fa98b45f67af3f27ce24
+  head: f391b944286e771b71776547d089947076572354
+  private: false
+  label: safe
+  severity: none
+  reason: Compose file now reads a config directory from an env var with the old path as default; behaviour unchanged when unset.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: torrent-agent#17
+  repo: https://github.com/agb1986/torrent-agent
+  base: 3efad99ea26cc18d88cbca1068d89d78604bce36
+  head: 2fa63f11717de67e8253b25f738ba06be0237542
+  private: false
+  label: safe
+  severity: minor
+  reason: Captures output to detect a failed library scan; process-wide redirect can misroute prints in threads but only affects messages.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: torrent-agent#18
+  repo: https://github.com/agb1986/torrent-agent
+  base: 2fa63f11717de67e8253b25f738ba06be0237542
+  head: cc03c88a43a31f4f631d9a00e81a516ec87f6558
+  private: false
+  label: risky
+  severity: major
+  reason: Printing the IMDb note ahead of the output makes the runner lose the artifact path, fixed later; it also drops season words.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: torrent-agent#19
+  repo: https://github.com/agb1986/torrent-agent
+  base: cc03c88a43a31f4f631d9a00e81a516ec87f6558
+  head: f4ba8459078156e96e045b0b1aac9a85eeb5a935
+  private: false
+  label: safe
+  severity: none
+  reason: 'Docs only: README, deploy README and skill docs brought in line with the code.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: torrent-agent#21
+  repo: https://github.com/agb1986/torrent-agent
+  base: 7fe831eff83f3b26d6477d876d8fb2ba26e76022
+  head: e344f53886c60ff005d31f657b90e76558193369
+  private: false
+  label: safe
+  severity: minor
+  reason: Docs plus an update script that only fast-forwards and restarts services after tests pass.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: torrent-agent#22
+  repo: https://github.com/agb1986/torrent-agent
+  base: e344f53886c60ff005d31f657b90e76558193369
+  head: 6f95379a86b3f1d8865010b700a3b8cf04a8e2b9
+  private: false
+  label: risky
+  severity: major
+  reason: Emptied defaults make a missing host mean local move, so installs relying on old defaults silently stop rsyncing and lose destinations.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: torrent-agent#23
+  repo: https://github.com/agb1986/torrent-agent
+  base: 6f95379a86b3f1d8865010b700a3b8cf04a8e2b9
+  head: b868272dd318e0d236bfefe313836e0df2e5a5cf
+  private: false
+  label: risky
+  severity: major
+  reason: Auth script and compose resolve the default data dir from different bases, so auth lands elsewhere; existing installs remount empty dirs.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: torrent-agent#25
+  repo: https://github.com/agb1986/torrent-agent
+  base: 0b99067198b42586c95b6787e5a74583066af8b2
+  head: 1baf4b89b01251544fdbc7da9ae813aff2081d48
+  private: false
+  label: risky
+  severity: major
+  reason: Doctor's checks honour the bot's proxy env, so LAN services it is told to use read as failed; a later PR fixes exactly this.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: torrent-agent#26
+  repo: https://github.com/agb1986/torrent-agent
+  base: 1baf4b89b01251544fdbc7da9ae813aff2081d48
+  head: 2fdee03d65e3e3525ddb1d1216582db945c728dd
+  private: false
+  label: safe
+  severity: minor
+  reason: Diagnostic script only; LAN and other checks now skip the proxy, so the worst case is a misleading health report.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: torrent-agent#28
+  repo: https://github.com/agb1986/torrent-agent
+  base: e72dc9f9dba37eece3023a29dcab581a164e0b9b
+  head: 902c1ebe255ee705d1c74974399feda0468043fb
+  private: false
+  label: safe
+  severity: none
+  reason: 'Docs only: LICENSE and two READMEs corrected after a docs drift audit.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: torrent-agent#30
+  repo: https://github.com/agb1986/torrent-agent
+  base: 4b1be1bd208a63e71cb6fcfea912b3ae647aae18
+  head: b0b3f964ab70657c93b99a1932f68ebe5149c429
+  private: false
+  label: safe
+  severity: minor
+  reason: Small parsing fix with a regression test; scanning every line for an existing json path can at worst pick a stray line.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: torrent-agent#31
+  repo: https://github.com/agb1986/torrent-agent
+  base: d5f868d55c7d150b833532df723739e9ab40dace
+  head: a7efdaf9eaf35de3b684e694b8ef0a35a264458c
+  private: false
+  label: risky
+  severity: major
+  reason: Changes how episodes are numbered and filed; an absolute number rebuilt from a quality token or a gappy listing misfiles silently.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: torrent-agent#32
+  repo: https://github.com/agb1986/torrent-agent
+  base: a7efdaf9eaf35de3b684e694b8ef0a35a264458c
+  head: 0135dcc9b598006c98a5341498241d9bfbae5c18
+  private: false
+  label: safe
+  severity: minor
+  reason: Title rejoin is guarded and falls back to the bare title; dropping deprecated claims is correct; failures still escalate.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: torrent-agent#34
+  repo: https://github.com/agb1986/torrent-agent
+  base: c180691ced6ab373bba5632a750fd53e702d7afd
+  head: fb63400a589c2d7e504679c27e0a2c0adfa76a93
+  private: false
+  label: risky
+  severity: major
+  reason: Adds recursive deletion of extras folders and empty dirs after delivery; can remove seeding data or real content named like extras.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: xelpfin#2
+  repo: https://github.com/agb1986/xelpfin
+  base: 26b07be47d782a05c483d6b49698b46c7df29e90
+  head: 7c1fec978e2f4b8839a64c2143bea7feffddc8d0
+  private: true
+  label: safe
+  severity: none
+  reason: 'Tests only: integration expectations updated for one new fixture film.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: xelpfin#3
+  repo: https://github.com/agb1986/xelpfin
+  base: 7c1fec978e2f4b8839a64c2143bea7feffddc8d0
+  head: fca5071719f56a254cbb6ba4e9332474c7759f0f
+  private: true
+  label: risky
+  severity: major
+  reason: 'History rows keyed by episode id duplicate when an episode is drawn twice (later fixed by #74); the auto-skip playback effect is untested.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: xelpfin#42
+  repo: https://github.com/agb1986/xelpfin
+  base: 18504917d964b347cc8bb4cd3764e56139fc5981
+  head: 5347d1015ee0d3e3a34acb8048f3e9f092851f5e
+  private: true
+  label: safe
+  severity: minor
+  reason: Player error classification by code, well tested; the worst case is a wrong error message or kind.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: xelpfin#44
+  repo: https://github.com/agb1986/xelpfin
+  base: 8641473a44d073e57871116a389ff530f5707288
+  head: 810d6be01715230ed719bb46d6dd8dcd4c828cf3
+  private: true
+  label: risky
+  severity: major
+  reason: Buttons now fire on press-out, so click-only sources (mouse, keyboard, TalkBack) may never press and cancelled touches may still press.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: xelpfin#46
+  repo: https://github.com/agb1986/xelpfin
+  base: d0a4ed76c035c586cac6d1f925916027d1f5e98b
+  head: 94c76175bd335bfffe2e1cf5a18a4cacfebcf123
+  private: true
+  label: safe
+  severity: none
+  reason: Only ignores agent worktrees in gitignore, lint, jest and tsconfig.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: xelpfin#48
+  repo: https://github.com/agb1986/xelpfin
+  base: 810d6be01715230ed719bb46d6dd8dcd4c828cf3
+  head: d0a4ed76c035c586cac6d1f925916027d1f5e98b
+  private: true
+  label: safe
+  severity: minor
+  reason: New CI, release and dependabot workflows with pinned actions; the release job writes the signing key carefully and removes it after.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: xelpfin#50
+  repo: https://github.com/agb1986/xelpfin
+  base: 976560bfec03383ce08c811e3014ba6a95e3f7f7
+  head: cc6784e2213560b7710ebb075d2108e79272c2fe
+  private: true
+  label: safe
+  severity: minor
+  reason: Sized WebP image URLs and next-page poster prefetch, tested; the worst case is extra or failed image requests that load later anyway.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: xelpfin#52
+  repo: https://github.com/agb1986/xelpfin
+  base: cceddbfbb3dd029fd7cba0ecd00bfc002a478d5a
+  head: 9cc22b110a639da9c343061e4a399a5c105c6c51
+  private: true
+  label: safe
+  severity: minor
+  reason: Test scripts and a CI matrix for older server releases; the wipe deletes only per-version test config dirs, and the version is validated.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: xelpfin#53
+  repo: https://github.com/agb1986/xelpfin
+  base: 94c76175bd335bfffe2e1cf5a18a4cacfebcf123
+  head: 25d4fbc88dd3895caa1ecb93c37bda404150d714
+  private: true
+  label: safe
+  severity: none
+  reason: 'Test-only changes: a module warm-up and wait helpers to remove flakiness; no app code touched.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: xelpfin#55
+  repo: https://github.com/agb1986/xelpfin
+  base: 7c54723c744f83b6178c064a88926b215f855483
+  head: cceddbfbb3dd029fd7cba0ecd00bfc002a478d5a
+  private: true
+  label: safe
+  severity: none
+  reason: 'Dev-dependency bump: jest and @types/jest 29 to 30 in package.json and the lockfile.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: xelpfin#60
+  repo: https://github.com/agb1986/xelpfin
+  base: cc6784e2213560b7710ebb075d2108e79272c2fe
+  head: 7c54723c744f83b6178c064a88926b215f855483
+  private: true
+  label: risky
+  severity: major
+  reason: Major version bump of the persistence library with no app changes; a storage or API change could lose saved settings or break the build.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: xelpfin#62
+  repo: https://github.com/agb1986/xelpfin
+  base: b95fa6dea62d4f70cca8bc116a372a9b897c55c0
+  head: 6ec9c8105696599dc18dbdea741c61eb3a8368e1
+  private: true
+  label: safe
+  severity: minor
+  reason: Test-server scripts now wait on health and retry setup requests with timeouts; dev tooling only.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: xelpfin#63
+  repo: https://github.com/agb1986/xelpfin
+  base: 6ec9c8105696599dc18dbdea741c61eb3a8368e1
+  head: 2175e47f16603af1626561a674847fbf68ac88db
+  private: true
+  label: safe
+  severity: none
+  reason: Dependabot config now holds back React and toolchain major updates; no runtime effect.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: xelpfin#68
+  repo: https://github.com/agb1986/xelpfin
+  base: fffe7fe358a50f945f3107f194c6511098313c5c
+  head: cb1580727c3b329b5e245c026cfe2f83aaf0d373
+  private: true
+  label: safe
+  severity: minor
+  reason: UI-only letter jump in the language pickers, well tested; the worst case is focus landing on the wrong row.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+  needs_panel: true
+- id: xelpfin#69
+  repo: https://github.com/agb1986/xelpfin
+  base: bb15434ec38aa386a0446328f08243c27557e7b6
+  head: fffe7fe358a50f945f3107f194c6511098313c5c
+  private: true
+  label: safe
+  severity: none
+  reason: 'Tests only: new screen tests for library, search, history and settings.'
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: xelpfin#72
+  repo: https://github.com/agb1986/xelpfin
+  base: cb1580727c3b329b5e245c026cfe2f83aaf0d373
+  head: 205375e23b5686793527c0172e3840d7f15cec58
+  private: true
+  label: safe
+  severity: none
+  reason: Raises the jest test timeout and unmounts after each test; test config only.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: xelpfin#73
+  repo: https://github.com/agb1986/xelpfin
+  base: cc5823530e98414809684074c1754c80bfaa14ef
+  head: e940d42e5213ed07e05a0e98bfe2eba49c55fe42
+  private: true
+  label: safe
+  severity: none
+  reason: Adds coverage thresholds to the jest config; test config only.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: xelpfin#74
+  repo: https://github.com/agb1986/xelpfin
+  base: e6dad5461b305f97a40abe35b4396a8f8fa22bab
+  head: 7a392b9160293eaf469347e559337bc79aa7cd0b
+  private: true
+  label: safe
+  severity: minor
+  reason: Makes history row keys unique by adding the position, with a regression test.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'
+- id: xelpfin#78
+  repo: https://github.com/agb1986/xelpfin
+  base: 129aff2b244d4d0ad7af240acf233e6243562614
+  head: c6a7e9a25a61e23bfb65dd89e4f7d8ea9bedc206
+  private: true
+  label: safe
+  severity: minor
+  reason: Bounded focus retry on the TV player surface, with tests; worst case is the same missed-focus glitch it fixes.
+  source: reader
+  labelled_by: claude-opus-5-5
+  labelled_on: '2026-10-27'

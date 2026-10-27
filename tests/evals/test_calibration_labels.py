@@ -1,6 +1,7 @@
-"""Tests for evals/calibration/labels.py: the label schema and `load_labels`."""
+"""Tests for evals/calibration/labels.py: the label schema, `load_labels`, and the real labels file."""
 
 import datetime
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,7 @@ import pytest
 import yaml
 
 from evals.calibration.labels import (
+    LABELS_FILE,
     LabelFileError,
     LabelledDiff,
     LabelsNotFound,
@@ -130,3 +132,11 @@ def test_a_missing_file_is_not_found_with_exit_code_3(tmp_path: Path) -> None:
     with pytest.raises(LabelsNotFound) as info:
         load_labels(tmp_path / "nope.yaml")
     assert exit_code(info.value) == ExitCode.NOT_FOUND
+
+
+def test_the_real_labels_file_has_enough_rows_of_both_classes() -> None:
+    diffs = load_labels(LABELS_FILE)
+    assert len(diffs) >= 100
+    labels = Counter(diff.label for diff in diffs)
+    assert labels["risky"] > 0 and labels["safe"] > 0
+    assert all(diff.repo.startswith("https://github.com/") for diff in diffs)
