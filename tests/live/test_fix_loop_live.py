@@ -23,6 +23,7 @@ from pathlib import Path
 import anthropic
 import pytest
 
+from evals.graders.sandbox_tests import PYTEST
 from fixtures.build import build
 from pipelines.fix_loop import TEST_WRITE_REFUSED_TAG, load_finding, resolve_fix_agents, run_fix
 from pipelines.review_panel import JUDGE_GATE_TAG, TRIAGE_TAG
@@ -116,12 +117,12 @@ def test_the_loop_fixes_the_planted_defect_and_the_panel_approves(tmp_path: Path
     # The patch applies to the source and makes the whole suite pass, the planted test included.
     _git(fixture.path, "apply", "--check", str(result.patch_path))
     _git(fixture.path, "apply", str(result.patch_path))
+    # `python -m pytest` puts the work tree on sys.path, so the fixture's package imports; the
+    # `pytest` console script does not.
     sandbox = DockerSandbox()
     try:
-        planted = sandbox.run(
-            fixture.path, ["pytest", "-q", "-p", "no:cacheprovider", PLANTED_TEST]
-        )
-        suite = sandbox.run(fixture.path, ["pytest", "-q", "-p", "no:cacheprovider"])
+        planted = sandbox.run(fixture.path, [*PYTEST, PLANTED_TEST])
+        suite = sandbox.run(fixture.path, PYTEST)
     finally:
         sandbox.cleanup(fixture.path)
     assert planted.exit_code == 0, planted.output[-2000:]
