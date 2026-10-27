@@ -2,10 +2,15 @@
 
 Skipped unless `TYPESAFE_API_KEY` is set; the `live_jev` marker is separate from `live`, so having
 only an Anthropic key does not run it. It sends the diff-triage questions about a short diff in one
-request, and checks that the probability is in range, that the run is traced under the model the
-manifest pinned, and that the pinned model is one the account can call.
+request, and checks that the probability is in range and that the run is traced under the model the
+manifest pinned.
+
+`GET /v1/models` lists only the aliases `jev-latest` and `jev-preview`, never a versioned id, so the
+pinned id is verified the way docs/CONVENTIONS.md says: the listing holds `jev-latest`, and the
+response's `model` field, which the trace row records, equals the pinned id.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -30,7 +35,7 @@ DIFF = """\
 def test_a_noul_answer_comes_back_in_range_and_is_traced(tmp_path: Path) -> None:
     spec = resolve("diff-triage", "^0.1")
     assert isinstance(spec, JevSpec)
-    assert {spec.model, "jev-latest"} <= available_models()
+    assert "jev-latest" in available_models()
 
     with Trace(tmp_path / "trace.duckdb") as trace:
         output = run_jev(
@@ -54,4 +59,4 @@ def test_a_noul_answer_comes_back_in_range_and_is_traced(tmp_path: Path) -> None
     assert (kind, pipeline_run_id, error) == ("jev", "live-jev-1", None)
     assert input_tokens and input_tokens > 0 and output_tokens == 0
     assert cost and cost > 0
-    assert '"model":"jev-1.14.0"' in decision.replace(" ", "")
+    assert json.loads(decision)["model"] == spec.model
