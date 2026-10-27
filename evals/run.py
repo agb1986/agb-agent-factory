@@ -9,6 +9,12 @@ A Jev agent (`kind: jev`) is run through `run_jev` with the same tag, and its an
 to `{question_id: picked}` (the noul `p`, the choice `answer`, the score `level` or `value`) for the
 graders; a case graded `jev` goes to the Jev grader, with the LLM judge as its fallback.
 
+A payload value `{"$fixture": "diff"}` or `{"$fixture": "files"}` is replaced by the fixture's
+base-to-head diff or the files it changes, read the way the review panel reads them. For a Jev agent
+with gates, a case that expects a `decision` has `runtime.gates.decide` run on the answers, and the
+report counts those decisions: `recall_risky`, `skip_rate` and `escalation_rate`. A manifest's
+`evals.min_recall_risky` is a second minimum the eval must meet.
+
 A case whose agent run fails with a typed error (a refusal, a timeout, invalid output) is a failed
 case with that error, not a failed eval. A missing or rejected API key, and a payload the agent
 cannot accept, end the whole eval, since every other case would fail the same way.
@@ -18,6 +24,7 @@ fixture, so each case runs on its own copy, and the `sandbox_tests` grader runs 
 copy after the agent is done.
 """
 
+import re
 import shutil
 import sys
 import tempfile
@@ -32,20 +39,24 @@ from typing import Any
 from packaging.version import Version
 from pydantic import BaseModel
 
-from evals.cases import CASES_FILE, Case, load_cases
+from evals.cases import CASES_FILE, FIXTURE_REF, Case, CaseFileError, load_cases
 from evals.graders import Deterministic, Grade, grade
 from evals.graders.jev import JevJudge
 from evals.graders.llm_judge import Judge, JudgeVerdict, LLMJudge
 from factory.exit import AuthOrConfigError, ExitCode, FactoryError, UsageError
 from fixtures.build import build
-from registry.jev_spec import JevOutput, JevSpec
+from pipelines.review_panel import changed_files
+from registry.jev_spec import JevOutput, JevSpec, NoulQuestion
 from registry.resolver import AgentNotFound, resolve
 from registry.resolver import list_agents as _list_agents
 from registry.spec import LLMSpec
 from runtime.budget import DEFAULT_BUDGET_USD, Budget, BudgetExceeded
+from runtime.gates import Decision, decide
 from runtime.jev_runner import run_jev
 from runtime.runner import run
 from runtime.trace import Trace, TraceRow
+from tools import MAX_OUTPUT_BYTES
+from tools.git import show_diff
 
 DEFAULT_WORKERS = 4
 
@@ -54,6 +65,12 @@ type Runner = Callable[..., BaseModel]
 
 type JevRunner = Callable[..., JevOutput]
 """Anything called like `runtime.jev_runner.run_jev`; tests inject a fake."""
+
+FIXTURE_BASE, FIXTURE_HEAD = "base", "head"
+"""The branches of a built fixture whose diff a `$fixture` reference reads."""
+
+_CUT_MARKER = re.compile(r"^\[truncated: \d+ bytes dropped, limit \d+ bytes\]$")
+"""The last line `tools._common.truncate` adds to a diff it cut, as the review panel matches it."""
 
 
 class _SharedTrace(Trace):
@@ -74,15 +91,39 @@ class _SharedTrace(Trace):
             self._inner.record(row)
 
 
+class _CaseTrace(Trace):
+    """A view of the eval's trace for one case, which notes whether a Jev run cut its input.
+
+    `run_jev` says so only in the `truncated` key of the `decision_json` of the row it writes, so
+    the view forwards each row and reads that key, as the review panel does.
+    """
+
+    def __init__(self, inner: Trace) -> None:
+        super().__init__(inner.path)
+        self._inner = inner
+        self.truncated = False
+
+    def record(self, row: TraceRow) -> None:
+        """Write one run to the wrapped trace and note a cut input."""
+        self._inner.record(row)
+        if isinstance(row.decision_json, dict) and row.decision_json.get("truncated"):
+            self.truncated = True
+
+
 @dataclass(frozen=True, slots=True)
 class CaseResult:
-    """How one case went. `error` is set, and `grade` is None, when the agent run failed."""
+    """How one case went. `error` is set, and `grade` is None, when the agent run failed.
+
+    `decision` is `skip`, `review` or `escalate` when the case expects a gate decision and the
+    agent answered, else None.
+    """
 
     case: Case
     passed: bool
     duration_ms: int
     grade: Grade | None = None
     error: str | None = None
+    decision: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         """Return the case as the JSON document describes it."""
@@ -99,6 +140,7 @@ class CaseResult:
             "deterministic": {"passed": checks.passed, "failures": list(checks.failures)},
             "judge": None if judge is None else _judge_json(judge),
             "grader_fallback": grade is not None and grade.grader_fallback,
+            "decision": self.decision,
             "error": self.error,
             "duration_ms": self.duration_ms,
         }
@@ -116,6 +158,7 @@ class EvalReport:
     cost_usd: float
     duration_ms: int
     results: tuple[CaseResult, ...]
+    min_recall_risky: float | None = None
 
     @property
     def total(self) -> int:
@@ -133,9 +176,35 @@ class EvalReport:
         return self.passed_count / self.total if self.total else 0.0
 
     @property
+    def recall_risky(self) -> float | None:
+        """The share of risky cases with a decision that was not `skip`; None without any."""
+        risky = [result for result in self._decided if result.case.expected.risky]
+        return _share(risky, lambda result: result.decision != "skip")
+
+    @property
+    def skip_rate(self) -> float | None:
+        """The share of cases with a decision that was `skip`; None without any."""
+        return _share(self._decided, lambda result: result.decision == "skip")
+
+    @property
+    def escalation_rate(self) -> float | None:
+        """The share of cases with a decision that was `escalate`; None without any."""
+        return _share(self._decided, lambda result: result.decision == "escalate")
+
+    @property
+    def _decided(self) -> list[CaseResult]:
+        return [result for result in self.results if result.decision is not None]
+
+    @property
     def passed(self) -> bool:
-        """Whether the pass rate meets the agent's `evals.min_pass_rate`."""
-        return self.pass_rate >= self.min_pass_rate
+        """Whether the pass rate meets `evals.min_pass_rate`, and recall `evals.min_recall_risky`.
+
+        The recall minimum applies only when the manifest sets one and some risky case has a
+        decision.
+        """
+        recall, minimum = self.recall_risky, self.min_recall_risky
+        recall_ok = recall is None or minimum is None or recall >= minimum
+        return self.pass_rate >= self.min_pass_rate and recall_ok
 
     def to_json(self) -> dict[str, Any]:
         """Return the document `factory eval --json` prints. See "Eval cases" in CONVENTIONS."""
@@ -147,6 +216,10 @@ class EvalReport:
             "eval_run_id": self.eval_run_id,
             "min_pass_rate": self.min_pass_rate,
             "pass_rate": self.pass_rate,
+            "min_recall_risky": self.min_recall_risky,
+            "recall_risky": self.recall_risky,
+            "skip_rate": self.skip_rate,
+            "escalation_rate": self.escalation_rate,
             "passed": self.passed,
             "total": self.total,
             "passed_count": self.passed_count,
@@ -169,10 +242,30 @@ class EvalReport:
         verdict = "ok" if self.passed else "BELOW MINIMUM"
         lines.append(
             f"{self.passed_count}/{self.total} passed ({self.pass_rate:.0%}), minimum "
-            f"{self.min_pass_rate:.0%}: {verdict}  cost ${self.cost_usd:.4f}  "
-            f"{self.duration_ms / 1000:.1f}s"
+            f"{self.min_pass_rate:.0%}{self._metrics_text()}: {verdict}  "
+            f"cost ${self.cost_usd:.4f}  {self.duration_ms / 1000:.1f}s"
         )
         return "\n".join(lines)
+
+    def _metrics_text(self) -> str:
+        """The decision metrics for the summary line; empty when no case has a decision."""
+        if not self._decided:
+            return ""
+        recall = _percent(self.recall_risky)
+        if self.min_recall_risky is not None:
+            recall += f", minimum {self.min_recall_risky:.0%}"
+        return (
+            f"  recall_risky {recall}  skip_rate {_percent(self.skip_rate)}  "
+            f"escalation_rate {_percent(self.escalation_rate)}"
+        )
+
+
+def _share(results: Sequence[CaseResult], counts: Callable[[CaseResult], bool]) -> float | None:
+    return sum(map(counts, results)) / len(results) if results else None
+
+
+def _percent(value: float | None) -> str:
+    return "-" if value is None else f"{value:.0%}"
 
 
 def evaluate(
@@ -200,17 +293,22 @@ def evaluate(
     that falls back to `judge`. `fixture_paths` maps fixture names to built repositories;
     by default every fixture the cases use is built into a temporary directory first, so a missing
     one is a `FixtureNotFound` before any model is called. The input model's `repo_path` field, when
-    it has one, is set to the fixture's path. Every `runner` and `jev_runner` call is charged to
+    it has one, is set to the fixture's path, and each `$fixture` reference in a payload is replaced
+    by the fixture's diff or changed files. A case that expects a `decision` has `decide` run on
+    the Jev answers with the input counted as truncated when the diff or the Jev runner was cut,
+    and the decision reaches the graders as the `decision` key. Every `runner` and `jev_runner` call is charged to
     `budget` (default: a new `Budget(DEFAULT_BUDGET_USD)`), and so are the calls of the default
     `LLMJudge` and `JevJudge`; a `judge` or `jev_judge` passed in is charged only if it was built
     with the budget. A case that runs out of budget is not a failed case: the evaluation ends with
     `BudgetExceeded`.
 
-    Raises `UsageError` for `workers` below 1, `AuthOrConfigError` for a missing or rejected key,
-    `BudgetExceeded`, and `FixtureNotFound` or `BuildError` from the fixture build.
+    Raises `UsageError` for `workers` below 1, `CaseFileError` for `answers` or `decision` the
+    agent cannot give, `AuthOrConfigError` for a missing or rejected key, `BudgetExceeded`, and
+    `FixtureNotFound` or `BuildError` from the fixture build.
     """
     if workers < 1:
         raise UsageError(f"--workers must be at least 1, not {workers}")
+    _check_expectations(spec, cases)
     eval_run_id = eval_run_id or str(uuid.uuid4())
     budget = budget or Budget(DEFAULT_BUDGET_USD)
     tag = f"eval:{spec.address}"
@@ -254,7 +352,37 @@ def evaluate(
         cost_usd=trace.cost_by_pipeline_run(eval_run_id),
         duration_ms=int((time.monotonic() - start) * 1000),
         results=tuple(results),
+        min_recall_risky=spec.evals.min_recall_risky if isinstance(spec, JevSpec) else None,
     )
+
+
+def _check_expectations(spec: LLMSpec | JevSpec, cases: Sequence[Case]) -> None:
+    """Raise `CaseFileError` for an expected answer or decision the agent `spec` cannot give."""
+    questions = {q.id: q for q in spec.questions} if isinstance(spec, JevSpec) else {}
+    for case in cases:
+        expected = case.expected
+        where = f"{spec.name}: case {case.id!r}: expected"
+        if expected.answers and not isinstance(spec, JevSpec):
+            raise CaseFileError(f"{where}.answers: only a Jev agent answers questions")
+        for question_id, option in (expected.answers or {}).items():
+            question = questions.get(question_id)
+            if question is None:
+                raise CaseFileError(f"{where}.answers: no question {question_id!r}")
+            if isinstance(question, NoulQuestion):
+                raise CaseFileError(
+                    f"{where}.answers.{question_id}: a noul question has no option to expect"
+                )
+            allowed = question.options if question.type == "choice" else question.levels
+            if option not in allowed:
+                raise CaseFileError(
+                    f"{where}.answers.{question_id}: {option!r} is not one of {list(allowed)}"
+                )
+        if expected.decision is None:
+            continue
+        if not isinstance(spec, JevSpec) or not spec.gates:
+            raise CaseFileError(f"{where}.decision: only a Jev agent with gates decides")
+        if "decision" in questions:
+            raise CaseFileError(f"{where}.decision: the agent has a question named decision")
 
 
 def _required(judge: LLMJudge | None) -> LLMJudge:
@@ -319,14 +447,19 @@ def _run_case(
     budget: Budget,
 ) -> CaseResult:
     start = time.monotonic()
+    decision: str | None = None
     with tempfile.TemporaryDirectory(prefix="factory-eval-case-") as scratch:
-        payload = dict(case.payload)
         try:
+            payload, cut = _fill_fixture_refs(case.payload, repo_path)
             if isinstance(spec, JevSpec):
+                capture = _CaseTrace(trace)
                 answers = jev_runner(
-                    spec, payload, trace, pipeline_run_id=eval_run_id, budget=budget, tag=tag
+                    spec, payload, capture, pipeline_run_id=eval_run_id, budget=budget, tag=tag
                 )
                 actual = _jev_answers(answers)
+                if case.expected.decision is not None:
+                    decision = _decision_name(decide(spec, answers, cut or capture.truncated))
+                    actual["decision"] = decision
             else:
                 if spec.sandbox:
                     repo_path = _private_copy(repo_path, Path(scratch))
@@ -347,8 +480,37 @@ def _run_case(
             raise
         except FactoryError as exc:
             message = f"{type(exc).__name__}: {exc.message}"
-            return CaseResult(case, False, _elapsed(start), error=message)
-    return CaseResult(case, graded.passed, _elapsed(start), grade=graded)
+            return CaseResult(case, False, _elapsed(start), error=message, decision=decision)
+    return CaseResult(case, graded.passed, _elapsed(start), grade=graded, decision=decision)
+
+
+def _fill_fixture_refs(payload: Mapping[str, Any], repo_path: Path) -> tuple[dict[str, Any], bool]:
+    """Replace each `$fixture` value of `payload` with the fixture's diff or changed files.
+
+    The diff is read as the review panel reads it, cut at `MAX_OUTPUT_BYTES`, and the files are
+    the ones it names, one per line. Also returns whether the diff was cut, False when no value
+    refers to it.
+    """
+    filled = dict(payload)
+    refs = {
+        key: value[FIXTURE_REF]
+        for key, value in payload.items()
+        if isinstance(value, dict) and FIXTURE_REF in value
+    }
+    if not refs:
+        return filled, False
+    diff = show_diff(repo_path, FIXTURE_BASE, FIXTURE_HEAD, max_bytes=MAX_OUTPUT_BYTES)
+    for key, content in refs.items():
+        filled[key] = diff if content == "diff" else "\n".join(changed_files(diff))
+    last_line = diff.rstrip("\n").rpartition("\n")[2]
+    return filled, bool(_CUT_MARKER.match(last_line))
+
+
+def _decision_name(decision: Decision) -> str:
+    """Name a gate decision as a case expects it: `escalate`, `skip`, or `review` for neither."""
+    if decision.escalate:
+        return "escalate"
+    return "skip" if decision.skip else "review"
 
 
 def _jev_answers(output: JevOutput) -> dict[str, Any]:
@@ -399,7 +561,8 @@ def command(ref: str, *, as_json: bool, workers: int = DEFAULT_WORKERS) -> int:
     """Run `factory eval`: evaluate the agent `ref` and report it.
 
     The table goes to stderr. Under `as_json` stdout gets exactly one JSON document, also when
-    the pass rate is below the minimum. Returns 0 at or above `evals.min_pass_rate` and 1 below.
+    the pass rate is below the minimum. Returns 0 when the report passed (`evals.min_pass_rate`,
+    and `evals.min_recall_risky` when set) and 1 when it did not.
     """
     import json
 
