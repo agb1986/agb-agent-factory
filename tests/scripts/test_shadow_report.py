@@ -22,7 +22,7 @@ MANIFEST = ROOT / "agents" / "diff-triage" / "agent.yaml"
 TODAY = datetime.date(2026, 10, 27)
 MARKER = "UNTRUSTED-DIFF-CONTENT"
 """Every fake diff, file name and finding contains this, so a test can check none is printed."""
-TRIAGE = "diff-triage@0.1.0"
+TRIAGE = f"diff-triage@{yaml.safe_load(MANIFEST.read_text(encoding='utf-8'))['version']}"
 REVIEWER = "code-reviewer@0.1.0"
 JUDGE = "review-judge@0.1.0"
 

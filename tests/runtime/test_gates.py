@@ -297,7 +297,7 @@ def test_a_manifest_without_gates_or_routing_decides_nothing() -> None:
 def test_the_diff_triage_manifest_escalates_on_low_confidence() -> None:
     from registry.resolver import resolve
 
-    triage = resolve("diff-triage", "^0.1")
+    triage = resolve("diff-triage", "^0.2")
     assert isinstance(triage, JevSpec)
     output = triage.output_class.model_validate(
         {

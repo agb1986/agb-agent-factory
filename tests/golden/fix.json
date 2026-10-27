@@ -152,7 +152,7 @@
     "duration_ms": 0,
     "triage": {
       "status": "ok",
-      "ref": "diff-triage@0.1.0",
+      "ref": "diff-triage@0.2.0",
       "decision": {
         "skip": false,
         "escalate": false,
