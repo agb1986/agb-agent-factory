@@ -14,6 +14,7 @@ fixed values, and compares the result to `tests/golden/<name>.json`.
 | `triage.json` | `factory triage <repo> --json` |
 | `fix.json` | `factory fix <repo> --finding <json> --json` |
 | `cost.json` | `factory cost --since 2026-10-20 --json` |
+| `cost-by-kind.json` | `factory cost --since 2026-10-20 --by kind --json` |
 
 ## When a golden test fails
 

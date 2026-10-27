@@ -171,6 +171,49 @@ Enable it with `systemctl --user enable --now shadow-report.timer`. Either one a
 
 Not started: the shadow period begins once a calibrated gate is merged and published. Record here the start date, the threshold, each daily report's would-skip count and worst finding, and any threshold change with the day the clock restarted.
 
+## Measured against --no-triage
+
+`scripts/triage_saving.py` runs the review panel over every fixture twice, once with diff-triage and once as `factory review --no-triage` would, and reads both costs back from the trace (the script's docstring has the method). It ran once on 2026-10-27 at commit e1ac33d, with diff-triage@0.2.0 (skip gate `needs_review` below 0.5), code-reviewer@1.2.0, security-reviewer@1.0.0, perf-reviewer@0.3.0 and judge@2.0.0, a $5.00 budget per run and the judge gate off:
+
+```bash
+uv run python scripts/triage_saving.py --allow-unpublished --trace-db data/triage-saving.duckdb --json
+```
+
+It exited 0: every run went through and no would-skip fixture had a `major` finding or worse.
+
+| Fixture | With triage | No triage | Jev | Decision | Route | Worst finding, either run |
+|---|---:|---:|---:|---|---|---|
+| clean-refactor | $0.1241 | $0.0578 | $0.000047 | skip (low_risk) | code-reviewer | - |
+| docs-only | $0.0423 | $0.0426 | $0.000025 | escalate (unsure) | code-reviewer, security-reviewer, perf-reviewer | - |
+| hardcoded-secret | $0.0562 | $0.0615 | $0.000034 | review (reviewers=code-security) | code-reviewer, security-reviewer | blocker |
+| missing-index-hint | $0.0552 | $0.0619 | $0.000037 | review (reviewers=code-perf) | code-reviewer, perf-reviewer | - |
+| mixed | $0.0628 | $0.0522 | $0.000036 | review (reviewers=code) | code-reviewer | - |
+| n-plus-one | $0.0988 | $0.0931 | $0.000037 | escalate (unsure) | code-reviewer, security-reviewer, perf-reviewer | major |
+| off-by-one | $0.0509 | $0.0516 | $0.000023 | review (reviewers=code-perf) | code-reviewer, perf-reviewer | major |
+| off-by-one-red | $0.0504 | $0.0506 | $0.000023 | review (reviewers=code-perf) | code-reviewer, perf-reviewer | major |
+| off-by-one-single-file | $0.0486 | $0.0495 | $0.000020 | review (reviewers=code) | code-reviewer | major |
+| path-traversal | $0.0493 | $0.0491 | $0.000028 | review (reviewers=code-security) | code-reviewer, security-reviewer | - |
+| quadratic-loop | $0.0733 | $0.0751 | $0.000035 | review (reviewers=code-perf) | code-reviewer, perf-reviewer | blocker |
+| sql-injection | $0.0865 | $0.0834 | $0.000033 | review (reviewers=code-security) | code-reviewer, security-reviewer | blocker |
+| test-only | $0.0493 | $0.0480 | $0.000021 | skip (low_risk) | code-reviewer | - |
+| untested-change | $0.0409 | $0.0451 | $0.000021 | skip (low_risk) | code-reviewer | - |
+| untested-change-covered | $0.0423 | $0.0423 | $0.000031 | skip (low_risk) | code-reviewer | - |
+
+| Total | |
+|---|---:|
+| With triage, 15 runs | $0.9308 |
+| No triage, 15 runs | $0.8637 |
+| Difference | $0.0671 |
+| Jev overhead, 15 triage calls | $0.000453 |
+| Would skip | 4 of 15 |
+| Projected saving | $0.2561 |
+| Would-skip fixtures with a `major` finding or worse | 0 |
+| Measurement spend | $1.7945 |
+
+`ROUTE_ONLY` still holds, so the with-triage runs ran every reviewer: each of the four reviewers and the judge has 30 rows in the store, one per run, and the $0.0671 difference is run-to-run variance, not triage. The saving is therefore projected: the four skipped fixtures' reviewer and judge cost in their with-triage runs, $0.2565, less Jev's cost over all 15 fixtures. That is 28% of the with-triage spend, against a Jev overhead of 0.05%. Most of it is clean-refactor, whose with-triage run cost $0.1241 against $0.0578 for the identical panel without triage; priced from the no-triage runs instead, the four skips come to $0.1932 and the saving to $0.1927, 22% of the no-triage spend.
+
+Every fixture with a `major` or `blocker` finding was reviewed: the three blockers (hardcoded-secret, quadratic-loop, sql-injection) and the four off-by-one and n-plus-one majors all went to the panel, and docs-only escalated as `unsure`. Nine of the eleven reviewed fixtures had a narrower route; they take effect only once `ROUTE_ONLY` is off, so this run does not measure what routing saves. `FACTORY_TRACE_DB=data/triage-saving.duckdb factory cost --since 2026-10-27 --by kind` over the same store shows the split: `claude` 120 runs, $1.7941; `jev` 30 rows, $0.0005, which are the 15 triage calls and their 15 zero-cost `triage:decision` rows.
+
 ## After the shadow period
 
 Stage 4 of #20, not built yet: once 14 days pass with no would-skip blocker, a manifest flag turns `ROUTE_ONLY` off for diff-triage, and the panel acts on `skip` and `route`. A permanent 5% random sample of skipped diffs still gets the full panel, so a drift in what Jev skips shows up as findings on sampled diffs rather than as nothing at all.

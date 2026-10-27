@@ -3,8 +3,9 @@
 The spend comes from `Trace.cost_breakdown`, so it is the `cost_usd` the runners wrote, run by run.
 Runs tagged `eval:` or `publish:` are reported apart from the rest, because an eval or a publish
 gate is spend on the agents themselves and not on the work they were built for. `--by agent` groups
-by `name@version` and `--by pipeline` by pipeline run id; a run outside any pipeline appears as
-`(none)`. Runs whose model has no price carry no cost and add nothing.
+by `name@version`, `--by pipeline` by pipeline run id, where a run outside any pipeline appears as
+`(none)`, and `--by kind` by runner kind, `claude` or `jev`. Runs whose model has no price carry no
+cost and add nothing.
 """
 
 import json
@@ -19,6 +20,10 @@ BUCKETS: tuple[str, ...] = ("other", "eval", "publish")
 
 _TITLES = {"other": "other runs", "eval": "eval runs", "publish": "publish runs"}
 _NO_GROUP = "(none)"
+_KEYS = {"agent": "agent", "pipeline": "pipeline_run_id", "kind": "kind"}
+
+By = Literal["agent", "pipeline", "kind"]
+"""What `factory cost` groups by."""
 
 
 def parse_since(value: str) -> datetime:
@@ -35,11 +40,9 @@ def parse_since(value: str) -> datetime:
     return since if since.tzinfo is not None else since.replace(tzinfo=UTC)
 
 
-def report(
-    rows: list[CostRow], since: datetime, by: Literal["agent", "pipeline"]
-) -> dict[str, Any]:
+def report(rows: list[CostRow], since: datetime, by: By) -> dict[str, Any]:
     """Return the `factory cost` document for `rows`: totals overall and per tag bucket."""
-    key = "agent" if by == "agent" else "pipeline_run_id"
+    key = _KEYS[by]
     buckets: dict[str, dict[str, Any]] = {
         name: {"runs": 0, "cost_usd": 0.0, "groups": []} for name in BUCKETS
     }
@@ -63,7 +66,7 @@ def report(
 
 def text(document: dict[str, Any]) -> str:
     """Return `document` (from `report`) as a plain-text table per tag bucket."""
-    key = "agent" if document["by"] == "agent" else "pipeline_run_id"
+    key = _KEYS[document["by"]]
     lines = [f"cost since {document['since']}, by {document['by']}"]
     for name in BUCKETS:
         bucket = document["buckets"][name]
@@ -79,9 +82,7 @@ def text(document: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def command(
-    since: str, *, by: Literal["agent", "pipeline"] = "agent", as_json: bool = False
-) -> int:
+def command(since: str, *, by: By = "agent", as_json: bool = False) -> int:
     """Run `factory cost`: print the spend since `since`, as text or one JSON document.
 
     Returns 0. Raises `UsageError` for a `since` that is not a date.

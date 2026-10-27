@@ -120,6 +120,14 @@ class CostRow:
     cost_usd: float
 
 
+_GROUP_COLUMNS = {
+    "agent": "agent_ref",
+    "pipeline": "pipeline_run_id",
+    # The column says how a run was called; the report names the runner: Claude or Jev.
+    "kind": "CASE kind WHEN 'llm' THEN 'claude' ELSE kind END",
+}
+
+
 def resolve_path(path: str | os.PathLike[str] | None = None) -> Path:
     """Return the store path: the argument, else `FACTORY_TRACE_DB`, else `data/traces.duckdb`."""
     if path is not None:
@@ -313,24 +321,24 @@ class Trace:
 
     @_serialised
     def cost_breakdown(
-        self, since: datetime, by: Literal["agent", "pipeline"] = "agent"
+        self, since: datetime, by: Literal["agent", "pipeline", "kind"] = "agent"
     ) -> list[CostRow]:
         """Return runs started at or after `since`, counted and costed per group and tag bucket.
 
-        `by` groups by `agent_ref` or by `pipeline_run_id` (`None` for runs outside a pipeline).
-        The bucket is `eval` or `publish` for a tag that starts with `eval:` or `publish:`, and
+        `by` groups by `agent_ref`, by `pipeline_run_id` (`None` for runs outside a pipeline) or
+        by runner kind: `claude` for the `llm` rows and `jev` for the Jev ones. The bucket is `eval` or `publish` for a tag that starts with `eval:` or `publish:`, and
         `other` for any other tag and for no tag. Runs with a null cost add nothing. Rows come
         ordered by group, then bucket. Raises `ValueError` for a naive `since`.
         """
         self.ensure_schema()
         if since.tzinfo is None:
             raise ValueError("since must be timezone-aware")
-        column = "agent_ref" if by == "agent" else "pipeline_run_id"
+        column = _GROUP_COLUMNS[by]
         sql = (
-            f"SELECT {column}, CASE WHEN tag LIKE 'eval:%' THEN 'eval'"
+            f"SELECT {column} AS grp, CASE WHEN tag LIKE 'eval:%' THEN 'eval'"
             " WHEN tag LIKE 'publish:%' THEN 'publish' ELSE 'other' END AS bucket,"
             " count(*), COALESCE(sum(cost_usd), 0.0) FROM traces WHERE started_at >= ?"
-            f" GROUP BY {column}, bucket ORDER BY {column} NULLS LAST, bucket"
+            " GROUP BY grp, bucket ORDER BY grp NULLS LAST, bucket"
         )
         found = self._connect().execute(sql, [since.astimezone(UTC)]).fetchall()
         return [CostRow(group, bucket, runs, float(cost)) for group, bucket, runs, cost in found]
