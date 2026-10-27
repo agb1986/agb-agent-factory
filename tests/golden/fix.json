@@ -1,0 +1,219 @@
+{
+  "pipeline_run_id": "pipeline-run-1",
+  "repo_path": "<repo>",
+  "head": "6a85133a33ca50fbaad31f6bd429a5a35c473491",
+  "finding": {
+    "file": "series/rolling.py",
+    "line_start": 12,
+    "line_end": 13,
+    "severity": "major",
+    "category": "logic",
+    "title": "Loop bound drops the last window",
+    "body": "`range(window, len(values) - 1)` stops one step early, so the last window is lost.",
+    "suggested_fix": null
+  },
+  "test_writer": {
+    "ref": "test-writer@0.1.0",
+    "output": {
+      "files_changed": [
+        {
+          "path": "tests/test_last_window.py",
+          "action": "created",
+          "summary": "A test."
+        }
+      ],
+      "commands_run": [],
+      "test_files": [
+        "tests/test_last_window.py"
+      ],
+      "fails_on_head": true,
+      "summary": "The last window is missing."
+    }
+  },
+  "fixer": {
+    "ref": "fixer@0.1.0",
+    "output": {
+      "files_changed": [
+        {
+          "path": "series/rolling.py",
+          "action": "modified",
+          "summary": "A fix."
+        }
+      ],
+      "commands_run": [],
+      "nothing_to_fix": false,
+      "suite_passes": true,
+      "summary": "The loop now runs to len(values)."
+    }
+  },
+  "files_changed": [
+    {
+      "path": "series/rolling.py",
+      "action": "modified",
+      "by": [
+        "fixer"
+      ]
+    },
+    {
+      "path": "tests/test_last_window.py",
+      "action": "created",
+      "by": [
+        "test-writer"
+      ]
+    }
+  ],
+  "suite": {
+    "argv": [
+      "python",
+      "-m",
+      "pytest",
+      "-q"
+    ],
+    "exit_code": 0,
+    "passed": true,
+    "seconds": 0.1,
+    "output_tail": "6 passed in 0.02s\n"
+  },
+  "panel": {
+    "pipeline_run_id": "pipeline-run-1",
+    "base": "6a85133a33ca50fbaad31f6bd429a5a35c473491",
+    "head": "<fix-sha>",
+    "reviewers": [
+      {
+        "agent": "code-reviewer",
+        "version": "1.2.0",
+        "ref": "code-reviewer@1.2.0",
+        "status": "ok",
+        "verdict": "request_changes",
+        "finding_count": 1,
+        "error": null
+      },
+      {
+        "agent": "security-reviewer",
+        "version": "1.0.0",
+        "ref": "security-reviewer@1.0.0",
+        "status": "ok",
+        "verdict": "approve",
+        "finding_count": 0,
+        "error": null
+      },
+      {
+        "agent": "perf-reviewer",
+        "version": "0.3.0",
+        "ref": "perf-reviewer@0.3.0",
+        "status": "ok",
+        "verdict": "approve",
+        "finding_count": 0,
+        "error": null
+      }
+    ],
+    "judge": {
+      "ref": "judge@2.0.0",
+      "output": {
+        "scores": {
+          "correctness_risk": {
+            "value": 0.1,
+            "justification": "Checked."
+          },
+          "maintainability": {
+            "value": 0.9,
+            "justification": "Checked."
+          },
+          "security_risk": {
+            "value": 0.0,
+            "justification": "Checked."
+          },
+          "test_coverage": {
+            "value": 0.8,
+            "justification": "Checked."
+          }
+        },
+        "merged_findings": [
+          {
+            "file": "shop/shipping.py",
+            "line_start": 12,
+            "line_end": 12,
+            "severity": "major",
+            "category": "logic",
+            "title": "Problem",
+            "body": "It is wrong.",
+            "suggested_fix": null,
+            "sources": [
+              "code-reviewer@1.2.0"
+            ]
+          }
+        ],
+        "rationale": "The comparison is flipped."
+      }
+    },
+    "weighted_score": 0.9050000000000001,
+    "ship": true,
+    "total_cost_usd": 1.75,
+    "duration_ms": 0,
+    "triage": {
+      "status": "ok",
+      "ref": "diff-triage@0.1.0",
+      "decision": {
+        "skip": false,
+        "escalate": false,
+        "route": [
+          "code-reviewer",
+          "security-reviewer"
+        ],
+        "reason": "reviewers=code-security"
+      },
+      "probabilities": {
+        "needs_review": {
+          "p": 0.8
+        },
+        "reviewers": {
+          "answer": "code-security",
+          "probs": {
+            "code": 0.1,
+            "code-security": 0.7,
+            "code-perf": 0.1,
+            "all": 0.1
+          },
+          "confidence": 0.9
+        }
+      },
+      "truncated": false,
+      "route_only": true,
+      "error": null
+    },
+    "judge_gate": {
+      "status": "ok",
+      "ref": "judge-gate@0.1.0",
+      "decision": {
+        "skip": false,
+        "escalate": false,
+        "route": [],
+        "reason": "no_gate"
+      },
+      "probabilities": {
+        "clear_cut": {
+          "p": 0.2
+        },
+        "verdict": {
+          "answer": "request_changes",
+          "probs": {
+            "ship": 0.1,
+            "request_changes": 0.8,
+            "unclear": 0.1
+          },
+          "confidence": 0.9
+        }
+      },
+      "truncated": false,
+      "path": "escalated",
+      "verdict": null,
+      "judge_cost_estimate_usd": null,
+      "error": null
+    }
+  },
+  "ship": true,
+  "patch_path": "<out-dir>/<pipeline-run-id>.patch",
+  "report_path": "<out-dir>/<pipeline-run-id>.json",
+  "total_cost_usd": 1.75,
+  "duration_ms": 0
+}
