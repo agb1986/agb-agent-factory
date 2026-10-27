@@ -471,7 +471,7 @@ def run_fix(
             tests_sha = commit_all(clone, f"test-writer: {finding.title}")
             by_tests = changed_between(clone, head_sha, tests_sha)
             written = tests_output.model_dump(mode="json")
-            protected = frozenset([*by_tests, *written.get("test_files", [])])
+            protected = frozenset(by_tests)
 
             fixer_output = runner(
                 agents.fixer,
@@ -488,6 +488,8 @@ def run_fix(
                 hook=TestFileGuard(clone, protected, trace, run_id),
                 budget=budget,
             )
+            # `changed_files` leaves out bytecode and `__pycache__`. Nothing is lost by that: the
+            # commits carry no bytecode either, and `clean` deletes it before the suite runs.
             for path in changed_files(clone):
                 reason = _test_reason(path, protected)
                 if reason is not None:

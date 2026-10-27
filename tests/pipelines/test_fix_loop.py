@@ -82,8 +82,8 @@ def _fixed(clone: Path) -> str:
 class FixRunner(FakeRunner):
     """`FakeRunner` with a test-writer and a fixer that change files in the clone.
 
-    The test-writer writes `tests` (path to content) and reports `claimed` as changed too, without
-    writing it. The fixer asks its hook about each of
+    The test-writer writes `tests` (path to content) and reports `claimed` as changed and as a test
+    file too, without writing it. The fixer asks its hook about each of
     `fixes` (default: the real fix to `series/rolling.py`) and writes it when allowed, then writes
     `unhooked` without asking, as a script run through `shell.run` would. Both trace a row and
     charge `0.25` to the budget, as the real runner does after a run.
@@ -121,7 +121,7 @@ class FixRunner(FakeRunner):
                     for path in [*self.tests, *self.claimed]
                 ],
                 "commands_run": [],
-                "test_files": list(self.tests),
+                "test_files": [*self.tests, *self.claimed],
                 "fails_on_head": True,
                 "summary": "The last window is missing.",
             }

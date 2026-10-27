@@ -53,7 +53,7 @@ Both files are named after the pipeline run id, in `--out-dir`:
 | Code | When |
 | --- | --- |
 | 0 | The panel approved the fix and the patch was written |
-| 1 | The panel did not approve; or `TestFileWriteError`, `SuiteFailedError`, `FixError` (nothing changed) or `BudgetExceeded` |
+| 1 | The panel did not approve; or `TestFileWriteError`, `SuiteFailedError`, `FixError` (nothing changed), `BudgetExceeded`, or `ToolExecutionError` when git fails on the clone: a clone over the 30 s limit, a clone that cannot be cleaned, a checkout that fails |
 | 2 | Usage: a bad option or finding, uncommitted changes (`DirtyRepositoryError`), a `--work-dir` that is not a directory or whose path has a `:`, which Docker cannot mount, an `--out-dir` that cannot be made |
 | 3 | An unknown agent, version, repository or ref |
 | 4 | `ANTHROPIC_API_KEY` not set, Docker missing or unreachable, or the sandbox image absent |
@@ -65,7 +65,7 @@ On exit 1 from the loop itself (not from the panel's verdict) no report is writt
 The fixer may change production code only. A path counts as a test, and the fixer may not change it, when:
 
 - `evals.graders.sandbox_tests.is_test_file` says so: anything under a `tests` directory, `conftest.py`, `test_*.py`, `*_test.py`;
-- the test-writer changed it, as the commit of its work shows (what it only reports in `files_changed` protects nothing);
+- the test-writer changed it, as the commit of its work shows (what it only reports, in `files_changed` or `test_files`, protects nothing);
 - it configures the test run: `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `pyproject.toml`, `setup.cfg` or `tox.ini` at the root of the clone;
 - it would shadow the test runner: a package at the root named `pytest`, `_pytest`, `pluggy`, `py`, `iniconfig` or `pygments`, or a root module of one of those names ending in `.py`, `.pyc` or `.so`. `python -m pytest` puts the working directory first on `sys.path`, so such a module would replace the one in the image.
 
