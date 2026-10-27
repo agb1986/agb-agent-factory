@@ -1,9 +1,10 @@
 """A live triage of the `docs-only` fixture through the review panel, against the real Jev API.
 
 Skipped unless `TYPESAFE_API_KEY` is set. The reviewers run on a fake runner, so no Anthropic key or
-spend is involved; only the triage call is real. It checks what holds whatever the model answers:
-the decision is logged in a trace row under the pipeline run id, every reviewer still runs because
-triage is route only (#18), the Jev cost is in the pipeline total, and `skip` agrees with the
+spend is involved; only the Jev calls are real, triage's and the judge gate's (#19), and the checks
+read triage's rows alone. It checks what holds whatever the model answers: the decision is logged
+in a trace row under the pipeline run id, every reviewer still runs because triage is route only
+(#18), the Jev cost is in the pipeline total, and `skip` agrees with the
 `diff-triage` gates. The manifest has no skip gate yet (#20), so `skip` is expected to be false.
 The pinned model id is checked through the response's `model` field in the Jev run's trace row,
 because `GET /v1/models` lists only the aliases (docs/CONVENTIONS.md).
@@ -39,7 +40,8 @@ def test_the_docs_only_diff_is_triaged_logged_and_still_reviewed(tmp_path: Path)
             trace._connect()
             .execute(
                 "SELECT tag, pipeline_run_id, cost_usd, error, decision_json FROM traces "
-                "WHERE kind = 'jev' ORDER BY started_at"
+                "WHERE kind = 'jev' AND agent_ref = ? ORDER BY started_at",
+                [panel.triage.address],
             )
             .fetchall()
         )
