@@ -3,7 +3,7 @@
   "base": "base",
   "head": "head",
   "status": "ok",
-  "ref": "diff-triage@0.2.0",
+  "ref": "diff-triage@0.2.1",
   "decision": {
     "skip": false,
     "escalate": false,
