@@ -4,8 +4,8 @@ Skipped unless `TYPESAFE_API_KEY` is set. The reviewers run on a fake runner, so
 spend is involved; only the Jev calls are real, triage's and the judge gate's (#19), and the checks
 read triage's rows alone. It checks what holds whatever the model answers: the decision is logged
 in a trace row under the pipeline run id, every reviewer still runs because triage is route only
-(#18), the Jev cost is in the pipeline total, and `skip` agrees with the
-`diff-triage` gates. The manifest has no skip gate yet (#20), so `skip` is expected to be false.
+(#18), the Jev cost is in the pipeline total, and `skip` agrees with the `diff-triage` skip gate
+(#20): true only when `needs_review` is below the gate's value and nothing escalates.
 The pinned model id is checked through the response's `model` field in the Jev run's trace row,
 because `GET /v1/models` lists only the aliases (docs/CONVENTIONS.md).
 """
@@ -17,6 +17,7 @@ import pytest
 
 from fixtures.build import build
 from pipelines.review_panel import REVIEWERS, resolve_panel, run_panel
+from runtime.gates import skip_gate
 from runtime.jev_transport import available_models
 from runtime.trace import Trace
 from tests.pipelines.test_review_panel import FakeRunner
@@ -64,8 +65,10 @@ def test_the_docs_only_diff_is_triaged_logged_and_still_reviewed(tmp_path: Path)
     assert runner.reviewers_called() == {name for name, _ in REVIEWERS}
     assert result.to_json()["triage"]["route_only"] is True
 
-    # the gates in the manifest, not the model, decide skip; the manifest has no skip gate yet
-    assert not any(gate.action == "skip" for gate in panel.triage.gates)
-    assert triage.decision.skip is False
+    # the gates in the manifest, not the model, decide skip; an escalation or a cut input clears it
+    gate = skip_gate(panel.triage)
+    assert gate is not None and gate.rule == "p_below"
+    below = triage.probabilities["needs_review"]["p"] < gate.value
+    assert triage.decision.skip == (below and not triage.decision.escalate and not triage.truncated)
     assert jev_cost > 0
     assert result.total_cost_usd >= jev_cost

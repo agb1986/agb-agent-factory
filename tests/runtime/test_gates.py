@@ -11,11 +11,14 @@ from runtime.gates import (
     JUDGE_GATE,
     NO_GATE,
     ROUTE_ONLY,
+    SKIP_GATE_NAME,
     TRUNCATED,
     Decision,
     decide,
     decide_judge_gate,
     jev_error,
+    skip_gate,
+    with_skip_threshold,
 )
 
 MANIFEST: dict[str, Any] = {
@@ -336,3 +339,93 @@ def test_nothing_fired_leaves_the_judge_running(spec: JevSpec) -> None:
 def test_a_truncated_input_never_skips_the_judge(spec: JevSpec) -> None:
     decision = decide_judge_gate(spec, _output(spec, p=0.05, area="api"), True)
     assert decision == Decision(skip=False, escalate=True, route=(), reason=TRUNCATED)
+
+
+# --- skip_gate and with_skip_threshold
+
+ONE_SKIP = [
+    {"name": "alarm", "question": "risky", "rule": "p_above", "value": 0.9, "action": "escalate"},
+    {"name": "calm", "question": "risky", "rule": "p_below", "value": 0.1, "action": "skip"},
+    {
+        "name": "unsure",
+        "question": "area",
+        "rule": "confidence_below",
+        "value": 0.5,
+        "action": "escalate",
+    },
+]
+NO_SKIP = [gate for gate in ONE_SKIP if gate["action"] != "skip"]
+
+
+def test_skip_gate_returns_the_one_p_below_skip_gate() -> None:
+    gate = skip_gate(_spec(gates=ONE_SKIP))
+    assert gate is not None
+    assert (gate.name, gate.question, gate.value) == ("calm", "risky", 0.1)
+
+
+def test_skip_gate_is_none_without_a_skip_gate() -> None:
+    assert skip_gate(_spec(gates=NO_SKIP)) is None
+
+
+def test_skip_gate_refuses_several_skip_gates(spec: JevSpec) -> None:
+    with pytest.raises(ValueError, match="calm, db_unlikely, docs_only"):
+        skip_gate(spec)
+
+
+def test_skip_gate_refuses_a_skip_gate_of_another_rule() -> None:
+    answer_in = {
+        "name": "docs",
+        "question": "area",
+        "rule": "answer_in",
+        "value": ["ui"],
+        "action": "skip",
+    }
+    with pytest.raises(ValueError, match="p_below"):
+        skip_gate(_spec(gates=[*NO_SKIP, answer_in]))
+
+
+def test_with_skip_threshold_moves_the_existing_gate_and_keeps_the_rest() -> None:
+    original = _spec(gates=ONE_SKIP)
+    moved = with_skip_threshold(original, 0.3)
+    assert [gate.name for gate in moved.gates] == ["alarm", "calm", "unsure"]
+    gate = skip_gate(moved)
+    assert gate is not None and (gate.question, gate.value) == ("risky", 0.3)
+    assert moved.routing == original.routing
+    assert original.gates[1].value == 0.1  # the original is unchanged
+
+
+def test_with_skip_threshold_adds_a_named_gate_when_there_is_none() -> None:
+    added = with_skip_threshold(_spec(gates=NO_SKIP), 0.2, question="risky")
+    gate = skip_gate(added)
+    assert gate is not None
+    assert (gate.name, gate.question, gate.option, gate.value) == (
+        SKIP_GATE_NAME,
+        "risky",
+        None,
+        0.2,
+    )
+
+
+def test_with_skip_threshold_reads_an_option_of_a_choice_question() -> None:
+    added = with_skip_threshold(_spec(gates=NO_SKIP), 0.2, question="area", option="db")
+    probs = {"ui": 0.5, "api": 0.49, "db": 0.01}
+    assert decide(added, _output(added, area="api", area_probs=probs), False).skip is True
+
+
+def test_with_skip_threshold_needs_a_question_when_there_is_no_gate() -> None:
+    with pytest.raises(ValueError, match="no skip gate"):
+        with_skip_threshold(_spec(gates=NO_SKIP), 0.2)
+
+
+def test_with_skip_threshold_validates_the_copy() -> None:
+    with pytest.raises(ValueError, match="'nope' is not defined"):
+        with_skip_threshold(_spec(gates=NO_SKIP), 0.2, question="nope")
+
+
+def test_the_moved_threshold_decides_with_the_strict_rule_and_escalations_win() -> None:
+    moved = with_skip_threshold(_spec(gates=ONE_SKIP), 0.3)
+    assert decide(moved, _output(moved, p=0.29, area="api"), False).skip is True
+    assert decide(moved, _output(moved, p=0.3, area="api"), False).skip is False
+    unsure = decide(moved, _output(moved, p=0.01, area="api", confidence=0.1), False)
+    assert (unsure.skip, unsure.reason) == (False, "unsure")
+    assert decide(moved, _output(moved, p=0.01, area="api"), True).skip is False
