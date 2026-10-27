@@ -67,7 +67,7 @@ The fixer may change production code only. A path counts as a test, and the fixe
 - `evals.graders.sandbox_tests.is_test_file` says so: anything under a `tests` directory, `conftest.py`, `test_*.py`, `*_test.py`;
 - the test-writer changed it, as the commit of its work shows (what it only reports, in `files_changed` or `test_files`, protects nothing);
 - it configures the test run: `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `pyproject.toml`, `setup.cfg` or `tox.ini` at the root of the clone;
-- it would shadow the test runner: a package at the root named `pytest`, `_pytest`, `pluggy`, `py`, `iniconfig` or `pygments`, or a root module of one of those names ending in `.py`, `.pyc` or `.so`. `python -m pytest` puts the working directory first on `sys.path`, so such a module would replace the one in the image.
+- it would shadow the test runner: a package at the root named `pytest`, `_pytest`, `pluggy`, `iniconfig` or `packaging`, or a root module of one of those names ending in `.py`, `.pyc` or `.so`. `python -m pytest` puts the working directory first on `sys.path`, so such a module would replace the one in the image. This is best effort: pytest also imports `py` and `pygments`, which are left out because a repository may have a root package of either name. The panel, which reads the whole diff, is the real check.
 
 A refusal names which of these applies. The rule lives in the pipeline, not in `fs.write_file`, because only the pipeline knows what the test-writer wrote.
 

@@ -94,10 +94,13 @@ _RUN_CONFIG = frozenset(
 )
 """The files at the root of the clone that pytest takes its configuration from."""
 
-_RUNNER_MODULES = frozenset({"pytest", "_pytest", "pluggy", "py", "iniconfig", "pygments"})
-"""The modules `python -m pytest` imports from the image, which a module or package of the same
-name at the root of the clone would replace, since the working directory comes first on
-`sys.path`."""
+_RUNNER_MODULES = frozenset({"pytest", "_pytest", "pluggy", "iniconfig", "packaging"})
+"""Modules `python -m pytest` imports from the image, which a module or package of the same name at
+the root of the clone would replace, since the working directory comes first on `sys.path`.
+
+Best effort, not a complete list: `py` and `pygments`, which pytest also imports, are left out
+because a repository may well have a root package of either name, and the panel, which reads the
+whole diff, is the real check."""
 
 _MODULE_SUFFIXES = (".py", ".pyc", ".so")
 

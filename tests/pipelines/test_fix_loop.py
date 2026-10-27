@@ -397,6 +397,8 @@ SHADOWS = "the path shadows the test runner"
         ("pluggy.cpython-312.pyc", SHADOWS),
         ("pytest/__init__.py", SHADOWS),
         ("_pytest/python.py", SHADOWS),
+        ("packaging.py", SHADOWS),
+        ("packaging/version.py", SHADOWS),
     ],
 )
 def test_the_guard_refuses_what_controls_the_test_run(
@@ -418,6 +420,8 @@ def test_the_guard_refuses_what_controls_the_test_run(
         ("fs.write_file", {"path": "pytest.md"}),
         ("fs.write_file", {"path": "pytest_helpers.py"}),
         ("fs.write_file", {"path": "py.typed"}),
+        ("fs.write_file", {"path": "py/__init__.py"}),
+        ("fs.write_file", {"path": "pygments/lexer.py"}),
         ("fs.write_file", {"path": "../outside/tests/test_x.py"}),
         ("fs.write_file", {"content": "no path"}),
         ("shell.run", {"argv": ["python", "-m", "pytest", "-q"]}),
@@ -566,6 +570,7 @@ def test_what_the_test_writer_only_reports_is_not_protected(
         ("pyproject.toml", "[tool.pytest.ini_options]\naddopts = '-k nothing'\n", CONFIGURES),
         ("pytest.ini", "[pytest]\n", CONFIGURES),
         ("pytest.py", "raise SystemExit(0)\n", SHADOWS),
+        ("packaging.py", "raise SystemExit(0)\n", SHADOWS),
     ],
 )
 def test_a_change_to_the_test_run_by_another_route_is_refused_after_the_fixer(
