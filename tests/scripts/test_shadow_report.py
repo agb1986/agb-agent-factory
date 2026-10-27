@@ -38,18 +38,23 @@ def _load() -> ModuleType:
 script = _load()
 
 
-def _gated_manifest(tmp_path: Path, value: float = 0.05) -> Path:
-    """Write a copy of the diff-triage manifest with a `low_risk` skip gate at `value`."""
+def _gated_manifest(tmp_path: Path, value: float | None = 0.05) -> Path:
+    """Write a copy of the diff-triage manifest whose `low_risk` skip gate is at `value`.
+
+    `None` writes the copy with no skip gate at all.
+    """
     manifest = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
-    manifest["gates"].append(
-        {
-            "name": "low_risk",
-            "question": "needs_review",
-            "rule": "p_below",
-            "value": value,
-            "action": "skip",
-        }
-    )
+    manifest["gates"] = [gate for gate in manifest["gates"] if gate["action"] != "skip"]
+    if value is not None:
+        manifest["gates"].append(
+            {
+                "name": "low_risk",
+                "question": "needs_review",
+                "rule": "p_below",
+                "value": value,
+                "action": "skip",
+            }
+        )
     path = tmp_path / "agent.yaml"
     path.write_text(yaml.safe_dump(manifest), encoding="utf-8")
     return path
@@ -316,7 +321,6 @@ def test_an_empty_range_reports_nothing(tmp_path: Path, capsys: pytest.CaptureFi
 @pytest.mark.parametrize(
     "args",
     [
-        [],  # the shipped manifest has no skip gate, so --threshold is required
         ["--threshold", "0"],
         ["--threshold", "0.1", "--question", "nope"],
         ["--threshold", "0.1", "--since", "2026-13-01"],
@@ -331,6 +335,16 @@ def test_bad_arguments_exit_2(
     code, _, err = _run(store, capsys, *args)
     assert code == ExitCode.USAGE
     assert err.startswith("shadow_report: ")
+
+
+def test_a_manifest_without_a_skip_gate_needs_a_threshold(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = Store(tmp_path)
+    store.panel_run("run-a", 0.01)
+    code, _, err = _run(store, capsys, manifest=_gated_manifest(tmp_path, None))
+    assert code == ExitCode.USAGE
+    assert "has no skip gate" in err
 
 
 def test_a_manifest_that_is_not_jev_is_refused(
