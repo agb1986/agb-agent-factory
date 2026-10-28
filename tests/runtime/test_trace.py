@@ -266,3 +266,11 @@ def test_cost_breakdown_on_an_empty_trace_is_empty(trace: Trace) -> None:
 def test_cost_breakdown_rejects_a_naive_since(trace: Trace) -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
         trace.cost_breakdown(datetime(2026, 10, 25))
+
+
+def test_parent_run_id_round_trips(tmp_path: Path) -> None:
+    with Trace(tmp_path / "t.duckdb") as trace:
+        trace.record(row("r1", pipeline_run_id="p1"))
+        trace.record(row("r2", pipeline_run_id="p1", parent_run_id="r1"))
+        found = {r.run_id: r.parent_run_id for r in trace.pipeline_runs("p1")}
+    assert found == {"r1": None, "r2": "r1"}

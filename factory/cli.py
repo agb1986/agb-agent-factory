@@ -155,6 +155,19 @@ def build_parser() -> argparse.ArgumentParser:
     cost_parser.add_argument(
         "--json", action="store_true", help="print one JSON document instead of text"
     )
+    trace_parser = sub.add_parser(
+        "trace",
+        help="export one pipeline run as an Agent Flow JSONL event log",
+        epilog="example: factory trace 3f2a9c --out /tmp/run.jsonl",
+    )
+    trace_parser.add_argument("pipeline_run_id", help="the pipeline run id to export")
+    trace_parser.add_argument("--out", help="file to write (default: stdout)")
+    trace_parser.add_argument(
+        "--stretch",
+        type=float,
+        default=1.0,
+        help="multiply every event time by this, to slow a short run down for viewing",
+    )
     return parser
 
 
@@ -185,6 +198,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _fix(args)
         if args.command == "cost":
             return _cost(args)
+        if args.command == "trace":
+            return _trace(args)
     except Exception as exc:  # noqa: BLE001 - the root handler maps every failure to a code
         return _fail(exc, as_json=getattr(args, "json", False))
     parser.print_usage(sys.stderr)
@@ -268,6 +283,13 @@ def _cost(args: argparse.Namespace) -> int:
     from runtime.cost import command
 
     return command(args.since, by=args.by, as_json=args.json)
+
+
+def _trace(args: argparse.Namespace) -> int:
+    """Write the Agent Flow event log for one pipeline run."""
+    from runtime.agent_flow import command
+
+    return command(args.pipeline_run_id, out=args.out, stretch=args.stretch)
 
 
 def _fail(exc: Exception, *, as_json: bool) -> int:

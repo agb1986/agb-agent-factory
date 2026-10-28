@@ -215,6 +215,8 @@ def run_jev(
     trace: Trace,
     *,
     pipeline_run_id: str | None = None,
+    parent_run_id: str | None = None,
+    run_id: str | None = None,
     transport: JevTransport | None = None,
     sleep: Callable[[float], None] = time.sleep,
     budget: Budget | None = None,
@@ -225,8 +227,9 @@ def run_jev(
     `spec` is a resolved `JevSpec`. `payload` is a dict or a model; it must have every field
     `input.render` uses, and a missing one raises `UsageError` before anything is sent or traced.
     `transport` defaults to the SDK transport (see `default_transport`); `sleep` waits out a
-    backoff and is a parameter so tests need not wait. `pipeline_run_id` and `tag` land in the
-    trace row; an eval sets `tag` to `eval:<address>`.
+    backoff and is a parameter so tests need not wait. `pipeline_run_id`, `parent_run_id` (the run
+    this one follows), `run_id` (chosen by the caller, so a later stage can name this run) and
+    `tag` land in the trace row; an eval sets `tag` to `eval:<address>`.
     `budget` is the pipeline's dollar cap; the run is refused when it is spent and charged to it
     when it ends.
 
@@ -239,7 +242,7 @@ def run_jev(
     text = spec.input.render.format(**payload_json)
     if budget is not None:
         budget.check()
-    run_id = str(uuid.uuid4())
+    run_id = run_id or str(uuid.uuid4())
     started_at = datetime.now(UTC)
     start = time.monotonic()
     state = _RunState()
@@ -262,6 +265,7 @@ def run_jev(
                 duration_ms=int((time.monotonic() - start) * 1000),
                 input_json=payload_json,
                 pipeline_run_id=pipeline_run_id,
+                parent_run_id=parent_run_id,
                 input_tokens=state.input_tokens,
                 output_tokens=0,
                 cost_usd=cost,

@@ -443,6 +443,11 @@ _DIFF_HEADER = re.compile(r"^diff --git a/.+ b/(.+)$", re.MULTILINE)
 _CUT_MARKER = re.compile(r"^\[truncated: \d+ bytes dropped, limit \d+ bytes\]$")
 
 
+def _lineage(parent_run_id: str | None) -> dict[str, str]:
+    """The `parent_run_id` keyword for a runner call, or nothing when the panel has no parent."""
+    return {} if parent_run_id is None else {"parent_run_id": parent_run_id}
+
+
 def changed_files(diff: str) -> list[str]:
     """Return the paths a unified `diff` touches, as the `b/` side of each file header."""
     return list(dict.fromkeys(_DIFF_HEADER.findall(diff)))
@@ -456,6 +461,7 @@ def run_triage(
     *,
     jev_runner: JevRunner = run_jev,
     budget: Budget | None = None,
+    parent_run_id: str | None = None,
 ) -> TriageResult:
     """Ask the Jev agent `spec` about `diff` and turn its answers into a `Decision`.
 
@@ -481,6 +487,7 @@ def run_triage(
             capture,
             pipeline_run_id=pipeline_run_id,
             budget=budget,
+            **_lineage(parent_run_id),
         )
     except BudgetExceeded:
         raise
@@ -509,6 +516,7 @@ def run_triage(
             duration_ms=round((time.monotonic() - start) * 1000),
             input_json={"files": files},
             pipeline_run_id=pipeline_run_id,
+            parent_run_id=parent_run_id,
             cost_usd=0.0,
             decision_json={
                 **result.decision.to_json(),
@@ -570,6 +578,7 @@ def run_judge_gate(
     *,
     jev_runner: JevRunner = run_jev,
     budget: Budget | None = None,
+    parent_run_id: str | None = None,
 ) -> GateResult:
     """Ask the Jev agent `spec` whether the reviews are clear-cut enough to skip `judge`.
 
@@ -598,6 +607,7 @@ def run_judge_gate(
                 capture,
                 pipeline_run_id=pipeline_run_id,
                 budget=budget,
+                **_lineage(parent_run_id),
             )
         except BudgetExceeded:
             raise
@@ -632,6 +642,7 @@ def run_judge_gate(
             duration_ms=round((time.monotonic() - start) * 1000),
             input_json={"reviewers": [r.spec.address for r in results]},
             pipeline_run_id=pipeline_run_id,
+            parent_run_id=parent_run_id,
             cost_usd=0.0,
             decision_json={
                 **decision.to_json(),
@@ -658,6 +669,7 @@ def run_panel(
     jev_runner: JevRunner = run_jev,
     pipeline_run_id: str | None = None,
     budget: Budget | None = None,
+    parent_run_id: str | None = None,
 ) -> PanelResult:
     """Review the change from `base` to `head` of the repository at `repo_path`.
 
@@ -672,6 +684,8 @@ def run_panel(
     judge's input as failed, and the panel goes on, as it does when triage fails, except one that
     ran out of budget: every run, triage's, the gate's and the judge's too, is charged to `budget`
     (default: `DEFAULT_BUDGET_USD`) and the first to pass it ends the panel with `BudgetExceeded`.
+    `parent_run_id` is the run the panel follows, such as the fixer's in the fix loop: every row
+    the panel writes names it as its parent, so the trace draws the panel under that run.
     When the panel has a judge-gate agent it runs after the reviewers, and when it is sure the
     judge is not run: `judgement` and `assessment` are then `None` and the gate's verdict decides
     `ship`. Raises
@@ -685,7 +699,15 @@ def run_panel(
     diff = show_diff(repo_path, base, head, max_bytes=MAX_OUTPUT_BYTES)
     budget = budget or Budget(DEFAULT_BUDGET_USD)
     triaged = (
-        run_triage(panel.triage, diff, trace, run_id, jev_runner=jev_runner, budget=budget)
+        run_triage(
+            panel.triage,
+            diff,
+            trace,
+            run_id,
+            jev_runner=jev_runner,
+            budget=budget,
+            parent_run_id=parent_run_id,
+        )
         if panel.triage is not None
         else DISABLED
     )
@@ -697,6 +719,7 @@ def run_panel(
             "repo_path": repo_path,
             "pipeline_run_id": run_id,
             "budget": budget,
+            **_lineage(parent_run_id),
         }
         try:
             if runner is _RUN:
@@ -746,6 +769,7 @@ def run_panel(
             run_id,
             jev_runner=jev_runner,
             budget=budget,
+            parent_run_id=parent_run_id,
         )
         if panel.gate is not None
         else GATE_DISABLED
@@ -760,6 +784,7 @@ def run_panel(
             repo_path=repo_path,
             pipeline_run_id=run_id,
             budget=budget,
+            **_lineage(parent_run_id),
         )
         assessment = assess(panel.judge, judgement)
     return PanelResult(

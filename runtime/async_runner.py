@@ -83,6 +83,8 @@ async def arun(
     *,
     repo_path: str | Path | None = None,
     pipeline_run_id: str | None = None,
+    parent_run_id: str | None = None,
+    run_id: str | None = None,
     hook: ToolHook | None = None,
     client: anthropic.AsyncAnthropic | anthropic.Anthropic | None = None,
     tag: str | None = None,
@@ -104,6 +106,8 @@ async def arun(
         trace,
         repo_path=repo_path,
         pipeline_run_id=pipeline_run_id,
+        parent_run_id=parent_run_id,
+        run_id=run_id,
         hook=hook,
         client=client,
         tag=tag,
@@ -120,6 +124,8 @@ async def _arun(
     *,
     repo_path: str | Path | None,
     pipeline_run_id: str | None,
+    parent_run_id: str | None,
+    run_id: str | None,
     hook: ToolHook | None,
     client: anthropic.AsyncAnthropic | anthropic.Anthropic | None,
     tag: str | None,
@@ -136,7 +142,7 @@ async def _arun(
         )
     if budget is not None:
         budget.check()
-    run_id = str(uuid.uuid4())
+    run_id = run_id or str(uuid.uuid4())
     if spec.guard is not None:
         hook = build_guard_hook(
             spec,
@@ -180,6 +186,7 @@ async def _arun(
                 duration_ms=int((time.monotonic() - start) * 1000),
                 input_json=payload_json,
                 pipeline_run_id=pipeline_run_id,
+                parent_run_id=parent_run_id,
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
                 cache_read_tokens=usage.cache_read_tokens,

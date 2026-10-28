@@ -475,6 +475,21 @@ def test_a_fix_the_panel_approves_writes_a_patch_and_a_report(
     assert list(_work_dir(tmp_path).iterdir()) == []
 
 
+def test_each_stage_names_the_run_before_it_as_its_parent(
+    agents: FixAgents, repo: Path, trace: Trace, tmp_path: Path
+) -> None:
+    runner = FixRunner()
+    _fix(agents, repo, trace, tmp_path, runner=runner, sandbox=FakeSandbox())
+
+    by_name = {call["spec"].name: call for call in runner.calls}
+    test_writer, fixer = by_name[TEST_WRITER[0]], by_name[FIXER[0]]
+    assert "parent_run_id" not in test_writer
+    assert fixer["parent_run_id"] == test_writer["run_id"]
+    panel_calls = [c for c in runner.calls if c["spec"].name not in (TEST_WRITER[0], FIXER[0])]
+    assert panel_calls
+    assert {c["parent_run_id"] for c in panel_calls} == {fixer["run_id"]}
+
+
 def test_the_suite_and_the_panel_see_the_fixed_clone(
     agents: FixAgents, repo: Path, trace: Trace, tmp_path: Path
 ) -> None:

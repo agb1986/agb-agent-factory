@@ -74,6 +74,7 @@ MIGRATIONS: tuple[Migration, ...] = (
         )
         """,
     ),
+    (3, "ALTER TABLE traces ADD COLUMN parent_run_id VARCHAR"),
 )
 
 
@@ -97,6 +98,7 @@ class TraceRow:
     output_json: Any = None
     error: str | None = None
     tag: str | None = None
+    parent_run_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,7 +240,7 @@ class Trace:
             raise ValueError("started_at must be timezone-aware")
         self.ensure_schema()
         self._connect().execute(
-            "INSERT INTO traces VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO traces VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 row.run_id,
                 row.pipeline_run_id,
@@ -256,6 +258,7 @@ class Trace:
                 _json_or_none(row.output_json),
                 row.error,
                 row.tag,
+                row.parent_run_id,
             ],
         )
 
@@ -356,3 +359,54 @@ class Trace:
             .fetchone()
         )
         return float(row[0]) if row else 0.0
+
+    @_serialised
+    def pipeline_runs(self, pipeline_run_id: str) -> list[TraceRow]:
+        """Return every run of one pipeline invocation, earliest start first."""
+        self.ensure_schema()
+        found = (
+            self._connect()
+            .execute(
+                "SELECT run_id, agent_ref, kind, epoch_ms(started_at), duration_ms, input_tokens,"
+                " output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, decision_json,"
+                " error, tag, parent_run_id FROM traces WHERE pipeline_run_id = ? ORDER BY started_at, run_id",
+                [pipeline_run_id],
+            )
+            .fetchall()
+        )
+        return [
+            TraceRow(
+                run_id=run_id,
+                agent_ref=agent_ref,
+                kind=kind,
+                started_at=datetime.fromtimestamp(started_ms / 1000, UTC),
+                duration_ms=duration_ms,
+                input_json=None,
+                pipeline_run_id=pipeline_run_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
+                cost_usd=cost_usd,
+                decision_json=json.loads(decision) if decision is not None else None,
+                error=error,
+                tag=tag,
+                parent_run_id=parent_run_id,
+            )
+            for (
+                run_id,
+                agent_ref,
+                kind,
+                started_ms,
+                duration_ms,
+                input_tokens,
+                output_tokens,
+                cache_read,
+                cache_write,
+                cost_usd,
+                decision,
+                error,
+                tag,
+                parent_run_id,
+            ) in found
+        ]
