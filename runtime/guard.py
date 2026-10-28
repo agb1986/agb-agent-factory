@@ -186,7 +186,7 @@ class GuardHook:
                 error=error,
                 tag=self._tag,
             )
-        self._trace.record(replace(row, decision_json=decision))
+        self._trace.record(replace(row, decision_json=decision, parent_run_id=self._parent_run_id))
 
 
 class _Capture(Trace):

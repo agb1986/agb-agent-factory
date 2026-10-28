@@ -461,6 +461,7 @@ def run_fix(
     head_sha = resolve_commit(root, head)
     with checkout(root, head_sha, work_dir=work_dir) as clone:
         try:
+            tests_run_id = str(uuid.uuid4())
             tests_output = runner(
                 agents.test_writer,
                 agents.test_writer.input_class.model_validate(
@@ -469,6 +470,7 @@ def run_fix(
                 trace,
                 repo_path=clone,
                 pipeline_run_id=run_id,
+                run_id=tests_run_id,
                 budget=budget,
             )
             tests_sha = commit_all(clone, f"test-writer: {finding.title}")
@@ -476,6 +478,7 @@ def run_fix(
             written = tests_output.model_dump(mode="json")
             protected = frozenset(by_tests)
 
+            fixer_run_id = str(uuid.uuid4())
             fixer_output = runner(
                 agents.fixer,
                 agents.fixer.input_class.model_validate(
@@ -488,6 +491,8 @@ def run_fix(
                 trace,
                 repo_path=clone,
                 pipeline_run_id=run_id,
+                parent_run_id=tests_run_id,
+                run_id=fixer_run_id,
                 hook=TestFileGuard(clone, protected, trace, run_id),
                 budget=budget,
             )
@@ -531,6 +536,7 @@ def run_fix(
                 jev_runner=jev_runner,
                 pipeline_run_id=run_id,
                 budget=budget,
+                parent_run_id=fixer_run_id,
             )
             patch_path = None
             if panel.ship:

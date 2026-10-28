@@ -108,6 +108,8 @@ def run(
     *,
     repo_path: str | Path | None = None,
     pipeline_run_id: str | None = None,
+    parent_run_id: str | None = None,
+    run_id: str | None = None,
     hook: ToolHook | None = None,
     client: anthropic.Anthropic | anthropic.AsyncAnthropic | None = None,
     tag: str | None = None,
@@ -123,8 +125,10 @@ def run(
     that is not traced either. `hook` sees every tool call (default `AllowAll`); pass a new one
     per run. When the spec has a `guard`, the action guard (`runtime.guard`) wraps `hook`: `hook`
     decides first, and a call it allows then goes to the guard. `client` defaults to one built
-    from `ANTHROPIC_API_KEY`, and a missing key raises `AuthOrConfigError`. `pipeline_run_id` and
-    `tag` (for example `eval:code-reviewer@1.2.0`) land in the trace row. `budget` is the
+    from `ANTHROPIC_API_KEY`, and a missing key raises `AuthOrConfigError`. `pipeline_run_id`,
+    `parent_run_id` (the run this one follows, for the pipeline's tree), `run_id` (a UUID chosen by
+    the caller so a later stage can name this run as its parent) and `tag` (for example
+    `eval:code-reviewer@1.2.0`) land in the trace row. `budget` is the
     pipeline's dollar cap (see `runtime.budget`); `sleep` waits out a retry backoff and is a
     parameter so tests need not wait.
 
@@ -168,6 +172,8 @@ def run(
         trace,
         repo_path=repo_path,
         pipeline_run_id=pipeline_run_id,
+        parent_run_id=parent_run_id,
+        run_id=run_id,
         hook=hook,
         client=client,
         tag=tag,

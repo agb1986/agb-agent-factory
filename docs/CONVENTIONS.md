@@ -425,6 +425,7 @@ The LLM runner writes the row in a `finally` block, so a failed run still record
 | `output_json` | JSON, null | The validated output, or the full probability vectors for Jev; null on failure |
 | `error` | VARCHAR, null | Error class and message when the run failed |
 | `tag` | VARCHAR, null | Set by the eval runner and publish gate, e.g. `eval:code-reviewer@1.2.0`. `factory cost` reads the prefix: `eval:` and `publish:` runs are totalled apart from the rest. `factory publish-check` currently tags its runs `eval:`, so the `publish` total stays at zero until something tags `publish:` |
+| `parent_run_id` | VARCHAR, null | Migration 3. The `run_id` of the run this one follows: the fixer's is the test-writer's, the review panel's rows in the fix loop name the fixer, and a guard decision names the run it judged. Null for a run with no parent, which `factory trace` hangs under the pipeline root. A tree, so a stage that reads several runs (the judge, after its reviewers) names one parent at most |
 
 A guard decision is a row of its own, written by `runtime/guard.py`. Its `decision_json` is `{"parent_run_id", "allow", "reason"}`, `parent_run_id` is the `run_id` of the guarded run, and `kind` and `agent_ref` name the guard agent. Select a run's decisions with `json_extract_string(decision_json, '$.parent_run_id') = <run_id>`.
 
