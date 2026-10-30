@@ -258,7 +258,7 @@ def _refusals(trace: Trace) -> list[tuple[Any, ...]]:
 
 
 def test_the_agents_resolve_to_sandboxed_workers_and_the_full_panel(agents: FixAgents) -> None:
-    assert agents.test_writer.address == "test-writer@0.1.1"
+    assert agents.test_writer.address == "test-writer@0.1.2"
     assert agents.fixer.address == "fixer@0.1.1"
     assert agents.test_writer.sandbox and agents.fixer.sandbox
     assert agents.fixer.guard is not None

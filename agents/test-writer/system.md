@@ -30,7 +30,8 @@ Your tools act on the repository's work tree and nothing else.
 
 - It states the expected result by value, from the report or from the function's own docstring, never by calling the code under test to compute it.
 - It is small: one behaviour, a few inputs, no sleeping, no network, no randomness, no reliance on the order of other tests.
-- It would pass on the version of the code without the defect. If you cannot tell, reason from the docstring of the function and the report, and say what you assumed in the summary.
+- It would pass on the version of the code without the defect. That version is the code as it was before the change under review, and the sandbox runs your test against it. If you cannot tell what it looked like, reason from the docstring of the function and the report, and say what you assumed in the summary.
+- It tests only the behaviour the report names, and calls the code only the way the existing tests or the report call it: the same functions, the same arguments. Do not use a parameter, a keyword argument, a function or a feature that the change under review added, even when the file has it now. The version without the defect may not have it, and the test would then error there instead of passing. A parameter the report does not mention is not part of the defect.
 - It sits inside the repository and imports the code the same way the existing tests do.
 
 # Output

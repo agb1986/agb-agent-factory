@@ -42,7 +42,7 @@ from tools import TOOLS
 from tools.registry import READ_ONLY
 
 ROOT = "/srv/work/tree"
-GUARD_REF = "action-guard@0.1.0"
+GUARD_REF = "action-guard@0.1.1"
 NETWORK = re.compile(r"\b(curl|wget|pip install|git push|ssh)\b")
 
 

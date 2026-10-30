@@ -57,7 +57,7 @@ def _output(**overrides: Any) -> dict[str, Any]:
 
 
 def test_manifest_resolves_to_the_documented_version(spec: LLMSpec) -> None:
-    assert spec.address == "test-writer@0.1.1"
+    assert spec.address == "test-writer@0.1.2"
     assert spec.model == "claude-sonnet-5-5"
     assert spec.effort == "xhigh"
     assert spec.sandbox is True

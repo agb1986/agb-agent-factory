@@ -50,6 +50,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `parent_run_id` column in the trace store, and `factory trace`, which exports a pipeline run as an Agent Flow event log with the real run tree (#71).
 - Live tests are opt-in: `live` and `live_jev` tests are deselected unless `FACTORY_LIVE=1` is set, in addition to the key. One shared `FACTORY_TRACE_DB` is documented for orchestrated workers (#72).
 - `unless` on a gate, which keeps it from firing when the gate it names fires. `diff-triage@0.3.0` gives `unsure` `unless: low_risk`, so a low-risk diff is skipped whatever the routing confidence, and its `reviewers` question names what `code-perf` and `code-security` are for (#75).
+- `action-guard@0.1.1` no longer refuses a write inside a worktree that sits under `/tmp`, `/home` or another listed prefix; the outside test applies to the path the call names, and its eval gains a case for it. `test-writer@0.1.2` tests only the behaviour the finding names and calls the code only as the existing tests do, so its test passes on the code before the change. Fixer and test-writer meet their eval floors (#75).
 
 <!-- Until the first tag, the Unreleased link points at the commits on main. At the first tag, docs/releasing.md moves these entries under the new version and changes this link to compare the tag with HEAD. -->
 [Unreleased]: https://github.com/agb1986/agb-agent-factory/commits/main
