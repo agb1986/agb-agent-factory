@@ -145,43 +145,29 @@ Exit codes: 0 no would-skip diff has a finding at `--fail-on` severity or worse,
 
 DuckDB allows one read-write process per file. A report that runs while a panel is writing to the same store fails with exit 1 and a hint; run it again later.
 
-### Running it daily
+### Running it once
 
-Nothing is scheduled. `agb` has no scheduling verb as of 2026-10-27, so a daily report is a cron entry or a systemd user timer. Neither reads your shell profile, so replace `uv` with the full path that `command -v uv` prints.
+Nothing is scheduled, and nothing needs to be. The report is a query over the trace store, so one run at the end of the window covers the whole period: `--since` the day the clock started, `--until` the last day, and `--fail-on major` to get the exit code the decision needs. A daily run would only split the same rows across days, and a scheduled job on a laptop that is asleep at the appointed hour silently misses them anyway.
 
-```cron
-0 7 * * * cd /path/to/agb-agent-factory && uv run python scripts/shadow_report.py --json >> data/shadow.jsonl
+```bash
+set -a; . ~/.config/agb/secrets.env; set +a
+FACTORY_TRACE_DB=~/.local/share/factory/traces.duckdb \
+  uv run python scripts/shadow_report.py --since 2026-10-30 --fail-on major
 ```
 
-The systemd alternative is two files, `~/.config/systemd/user/shadow-report.service` and `shadow-report.timer`:
+Add `--json` and redirect to `data/shadow.jsonl` to keep the document. Exit 0 means no would-skip diff had a `major` or `blocker` finding; exit 1 names the diff.
 
-```ini
-# shadow-report.service
-[Service]
-Type=oneshot
-WorkingDirectory=/path/to/agb-agent-factory
-ExecStart=/bin/sh -c 'uv run python scripts/shadow_report.py --json >> data/shadow.jsonl'
-
-# shadow-report.timer
-[Timer]
-OnCalendar=*-*-* 07:00
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
-
-Enable it with `systemctl --user enable --now shadow-report.timer`. Either one appends one JSON document a day to `data/shadow.jsonl`; a non-zero exit shows in the cron mail or in `journalctl --user -u shadow-report`.
+What the window measures is panel runs, so the evidence only exists if `factory review` runs against the shared store during the period. Reviews that write to a different `FACTORY_TRACE_DB`, or none, are invisible to the report.
 
 ## Shadow results
 
-Started 2026-10-30. `factory publish-check diff-triage@^0.3` passed that day at commit b5040e5 (7 of 7, recall on risky cases 1.0), which publishes diff-triage@0.3.0 with the `low_risk` skip gate at 0.5 and `unsure` yielding to it. `ROUTE_ONLY` stays on. The 14 days end at the earliest on 2026-11-13. The first report, run by hand on 2026-10-30 against the shared store (`FACTORY_TRACE_DB=~/.local/share/factory/traces.duckdb`), covered 2026-10-17 to 2026-10-30 and found no panel runs, so there is nothing to record yet; the sweep's own runs are left out by their `calibrate-` run ids. The daily entry from [Running it daily](#running-it-daily), with `FACTORY_TRACE_DB` set to the shared store, appends each report to `data/shadow.jsonl`.
+Started 2026-10-30. `factory publish-check diff-triage@^0.3` passed that day at commit b5040e5 (7 of 7, recall on risky cases 1.0), which publishes diff-triage@0.3.0 with the `low_risk` skip gate at 0.5 and `unsure` yielding to it. `ROUTE_ONLY` stays on. The 14 days end at the earliest on 2026-11-13. The first report, run by hand on 2026-10-30 against the shared store (`FACTORY_TRACE_DB=~/.local/share/factory/traces.duckdb`), covered 2026-10-17 to 2026-10-30 and found no panel runs, so there is nothing to record yet; the sweep's own runs are left out by their `calibrate-` run ids. The final report, run as in [Running it once](#running-it-once) on or after 2026-11-13, goes in the table below.
 
-| Day | Panel runs | Would skip | Worst finding | Note |
+| Window | Panel runs | Would skip | Worst finding | Note |
 | --- | --- | --- | --- | --- |
-| 2026-10-30 | 0 | 0 | none | first report, by hand |
+| 2026-10-17 to 2026-10-30 | 0 | 0 | none | first report, by hand, before any review ran |
 
-Record each day's would-skip count and worst finding above, and any threshold change with the day the clock restarted.
+Record the end-of-window report above, and any threshold change with the day the clock restarted.
 
 ## Measured against --no-triage
 
