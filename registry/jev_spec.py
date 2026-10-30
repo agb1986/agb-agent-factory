@@ -172,6 +172,12 @@ class _GateBase(_Model):
     name: Identifier
     question: Identifier
     action: Literal["skip", "escalate"]
+    unless: Identifier | None = None
+    """The name of another gate; this gate does not fire when that one fires.
+
+    The named gate must exist, must not be this gate, and must have no `unless` of its own, so a
+    manifest cannot chain or loop the rule.
+    """
 
 
 class ProbabilityGate(_GateBase):
@@ -283,17 +289,32 @@ def _check_questions(questions: tuple[Question, ...]) -> list[str]:
 def _check_gates(gates: tuple[Gate, ...], by_id: dict[str, Question]) -> list[str]:
     problems = []
     names: set[str] = set()
+    by_name = {gate.name: gate for gate in gates}
     for index, gate in enumerate(gates):
         where = f"gates[{index}] ({gate.name})"
         if gate.name in names:
             problems.append(f"{where}: duplicate gate name")
         names.add(gate.name)
+        problems += _check_unless(where, gate, by_name)
         question = by_id.get(gate.question)
         if question is None:
             problems.append(f"{where}: question {gate.question!r} is not defined")
             continue
         problems += _check_gate_rule(where, gate, question)
     return problems
+
+
+def _check_unless(where: str, gate: Gate, by_name: dict[str, Gate]) -> list[str]:
+    if gate.unless is None:
+        return []
+    if gate.unless == gate.name:
+        return [f"{where}: unless names the gate itself"]
+    other = by_name.get(gate.unless)
+    if other is None:
+        return [f"{where}: unless names no gate {gate.unless!r}"]
+    if other.unless is not None:
+        return [f"{where}: unless names {gate.unless!r}, which has an unless of its own"]
+    return []
 
 
 def _check_gate_rule(where: str, gate: Gate, question: Question) -> list[str]:

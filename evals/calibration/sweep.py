@@ -3,8 +3,8 @@
 `scripts/calibrate.py` fetches every labelled diff and runs diff-triage over it once. `sweep` then
 decides each diff again at every candidate threshold with `runtime.gates.decide`, on a copy of the
 manifest whose skip gate is moved to that threshold (`runtime.gates.with_skip_threshold`), so the
-numbers are what the panel would do: an escalating gate still clears the skip, and a truncated
-input is always reviewed. A diff whose Jev call failed is left out of every number and listed.
+numbers are what the panel would do: an escalating gate still clears the skip unless its `unless`
+names the skip gate, and a truncated input is always reviewed. A diff whose Jev call failed is left out of every number and listed.
 
 At each threshold it measures recall on risky diffs (the share still reviewed), the skip rate on
 safe diffs, and the cost per diff: the mean Jev cost, plus the share of diffs still reviewed times

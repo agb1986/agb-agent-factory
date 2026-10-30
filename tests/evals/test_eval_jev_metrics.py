@@ -78,7 +78,7 @@ def approve(expected: Expected, actual: Mapping[str, Any]) -> JudgeVerdict:
 
 @pytest.fixture(scope="module")
 def triage() -> JevSpec:
-    spec = resolve("diff-triage", "^0.2")
+    spec = resolve("diff-triage", "^0.3")
     assert isinstance(spec, JevSpec)
     return spec
 

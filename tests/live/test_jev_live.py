@@ -33,7 +33,7 @@ DIFF = """\
 
 @pytest.mark.live_jev
 def test_a_noul_answer_comes_back_in_range_and_is_traced(tmp_path: Path) -> None:
-    spec = resolve("diff-triage", "^0.2")
+    spec = resolve("diff-triage", "^0.3")
     assert isinstance(spec, JevSpec)
     assert "jev-latest" in available_models()
 

@@ -214,6 +214,35 @@ def test_gate_names_are_unique() -> None:
     rejects("duplicate gate name", gates=[gate, gate])
 
 
+def test_gate_unless_names_another_gate() -> None:
+    gates = copy.deepcopy(VALID["gates"])
+    gates[2]["unless"] = "calm"
+    assert spec_from(gates=gates).gates[2].unless == "calm"
+    assert spec_from().gates[2].unless is None
+
+
+def test_gate_unless_must_name_a_defined_gate() -> None:
+    gates = copy.deepcopy(VALID["gates"])
+    gates[2]["unless"] = "ghost"
+    rejects(r"gates\[2\] \(unsure\): unless names no gate 'ghost'", gates=gates)
+
+
+def test_gate_unless_cannot_name_itself() -> None:
+    gates = copy.deepcopy(VALID["gates"])
+    gates[2]["unless"] = "unsure"
+    rejects(r"gates\[2\] \(unsure\): unless names the gate itself", gates=gates)
+
+
+def test_gate_unless_does_not_chain() -> None:
+    gates = copy.deepcopy(VALID["gates"])
+    gates[1]["unless"] = "calm"
+    gates[2]["unless"] = "api_likely"
+    rejects(
+        r"gates\[2\] \(unsure\): unless names 'api_likely', which has an unless of its own",
+        gates=gates,
+    )
+
+
 def test_gate_must_name_a_defined_question() -> None:
     gate = {**VALID["gates"][0], "question": "missing"}
     rejects(r"gates\[0\] \(calm\): question 'missing' is not defined", gates=[gate])
