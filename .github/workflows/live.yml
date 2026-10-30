@@ -14,6 +14,7 @@ jobs:
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      FACTORY_LIVE: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +31,6 @@ jobs:
 
       - run: uv sync --locked
 
-      # A test whose key is not set skips itself (see tests/conftest.py), so a missing secret
+      # FACTORY_LIVE=1 is the opt-in; a test whose key is not set skips itself (see tests/conftest.py), so a missing secret
       # shows up as skipped tests, not as a failure.
       - run: uv run pytest -m "live or live_jev" -ra

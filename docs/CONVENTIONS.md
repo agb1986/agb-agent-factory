@@ -405,7 +405,7 @@ The judge gate (`decide_judge_gate` in `runtime/gates.py`, agent `judge-gate@^0.
 
 ## Trace row
 
-Every agent run, successful or not, writes exactly one row to the DuckDB trace store. The default path is `data/traces.duckdb`, overridden by an argument or by `FACTORY_TRACE_DB` (#6).
+Every agent run, successful or not, writes exactly one row to the DuckDB trace store. The default path is `data/traces.duckdb`, overridden by an argument or by `FACTORY_TRACE_DB` (#6). Orchestrated workers all set `FACTORY_TRACE_DB=~/.local/share/factory/traces.duckdb`, one store outside every worktree, so `factory cost --since` covers every worker and the rows survive `git worktree remove`; a per-worktree `data/traces.duckdb` is deleted with the worktree. The package default stays `data/traces.duckdb` for a plain checkout, and the container keeps `/app/data/traces.duckdb` (#72).
 
 The LLM runner writes the row in a `finally` block, so a failed run still records its usage and `error` as `<ErrorClass>: <message>`. Usage is summed over every response, the validation retry included. Two checks come before the run starts and write no row, because there is nothing valid to record: a payload that fails the input model, and a missing `repo_path` for an agent that allows tools. Both raise `UsageError`. The Jev runner also writes its row in a `finally` block, with `kind` `jev`, `output_tokens` 0, `input_tokens` from the response's usage and `cost_usd` from `jev-1.14.0` in `runtime/pricing.py` (input tokens only, no cache). Its `input_json` is the payload and its `output_json` holds the full probability vectors. A payload that does not match the template raises `UsageError` and writes no row.
 
@@ -448,7 +448,7 @@ A `Trace` holds one DuckDB connection for its lifetime and opens it on first use
 - The factory never reads that file. Whoever starts the factory exports the key: the shell, CI, or the `agb factory` wrapper (#30). In a container the same variables come from an env file, `.env` copied from `.env.example`, passed with `--env-file` or Compose's `env_file` ([Deployment](#deployment)).
 - A missing key raises `AuthOrConfigError` (exit 4) with a hint that names the variable, never its value. So does a key the API rejects with a 401 or 403, with the same hint.
 - No secret goes into the repository, a test, a config file, a container image, a trace row, a log line or an error message. The `typesafe_sdk` logger logs each request id at INFO, so a deployed factory runs it at WARNING (`TYPESAFE_LOG_LEVEL=warning`, which the SDK reads at import) and never at DEBUG.
-- Tests that need a live key carry a marker, and `tests/conftest.py` skips each marker when its variable is unset: `live` needs `ANTHROPIC_API_KEY` and `live_jev` needs `TYPESAFE_API_KEY`. The two are independent, so having one key does not run the other's tests.
+- Tests that need a live key carry a marker, and `tests/conftest.py` deselects both markers unless `FACTORY_LIVE=1` is set, then skips each marker when its variable is unset: `live` needs `ANTHROPIC_API_KEY` and `live_jev` needs `TYPESAFE_API_KEY`. The two are independent, so having one key does not run the other's tests.
 
 ```python
 if not os.environ.get("ANTHROPIC_API_KEY"):

@@ -67,7 +67,7 @@ Waves are groups whose members have all their dependencies merged and touch disj
 
 Critical path: #2, #1, #4, #5, #7, #8, #11, #14, #18, #19, #24, #29. Everything else floats.
 
-Before each wave: `git checkout main && git pull`, create one worktree per lane (`git worktree add ../factory-issue-N -b issue-N-<slug>`), start the agent in that worktree with the prompt below. After the wave: review each PR, merge in the order the Notes column implies, delete worktrees, run `uv run pytest` on main once.
+Before each wave: `git checkout main && git pull`, create one worktree per lane (`git worktree add ../factory-issue-N -b issue-N-<slug>`), start the agent in that worktree with the prompt below. After the wave: review each PR, merge in the order the Notes column implies, delete worktrees, run `uv run pytest` on main once. The coordinator also runs the live suite once per wave, pre-merge, on main: `FACTORY_LIVE=1 uv run pytest -m "live or live_jev"` with the keys set (or `gh workflow run live.yml`). Workers never run it.
 
 ## 3. Prompts
 
@@ -96,7 +96,12 @@ Hard rules:
   from memory. Prices carry the date they were checked in a comment.
 - Secrets come from the environment (`ANTHROPIC_API_KEY`, the Jev key) or from
   `agb sys secrets`. Nothing secret in the repository, tests, or an image.
-- Tests that need a live key are marked and skipped when the key is absent.
+- Tests that need a live key are marked `live` or `live_jev`. They are deselected unless
+  `FACTORY_LIVE=1` is set, and skipped when that key is absent. Never set `FACTORY_LIVE`;
+  the coordinator runs the live suite once per wave.
+- Orchestrated workers write traces to one shared store:
+  `export FACTORY_TRACE_DB=~/.local/share/factory/traces.duckdb` before any run, so
+  `factory cost --since` covers every worker and the rows outlive the worktree.
 - Tools in `tools/` are read-only unless the issue says they run in the sandbox.
 - Gates, thresholds and routing live in `runtime/gates.py` and return a
   `Decision`; never inside a prompt.
