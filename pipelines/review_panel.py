@@ -56,7 +56,7 @@ REVIEWERS: tuple[tuple[str, str], ...] = (
 JUDGE: tuple[str, str] = ("judge", "^2.0")
 """The judge agent and its version range."""
 
-TRIAGE: tuple[str, str] = ("diff-triage", "^0.2")
+TRIAGE: tuple[str, str] = ("diff-triage", "^0.3")
 """The Jev agent that triages the diff and the version range it is pinned to."""
 
 TRIAGE_TAG = "triage:decision"

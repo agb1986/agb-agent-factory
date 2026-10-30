@@ -2,8 +2,9 @@
 
 `decide` evaluates `JevSpec.gates` and `JevSpec.routing` on a `JevOutput`. The thresholds are the
 manifest's and no model decides them. Three rules hold whatever the gates say: a truncated input
-never skips, an escalation clears `skip`, and a Jev failure escalates (`jev_error`). See "Gates" in
-docs/CONVENTIONS.md.
+never skips, an escalation clears `skip`, and a Jev failure escalates (`jev_error`). A gate with
+`unless` is held back when the gate it names fires, so a manifest can keep an escalation from
+clearing a particular skip. See "Gates" in docs/CONVENTIONS.md.
 
 `skip_gate` and `with_skip_threshold` read and replace the one threshold calibration tunes, the
 manifest's `p_below` skip gate (docs/jev-calibration.md).
@@ -138,11 +139,11 @@ def decide(spec: JevSpec, output: JevOutput, truncated: bool) -> Decision:
 
     When `truncated` is true the answers rest on part of the input, so the result is
     `skip=False, escalate=True, route=()` with reason `truncated`: review everything. An
-    escalation clears `skip`.
+    escalation clears `skip`. A gate with `unless` does not fire when the gate it names fires.
     """
     if truncated:
         return Decision(skip=False, escalate=True, route=(), reason=TRUNCATED)
-    fired = [gate for gate in spec.gates if _fires(gate, output)]
+    fired = _fired(spec.gates, output)
     escalating = [gate.name for gate in fired if gate.action == "escalate"]
     skipping = [gate.name for gate in fired if gate.action == "skip"]
     matched = _matched_routes(spec, {gate.name for gate in fired}, output)
@@ -168,6 +169,22 @@ def decide_judge_gate(spec: JevSpec, output: JevOutput, truncated: bool) -> Deci
     if not decision.skip:
         return decision
     return Decision(skip=True, escalate=False, route=decision.route, reason=JUDGE_GATE)
+
+
+def _fired(gates: tuple[Gate, ...], output: JevOutput) -> list[Gate]:
+    """The gates that fire, in manifest order.
+
+    Gates without `unless` are evaluated first; a gate with `unless` fires only when the gate it
+    names did not. The manifest validation guarantees the named gate exists and has no `unless`.
+    """
+    plain = {gate.name for gate in gates if gate.unless is None and _fires(gate, output)}
+
+    def fired(gate: Gate) -> bool:
+        if gate.unless is None:
+            return gate.name in plain
+        return gate.unless not in plain and _fires(gate, output)
+
+    return [gate for gate in gates if fired(gate)]
 
 
 def _fires(gate: Gate, output: JevOutput) -> bool:

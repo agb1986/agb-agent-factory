@@ -223,6 +223,45 @@ def test_an_escalation_clears_a_skip(spec: JevSpec) -> None:
     assert decision.reason == "huge"
 
 
+def _with_unless(**changes: Any) -> JevSpec:
+    """`spec` with `unless: calm` on the `unsure` gate, then `changes` on that gate."""
+    gates = copy.deepcopy(MANIFEST["gates"])
+    unsure = next(gate for gate in gates if gate["name"] == "unsure")
+    unsure.update({"unless": "calm", **changes})
+    return _spec(gates=gates)
+
+
+def test_a_gate_with_unless_is_held_back_when_the_named_gate_fires() -> None:
+    # `calm` skips and `unsure` would escalate, but `unsure` yields to `calm`.
+    decision = decide(_with_unless(), _output(_with_unless(), p=0.01, confidence=0.3), False)
+    assert decision == Decision(skip=True, escalate=False, route=(), reason="calm")
+
+
+def test_a_gate_with_unless_fires_when_the_named_gate_does_not() -> None:
+    decision = decide(_with_unless(), _output(_with_unless(), p=0.5, confidence=0.3), False)
+    assert decision.escalate is True and decision.skip is False
+    assert decision.reason == "unsure"
+    assert decision.route == ("code-reviewer", "security-reviewer")
+
+
+def test_unless_names_one_gate_so_other_skips_are_still_cleared() -> None:
+    # `docs_only` skips on area=ui; `unsure` yields only to `calm`, which does not fire at p=0.5.
+    decision = decide(_with_unless(), _output(_with_unless(), p=0.5, confidence=0.3), False)
+    assert decision.skip is False and decision.escalate is True
+
+
+def test_unless_is_read_before_manifest_order() -> None:
+    # `unsure` is listed before `calm` here and still yields to it.
+    gates = copy.deepcopy(MANIFEST["gates"])
+    calm = next(gate for gate in gates if gate["name"] == "calm")
+    unsure = next(gate for gate in gates if gate["name"] == "unsure")
+    unsure["unless"] = "calm"
+    reordered = [unsure, *[gate for gate in gates if gate is not unsure and gate is not calm], calm]
+    spec = _spec(gates=reordered)
+    decision = decide(spec, _output(spec, p=0.01, confidence=0.3, area="api"), False)
+    assert decision == Decision(skip=True, escalate=False, route=(), reason="calm")
+
+
 def test_the_first_escalating_gate_names_the_reason(spec: JevSpec) -> None:
     decision = decide(spec, _output(spec, p=0.95, area="api", size="large"), False)
     assert decision.reason == "alarm"
@@ -294,25 +333,39 @@ def test_a_manifest_without_gates_or_routing_decides_nothing() -> None:
     )
 
 
-def test_the_diff_triage_manifest_escalates_on_low_confidence() -> None:
-    from registry.resolver import resolve
-
-    triage = resolve("diff-triage", "^0.2")
-    assert isinstance(triage, JevSpec)
-    output = triage.output_class.model_validate(
+def _triage_output(spec: JevSpec, p: float, confidence: float) -> JevOutput:
+    return spec.output_class.model_validate(
         {
-            "needs_review": {"p": 0.02},
+            "needs_review": {"p": p},
             "reviewers": {
                 "answer": "code",
                 "probs": {"code": 0.4, "code-security": 0.2, "code-perf": 0.2, "all": 0.2},
-                "confidence": 0.3,
+                "confidence": confidence,
             },
         }
     )
-    decision = decide(triage, output, False)
+
+
+def test_the_diff_triage_manifest_escalates_on_low_confidence() -> None:
+    from registry.resolver import resolve
+
+    triage = resolve("diff-triage", "^0.3")
+    assert isinstance(triage, JevSpec)
+    decision = decide(triage, _triage_output(triage, p=0.7, confidence=0.3), False)
     assert decision.escalate is True and decision.skip is False
     assert decision.reason == "unsure"
     assert decision.route == ("code-reviewer", "security-reviewer", "perf-reviewer")
+
+
+def test_the_diff_triage_manifest_skips_low_risk_whatever_the_routing_confidence() -> None:
+    from registry.resolver import resolve
+
+    triage = resolve("diff-triage", "^0.3")
+    assert isinstance(triage, JevSpec)
+    decision = decide(triage, _triage_output(triage, p=0.02, confidence=0.3), False)
+    assert decision.skip is True and decision.escalate is False
+    assert decision.reason == "low_risk"
+    assert decision.route == ("code-reviewer",)
 
 
 # --- decide_judge_gate

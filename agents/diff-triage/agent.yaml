@@ -1,5 +1,5 @@
 name: diff-triage
-version: 0.2.1
+version: 0.3.0
 kind: jev
 description: Decides whether a diff needs human-quality review, and which reviewers should see it.
 model: jev-1.14.0
@@ -15,19 +15,24 @@ questions:
     text: Does this diff need human-quality review?
   - id: reviewers
     type: choice
-    text: Which reviewers should see this diff?
+    text: >-
+      Which reviewers should see this diff? Pick code-perf when it adds queries or I/O inside a
+      loop, repeated work or quadratic algorithms; code-security when it handles untrusted input,
+      paths, secrets or queries built from strings; all when more than one applies.
     options: [code, code-security, code-perf, all]
 
 # #20 calibrated the low_risk threshold against the labelled set (docs/jev-calibration.md). The
-# unsure value is not calibrated: the sweep moves only the skip gate, and unsure escalates 75 of
-# the 126 labelled diffs, which clears their skip.
+# unsure value is not calibrated: the sweep moves only the skip gate. unsure yields to low_risk,
+# because the routing confidence says nothing about a diff nobody reviews (#75).
 gates:
   - name: unsure
     question: reviewers
     rule: confidence_below
     value: 0.6
     action: escalate
+    unless: low_risk
   # Calibrated 2026-10-27 on 126 labelled diffs (22 risky): recall 1.000, safe skip rate 0.077 (scripts/calibrate.py).
+  # Run again 2026-10-30 at 0.3.0, unsure yielding: recall 1.000, safe skip rate 0.183 (scripts/calibrate.py).
   - name: low_risk
     question: needs_review
     rule: p_below

@@ -45,7 +45,10 @@ def _gated_manifest(tmp_path: Path, value: float | None = 0.05) -> Path:
     """
     manifest = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
     manifest["gates"] = [gate for gate in manifest["gates"] if gate["action"] != "skip"]
-    if value is not None:
+    if value is None:
+        for gate in manifest["gates"]:
+            gate.pop("unless", None)
+    else:
         manifest["gates"].append(
             {
                 "name": "low_risk",

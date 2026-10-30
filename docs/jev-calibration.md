@@ -2,7 +2,7 @@
 
 How the diff-triage skip threshold is calibrated (#20): the labelled diffs, the sweep that picks the threshold, how the result goes into the manifest, and the shadow period before anything is skipped. Every fact below was checked on 2026-10-27 against the code and files linked in its section.
 
-The live steps ran on 2026-10-27: the panel labelling pass over the `needs_panel` rows, the live model-id check and the real sweep. [Results](#results) records the sweep. [Shadow results](#shadow-results) stays a placeholder until the calibrated gate is merged and published.
+The live steps ran on 2026-10-27: the panel labelling pass over the `needs_panel` rows, the live model-id check and the real sweep. [Results](#results) records the sweep. The sweep ran again on 2026-10-30 for diff-triage@0.3.0, see [the `unsure` gate yields to `low_risk`](#the-unsure-gate-yields-to-low_risk-030). [Shadow results](#shadow-results) stays a placeholder until the calibrated gate is merged and published.
 
 ## Dataset
 
@@ -50,7 +50,7 @@ Sources: [scripts/calibrate.py](../scripts/calibrate.py), [evals/calibration/swe
 
 `scripts/calibrate.py` fetches every labelled diff and runs diff-triage over each one once, through the review panel's `run_triage`. The calls share one `Budget` (`--budget-usd`, default $1.00). Each call is traced under the pipeline run id `calibrate-<run>-<label id>`, and its cost is read back by that id.
 
-The sweep then decides every diff again at each candidate threshold with `runtime.gates.decide`, on a copy of the manifest whose `low_risk` skip gate (`needs_review` `p_below` the threshold) is set by `runtime.gates.with_skip_threshold`. The numbers are what the panel would do: the `unsure` gate still escalates and clears the skip, and a truncated input is always reviewed. The default thresholds are 0.02, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4 and 0.5; `--thresholds` replaces them.
+The sweep then decides every diff again at each candidate threshold with `runtime.gates.decide`, on a copy of the manifest whose `low_risk` skip gate (`needs_review` `p_below` the threshold) is set by `runtime.gates.with_skip_threshold`. The numbers are what the panel would do: an escalating gate still clears the skip unless its `unless` names the skip gate, as `unsure` does since diff-triage@0.3.0, and a truncated input is always reviewed. The default thresholds are 0.02, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4 and 0.5; `--thresholds` replaces them.
 
 At each threshold the sweep reports:
 
@@ -100,6 +100,12 @@ The cost column includes the $0.29 panel for every diff still reviewed. No thres
 
 The skip rate is held down by the `unsure` gate rather than by the threshold. That gate escalates when the `reviewers` confidence is below 0.6, and it escalated 75 of the 126 diffs, 59 of them safe. Of the 20 safe diffs with `needs_review` below 0.5, 12 were escalated and none was truncated, which leaves the 8 that skip. The sweep moves only the skip gate, so the `unsure` value is not calibrated here.
 
+### The `unsure` gate yields to `low_risk` (0.3.0)
+
+On 2026-10-30 `factory publish-check diff-triage@^0.2` failed its 0.9 pass-rate floor at 5 of 7 (#75): the `docs-only` eval case had `needs_review` 0.26 and `reviewers` confidence 0.41, so `unsure` escalated and cleared the skip the case expects. The routing confidence says nothing about a diff nobody is going to review, so 0.3.0 gives `unsure` the field `unless: low_risk` (docs/CONVENTIONS.md, "Gates"): it does not fire when the skip gate fires. The skip gate's threshold and the recall it was calibrated for are unchanged; what changes is that the safe diffs `unsure` was pulling back get skipped. The same release gives the `reviewers` question text a cue for `code-perf` and `code-security`, because the `n-plus-one` case was routed to `code` alone.
+
+The sweep was run again on 2026-10-30 against the 0.3.0 manifest with the same command and `--panel-cost-usd 0.29`: 126 diffs measured, 5 truncated, none failed, Jev cost $0.0155, model id `jev-1.14.0`. Recall stays 1.000 at every threshold and the chosen threshold stays 0.5. The skip rate on safe diffs at 0.5 is now 0.183 (19/104) against 0.077 (8/104) before, and the cost per diff $0.2464 against $0.2717; at 0.4 it is 0.125 (13/104), at 0.3 and 0.25 0.019 (2/104), and 0 below that. The new question text moved a few probabilities, which is why the count is 19 and not the 20 the 2026-10-27 run implied. `factory eval diff-triage@^0.3` passed 7 of 7 the same day, recall on risky cases 1.0, skip rate 0.43 over the 7 cases.
+
 ## Writing the manifest snippet
 
 When a threshold reaches the recall, `calibrate.py` prints the gate to paste under `gates:` in [agents/diff-triage/agent.yaml](../agents/diff-triage/agent.yaml), with a comment giving the date and the dataset size, as the manifest's thresholds must:
@@ -117,7 +123,7 @@ Replace the placeholder comment above `gates:` at the same time.
 
 A gate alters behaviour, so it needs a minor version bump, 0.1.0 to 0.2.0 (docs/CONVENTIONS.md, "Agent address"). `scripts/check_version_bump.py` compares only the prompt, the schemas and the `questions` block, so it does not catch a gate change made without a bump. The agent has one version directory, so after the bump nothing matches `diff-triage@^0.1`, and the bump must also change the range to `^0.2` in `TRIAGE` in [pipelines/review_panel.py](../pipelines/review_panel.py) and in [tests/live/test_jev_live.py](../tests/live/test_jev_live.py). The 2026-10-27 gate was committed at 0.1.0 and the bump follows in its own commit, so the two can merge back to back; `ROUTE_ONLY` keeps the gate from skipping anything in between. [tests/live/test_triage_live.py](../tests/live/test_triage_live.py) asserts that the sample diff's `skip` matches the manifest's skip gate: below the threshold, not escalated and not truncated.
 
-The panel resolves with `published_only=True`. Until `factory publish-check diff-triage@^0.2` publishes 0.2.0, a panel run stops with exit 3 (`NotPublished`) unless it is given `--allow-unpublished`, so publish right after the merge.
+The panel resolves with `published_only=True`. Until `factory publish-check diff-triage@^0.3` publishes 0.3.0, a panel run stops with exit 3 (`NotPublished`) unless it is given `--allow-unpublished`, so publish right after the merge.
 
 ## Shadow mode
 

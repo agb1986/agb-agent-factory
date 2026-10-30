@@ -104,8 +104,8 @@ def _triage_rows(trace: RecordingTrace) -> list[TraceRow]:
 
 def test_the_panel_pins_diff_triage_to_the_0_1_range(panel: Panel) -> None:
     assert panel.triage is not None
-    assert panel.triage.address == "diff-triage@0.2.1"
-    assert review_panel.TRIAGE == ("diff-triage", "^0.2")
+    assert panel.triage.address == "diff-triage@0.3.0"
+    assert review_panel.TRIAGE == ("diff-triage", "^0.3")
 
 
 def test_triage_false_leaves_the_triage_agent_out() -> None:
@@ -144,7 +144,7 @@ def test_the_decision_and_probabilities_are_logged_in_a_trace_row(
     _run(skipping_panel, repo, trace, FakeJev(SKIPPABLE))
     (row,) = _triage_rows(trace)
     assert row.kind == "jev"
-    assert row.agent_ref == "diff-triage@0.2.1"
+    assert row.agent_ref == "diff-triage@0.3.0"
     assert row.pipeline_run_id == RUN_ID
     assert row.decision_json == {
         "skip": True,
@@ -164,7 +164,7 @@ def test_triage_is_called_with_the_files_and_the_diff_under_the_pipeline_run_id(
     jev = FakeJev()
     _run(panel, repo, trace, jev)
     (call,) = jev.calls_to("diff-triage")
-    assert call["spec"].address == "diff-triage@0.2.1"
+    assert call["spec"].address == "diff-triage@0.3.0"
     assert call["pipeline_run_id"] == RUN_ID
     assert call["payload"]["files"].splitlines() == changed_files(call["payload"]["diff"])
     assert call["payload"]["files"]

@@ -96,9 +96,21 @@ def test_a_truncated_diff_is_never_skipped_at_any_threshold(spec: JevSpec) -> No
 
 
 def test_an_escalating_gate_still_clears_the_skip(spec: JevSpec) -> None:
+    # Without `unless`, an escalation clears the skip, so the sweep counts the diff as reviewed.
+    data = spec.model_dump()
+    for gate in data["gates"]:
+        gate["unless"] = None
+    plain = JevSpec.model_validate(data)
+    diffs = [_diff(plain, "r#1", True, 0.9), _diff(plain, "s#1", False, 0.01, confidence=0.4)]
+    (row,) = sweep(plain, diffs, [0.5], question="needs_review").rows
+    assert row.safe_skipped == 0
+
+
+def test_a_gate_with_unless_leaves_the_skip_standing(spec: JevSpec) -> None:
+    # The manifest's `unsure` gate yields to `low_risk`, so the low-risk diff is skipped.
     diffs = [_diff(spec, "r#1", True, 0.9), _diff(spec, "s#1", False, 0.01, confidence=0.4)]
     (row,) = sweep(spec, diffs, [0.5], question="needs_review").rows
-    assert row.safe_skipped == 0
+    assert row.safe_skipped == 1
 
 
 def test_no_threshold_reaching_the_recall_target_chooses_none(spec: JevSpec) -> None:
@@ -147,7 +159,7 @@ def test_the_question_defaults_to_the_manifests_skip_gate(spec: JevSpec) -> None
 
 def test_no_skip_gate_and_no_question_is_a_usage_error(spec: JevSpec) -> None:
     data = spec.model_dump()
-    data["gates"] = [gate for gate in data["gates"] if gate["action"] != "skip"]
+    data["gates"] = [{**gate, "unless": None} for gate in data["gates"] if gate["action"] != "skip"]
     ungated = JevSpec.model_validate(data)
     with pytest.raises(SweepError, match="no skip gate") as info:
         sweep(ungated, _set(spec), [0.05])

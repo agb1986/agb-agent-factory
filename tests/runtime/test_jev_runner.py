@@ -64,7 +64,7 @@ SCORE_MANIFEST: dict[str, Any] = {
 
 @pytest.fixture
 def triage() -> JevSpec:
-    spec = resolve("diff-triage", "^0.2")
+    spec = resolve("diff-triage", "^0.3")
     assert isinstance(spec, JevSpec)
     return spec
 
@@ -190,10 +190,11 @@ def test_renders_the_template_and_sends_it_once_with_every_question(
         JevQuestion(
             "reviewers",
             "choice",
-            "Which reviewers should see this diff?",
+            triage.questions[1].text,
             ("code", "code-security", "code-perf", "all"),
         ),
     )
+    assert triage.questions[1].text.startswith("Which reviewers should see this diff?")
 
 
 def test_a_model_payload_renders_like_a_dict(triage: JevSpec, trace: Trace) -> None:
@@ -407,7 +408,7 @@ def test_a_successful_run_writes_one_complete_row(triage: JevSpec, trace: Trace)
     output = go(triage, FakeTransport(response()), trace, pipeline_run_id="pipe-1")
     (row,) = rows(trace)
     assert row["kind"] == "jev"
-    assert row["agent_ref"] == "diff-triage@0.2.1"
+    assert row["agent_ref"] == "diff-triage@0.3.0"
     assert row["pipeline_run_id"] == "pipe-1"
     assert row["input_tokens"] == 120
     assert row["output_tokens"] == 0
@@ -433,7 +434,7 @@ def test_a_failed_run_writes_one_row_with_the_error(triage: JevSpec, trace: Trac
     with pytest.raises(JevError):
         go(triage, transport, trace)
     (row,) = rows(trace)
-    assert row["error"] == "JevError: diff-triage@0.2.1: HTTP 400"
+    assert row["error"] == "JevError: diff-triage@0.3.0: HTTP 400"
     assert row["output_json"] is None
     assert row["decision_json"] == {"truncated": False, "model": None}
     assert row["cost_usd"] == cost_usd(MODEL, TokenUsage())
