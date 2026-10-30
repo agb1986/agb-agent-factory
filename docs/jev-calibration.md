@@ -2,7 +2,7 @@
 
 How the diff-triage skip threshold is calibrated (#20): the labelled diffs, the sweep that picks the threshold, how the result goes into the manifest, and the shadow period before anything is skipped. Every fact below was checked on 2026-10-27 against the code and files linked in its section.
 
-The live steps ran on 2026-10-27: the panel labelling pass over the `needs_panel` rows, the live model-id check and the real sweep. [Results](#results) records the sweep. The sweep ran again on 2026-10-30 for diff-triage@0.3.0, see [the `unsure` gate yields to `low_risk`](#the-unsure-gate-yields-to-low_risk-030). [Shadow results](#shadow-results) stays a placeholder until the calibrated gate is merged and published.
+The live steps ran on 2026-10-27: the panel labelling pass over the `needs_panel` rows, the live model-id check and the real sweep. [Results](#results) records the sweep. The sweep ran again on 2026-10-30 for diff-triage@0.3.0, see [the `unsure` gate yields to `low_risk`](#the-unsure-gate-yields-to-low_risk-030). [Shadow results](#shadow-results) records the shadow period, which started on 2026-10-30.
 
 ## Dataset
 
@@ -175,7 +175,13 @@ Enable it with `systemctl --user enable --now shadow-report.timer`. Either one a
 
 ## Shadow results
 
-Not started: the shadow period begins once a calibrated gate is merged and published. Record here the start date, the threshold, each daily report's would-skip count and worst finding, and any threshold change with the day the clock restarted.
+Started 2026-10-30. `factory publish-check diff-triage@^0.3` passed that day at commit b5040e5 (7 of 7, recall on risky cases 1.0), which publishes diff-triage@0.3.0 with the `low_risk` skip gate at 0.5 and `unsure` yielding to it. `ROUTE_ONLY` stays on. The 14 days end at the earliest on 2026-11-13. The first report, run by hand on 2026-10-30 against the shared store (`FACTORY_TRACE_DB=~/.local/share/factory/traces.duckdb`), covered 2026-10-17 to 2026-10-30 and found no panel runs, so there is nothing to record yet; the sweep's own runs are left out by their `calibrate-` run ids. The daily entry from [Running it daily](#running-it-daily), with `FACTORY_TRACE_DB` set to the shared store, appends each report to `data/shadow.jsonl`.
+
+| Day | Panel runs | Would skip | Worst finding | Note |
+| --- | --- | --- | --- | --- |
+| 2026-10-30 | 0 | 0 | none | first report, by hand |
+
+Record each day's would-skip count and worst finding above, and any threshold change with the day the clock restarted.
 
 ## Measured against --no-triage
 
