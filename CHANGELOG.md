@@ -45,6 +45,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Continuous integration for lint, type checks and tests, with a coverage floor (#27).
 - Docker image for the deployment, with a data volume, secrets from an env file and an image key scan (#28).
 - Eval cases for `diff-triage@0.2.1`, with `$fixture` payloads, expected answers and gate decisions, and the `recall_risky`, `skip_rate` and `escalation_rate` metrics, gated on `evals.min_recall_risky` (#66).
+- `fixer@0.1.1` and `test-writer@0.1.1` reach four and five eval cases, with two new fixtures, `mixed-red` and `sql-injection-red` (#65).
+- `factory cost --by kind`, which splits spend between `claude` and `jev` runs, and `scripts/triage_saving.py`, which measures the diff-triage saving against `factory review --no-triage` (#67).
+- `parent_run_id` column in the trace store, and `factory trace`, which exports a pipeline run as an Agent Flow event log with the real run tree (#71).
+- Live tests are opt-in: `live` and `live_jev` tests are deselected unless `FACTORY_LIVE=1` is set, in addition to the key. One shared `FACTORY_TRACE_DB` is documented for orchestrated workers (#72).
 
 <!-- Until the first tag, the Unreleased link points at the commits on main. At the first tag, docs/releasing.md moves these entries under the new version and changes this link to compare the tag with HEAD. -->
 [Unreleased]: https://github.com/agb1986/agb-agent-factory/commits/main

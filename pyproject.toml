@@ -55,8 +55,8 @@ extend-select = ["I", "UP"]
 testpaths = ["tests"]
 addopts = "-ra"
 markers = [
-    "live: needs a live ANTHROPIC_API_KEY; skipped when the key is absent",
-    "live_jev: needs a live TYPESAFE_API_KEY; skipped when the key is absent",
+    "live: needs FACTORY_LIVE=1 and a live ANTHROPIC_API_KEY; deselected without the opt-in, skipped without the key",
+    "live_jev: needs FACTORY_LIVE=1 and a live TYPESAFE_API_KEY; deselected without the opt-in, skipped without the key",
 ]
 
 [tool.coverage.run]
