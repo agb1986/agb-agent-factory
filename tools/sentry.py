@@ -28,6 +28,7 @@ from tools._common import (
     ToolExecutionError,
     ToolInputError,
     ToolNotFoundError,
+    ToolSpec,
     truncate,
 )
 
@@ -280,3 +281,37 @@ def read_issue(
         "breadcrumbs": breadcrumbs,
     }
     return _compact(document, max_bytes)
+
+
+TOOLS = (
+    ToolSpec(
+        name="sentry.list_events",
+        description="List the events Sentry recorded for a project since a time, newest first, with issue id, title, release and environment. Read-only; needs SENTRY_AUTH_TOKEN and SENTRY_ORG.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "since": {"type": "string", "description": "ISO 8601 time; only events at or after it are listed, e.g. 2026-11-01T00:00:00Z."},
+                "project": {"type": "string", "description": "Sentry project slug; defaults to SENTRY_PROJECT."},
+            },
+            "required": ["since"],
+            "additionalProperties": False,
+        },
+        impl=list_events,
+        reaches_out=True,
+    ),
+    ToolSpec(
+        name="sentry.read_issue",
+        description="Return one Sentry issue as compact JSON: counts, release tag, the stack trace of its latest event and its breadcrumbs. Read-only; needs SENTRY_AUTH_TOKEN.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "The numeric Sentry issue id."},
+            },
+            "required": ["id"],
+            "additionalProperties": False,
+        },
+        impl=read_issue,
+        reaches_out=True,
+    ),
+)  # fmt: skip
+"""The tools this module declares; `tools.registry` collects them."""

@@ -43,6 +43,7 @@ from tools._common import (
     PathEscapeError,
     ToolInputError,
     ToolNotFoundError,
+    ToolSpec,
     fail_hint,
     git,
     resolve_inside,
@@ -624,3 +625,26 @@ __all__ = [
     "render_graph",
     "render_impact",
 ]
+
+
+TOOLS = (
+    ToolSpec(
+        name="deps.graph",
+        description="Return the import graph of the repository: its Python, TypeScript and JavaScript modules and the import edges between them, one line per importing module. Python is read with the ast module, TypeScript and JavaScript from their import, export and require statements. Imports of the standard library and installed packages are counted as external. Dynamic imports, path aliases and other imports that name no single file are listed as unresolved with a reason, never guessed. An import of a barrel file is an edge to the barrel itself, not to the module a re-exported name comes from.",
+        impl=graph,
+    ),
+    ToolSpec(
+        name="deps.impact",
+        description="Return the modules that import any of the given files, directly or through other modules, each with its depth (1 for a direct importer). It walks the deps.graph import graph, so unresolved imports such as dynamic imports and path aliases are not followed and the set may be incomplete; the output says when the repository has any.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "paths": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Module file paths relative to the repository root."},
+            },
+            "required": ["paths"],
+            "additionalProperties": False,
+        },
+        impl=impact,
+    ),
+)  # fmt: skip
+"""The tools this module declares; `tools.registry` collects them."""

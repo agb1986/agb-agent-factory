@@ -24,6 +24,7 @@ from tools._common import (
     DEFAULT_MAX_BYTES,
     PathEscapeError,
     ToolInputError,
+    ToolSpec,
     ToolUnavailableError,
     resolve_inside,
     resolve_root,
@@ -310,3 +311,37 @@ def require_image() -> None:
         if image != SANDBOX_IMAGE:
             hint = f"build or pull {image}, or unset {SANDBOX_IMAGE_ENV} to use {SANDBOX_IMAGE}"
         raise ToolUnavailableError(f"sandbox image {image} is missing", hint=hint)
+
+
+TOOLS = (
+    ToolSpec(
+        name="fs.write_file",
+        description="Create or replace one working-tree file with the given content. Refuses paths outside the repository, anything under .git, and content over 256 KiB.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path relative to the repository root."},
+                "content": {"type": "string", "description": "The complete new contents of the file."},
+            },
+            "required": ["path", "content"],
+            "additionalProperties": False,
+        },
+        impl=write_file,
+        writes=True,
+    ),
+    ToolSpec(
+        name="shell.run",
+        description="Run one command in an offline sandbox with the repository mounted at /work. Allowed programs: pytest, python, uv, and read-only git subcommands. Returns the exit code and the output. Run the tests as [\"python\", \"-m\", \"pytest\", \"-q\"].",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "argv": {"type": "array", "items": {"type": "string"}, "description": "The program and its arguments, one per item. No shell syntax."},
+            },
+            "required": ["argv"],
+            "additionalProperties": False,
+        },
+        impl=run_command,
+        writes=True,
+    ),
+)  # fmt: skip
+"""The tools this module declares, the only ones that write; `tools.registry` collects them."""

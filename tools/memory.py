@@ -7,6 +7,7 @@ from tools._common import (
     DEFAULT_MAX_BYTES,
     ToolExecutionError,
     ToolInputError,
+    ToolSpec,
     ToolUnavailableError,
     fail_hint,
     resolve_root,
@@ -72,3 +73,23 @@ def _entry(row: dict[str, object]) -> str:
     title = " ".join(str(row.get("title") or "").split())
     snippet = " ".join(str(row.get("snippet") or "").split())
     return f"[{backend}] {ref} | {row.get('timestamp') or 'undated'} | {title}\n  {snippet}\n"
+
+
+TOOLS = (
+    ToolSpec(
+        name="memory.search",
+        description="Search the machine's long-term memory (claude-mem and OpenViking) and return the best matches, each with its source and a stable ref to cite. Read-only. Reaches the host, so a pipeline must never allow it to an agent with `sandbox: true`.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What to look for, in plain words."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 25, "description": "Most results to return. Default 10."},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        impl=search,
+        reaches_out=True,
+    ),
+)  # fmt: skip
+"""The tools this module declares; `tools.registry` collects them."""
