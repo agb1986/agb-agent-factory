@@ -1,0 +1,149 @@
+# Eval cases for technical-feasibility. Each one asks a feasibility question that the Python
+# documentation on docs.python.org answers plainly, or plainly does not, and grades the answer
+# three ways: the verdict must match `expected.verdict` exactly, every claim marked as a fact must
+# quote its page word for word (`citations_resolve`), and a small model scores the reasoning
+# against the rubric. The pages each case needs are short library pages, well inside the 64 KiB
+# an agent's fetch returns, and each case can be answered with web.fetch alone, without search.
+# `repo_path` is not in the payload: the eval runner fills it in with the built fixture repository.
+cases:
+  - id: read-toml-config-stdlib
+    fixture: mixed
+    payload:
+      ref: head
+      question: >-
+        The shop's settings live as constants in shop/config.py. We run Python 3.12 and want to
+        move them into a config.toml file and read it at start-up using only the Python standard
+        library, no third-party packages. Is that feasible?
+    expected:
+      verdict: viable
+      citations_resolve:
+        claims: reasons
+        allow_domains: [docs.python.org, peps.python.org, pypi.org, github.com]
+      rubric:
+        criteria:
+          - id: tomllib-cited
+            text: >-
+              The answer rests on the standard library module tomllib, citing its documentation
+              for parsing TOML and for being available since Python 3.11, which 3.12 satisfies.
+            required: true
+            floor: 0.6
+          - id: no-invented-blockers
+            text: >-
+              The answer does not invent conditions the documentation does not state, and does
+              not demote the verdict because tomllib cannot write TOML, which the question does
+              not need.
+          - id: repo-grounded
+            text: >-
+              The answer refers to shop/config.py or its settings, such as CURRENCY or MAX_ITEMS,
+              as what would move into the TOML file.
+        threshold: 0.7
+        required_fields: [verdict, summary, reasons]
+        forbidden: [TODO, lorem ipsum]
+    grader: rubric
+
+  - id: write-toml-stdlib-only
+    fixture: mixed
+    payload:
+      ref: head
+      question: >-
+        We run Python 3.12. When an admin changes a setting in the shop, we want to write the
+        updated settings back to config.toml using only the Python standard library, with no
+        third-party packages. Is that feasible?
+    expected:
+      verdict: not_viable
+      citations_resolve:
+        claims: reasons
+        allow_domains: [docs.python.org, peps.python.org, pypi.org, github.com]
+      rubric:
+        criteria:
+          - id: writing-unsupported-cited
+            text: >-
+              The answer cites the tomllib documentation saying the module does not support
+              writing TOML, and concludes that the standard library alone cannot write it.
+            required: true
+            floor: 0.6
+          - id: keeps-question-terms
+            text: >-
+              The answer keeps to the question's condition of no third-party packages: a TOML
+              writer package such as tomli-w may be mentioned as an alternative, but it does not
+              turn the verdict into viable.
+          - id: no-invention
+            text: >-
+              The answer does not claim the standard library has a TOML writer or a hidden way
+              to write TOML that the documentation does not state.
+        threshold: 0.7
+        required_fields: [verdict, summary, reasons]
+        forbidden: [TODO, lorem ipsum]
+    grader: rubric
+
+  - id: zoneinfo-windows-and-linux
+    fixture: n-plus-one
+    payload:
+      question: >-
+        Our service runs on Python 3.12 on Linux servers, and the same code also runs on Windows
+        laptops for support staff. We want to replace our hand-made UTC offsets with IANA time
+        zones from the standard library zoneinfo module. Is that feasible on both platforms?
+    expected:
+      verdict: viable_with_constraints
+      citations_resolve:
+        claims: reasons
+        allow_domains: [docs.python.org, peps.python.org, pypi.org, github.com]
+      rubric:
+        criteria:
+          - id: tzdata-constraint
+            text: >-
+              The answer states, citing the zoneinfo documentation, that some systems, notably
+              Windows, have no IANA time zone database, so a dependency on the tzdata package is
+              needed for the Windows machines, and lists that as a constraint.
+            required: true
+            floor: 0.6
+          - id: version-ok
+            text: >-
+              The answer notes that zoneinfo is available on Python 3.12, having been added in
+              Python 3.9, and does not raise the version as a blocker.
+          - id: grounded
+            text: >-
+              Every constraint comes from the documentation or the question; the answer does
+              not add platforms, versions or conditions the sources do not state.
+        threshold: 0.7
+        required_fields: [verdict, summary, reasons, constraints]
+        forbidden: [TODO, lorem ipsum]
+    grader: rubric
+
+  - id: tomllib-parse-speed-undocumented
+    fixture: mixed
+    payload:
+      ref: head
+      question: >-
+        We run Python 3.12. Can the standard library's tomllib parse a 200 MB TOML price list in
+        under one second, and using less than 1 GB of memory, on our servers?
+    expected:
+      verdict: unknown
+      citations_resolve:
+        claims: reasons
+        allow_domains: [docs.python.org, peps.python.org, pypi.org, github.com]
+      rubric:
+        criteria:
+          - id: restraint
+            text: >-
+              The answer says plainly that the documentation does not state parsing speed or
+              memory use for tomllib, and does not give or imply a time or memory figure of its
+              own as if it were known.
+            required: true
+            floor: 0.6
+          - id: spike-measures
+            text: >-
+              The spike is a concrete measurement, such as timing tomllib.load on a 200 MB file
+              of the right shape and recording peak memory, and says which result settles the
+              question.
+            required: true
+            floor: 0.5
+          - id: cites-what-is-documented
+            text: >-
+              The facts the answer does cite are things the documentation states, such as that
+              tomllib parses TOML or its warning that malicious input may consume considerable
+              CPU and memory, and none of them is stretched into a performance figure.
+        threshold: 0.7
+        required_fields: [verdict, summary, reasons, spike]
+        forbidden: [TODO, lorem ipsum]
+    grader: rubric

@@ -1,0 +1,31 @@
+name: technical-feasibility
+version: 0.1.0
+kind: llm
+description: >-
+  Judges whether an idea is technically viable in a repository and its ecosystem: a verdict of
+  viable, viable_with_constraints, not_viable or unknown, the reasons as cited claims, the
+  constraints found, and a spike that would settle what the documentation leaves open.
+model: claude-sonnet-5-5 # verified by tests/live/test_technical_feasibility_live.py
+effort: high
+system_prompt: system.md
+schemas: schemas.py
+input_model: FeasibilityInput
+output_model: FeasibilityOutput
+tools:
+  allow: [web.fetch, web.search, memory.search, git.read_file, rg.search]
+  deny: []
+  web:
+    allow_domains:
+      - docs.python.org
+      - peps.python.org
+      - pypi.org
+      - github.com
+      - developer.mozilla.org
+      - docs.djangoproject.com
+      - docs.sqlalchemy.org
+      - fastapi.tiangolo.com
+      - redis.io
+      - www.postgresql.org
+limits: {max_tool_turns: 10, timeout_s: 300, max_output_tokens: 8192, max_tokens_total: 200000}
+evals:
+  min_pass_rate: 0.75
