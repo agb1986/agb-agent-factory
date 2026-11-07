@@ -142,3 +142,14 @@ The outcomes:
 
 The fetcher is injectable (`evaluate(..., fetcher=...)`, a function from URL to page text), so
 tests and calibration runs need no network.
+
+**The case's domains are also the run's.** When a case sets `citations_resolve.allow_domains`,
+the eval runner runs the agent on that case with that list in place of the manifest's
+`tools.web.allow_domains` (`LLMSpec.with_web_domains`). The case list replaces the manifest list,
+it is not merged with it, so the agent can reach exactly the hosts the check will accept and a
+case can point a general research agent at the sources its question needs. A case without the
+check runs with the manifest list. The override never hands out web tools: the manifest must
+still allow `web.fetch` or `web.search` with a non-empty list, and for an agent whose manifest
+lists no domain the case list is ignored. Entries are bare lowercase hosts, as in the manifest,
+and a case with any other entry fails to load. `factory run --allow-domain` is the same override
+for one run outside the eval.

@@ -138,6 +138,38 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         help="stop the run once it has spent this many dollars (default: the pipeline default)",
     )
+    run_parser = sub.add_parser(
+        "run",
+        help="run one LLM agent once on a JSON payload and print its output",
+        epilog="example: factory run product-architect@^0.1 --input payload.json --repo . --json",
+    )
+    run_parser.add_argument("agent", help="`name@^MAJOR.MINOR`; the highest version if no range")
+    run_parser.add_argument(
+        "--input", required=True, help="file holding the JSON payload, or - to read it from stdin"
+    )
+    run_parser.add_argument(
+        "--repo", default=".", help="repository the agent's tools read (default: the current one)"
+    )
+    run_parser.add_argument(
+        "--allow-domain",
+        dest="allow_domains",
+        action="append",
+        metavar="HOST",
+        help="web host the agent may fetch, in place of the manifest's list; repeat for more",
+    )
+    run_parser.add_argument(
+        "--json", action="store_true", help="print one JSON document on stdout instead of text"
+    )
+    run_parser.add_argument(
+        "--allow-unpublished",
+        action="store_true",
+        help="also use agent versions that have not passed `factory publish-check`",
+    )
+    run_parser.add_argument(
+        "--budget-usd",
+        type=float,
+        help="stop the run once it has spent this many dollars (default: the pipeline default)",
+    )
     cost_parser = sub.add_parser(
         "cost",
         help="print what the agent runs in the trace cost since a date",
@@ -212,6 +244,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _triage(args)
         if args.command == "fix":
             return _fix(args)
+        if args.command == "run":
+            return _run(args)
         if args.command == "cost":
             return _cost(args)
         if args.command == "trace":
@@ -247,6 +281,21 @@ def _publish_check(agent: str, *, as_json: bool, workers: int) -> int:
     from registry.published import command  # imported here: it pulls in the Anthropic SDK
 
     return command(agent, as_json=as_json, workers=workers)
+
+
+def _run(args: argparse.Namespace) -> int:
+    """Run one LLM agent once; its output goes to stdout, the cost line to stderr without --json."""
+    from runtime.run_once import command  # imported here: it pulls in the Anthropic SDK
+
+    return command(
+        args.agent,
+        input=args.input,
+        repo=args.repo,
+        allow_domains=args.allow_domains,
+        as_json=args.json,
+        allow_unpublished=args.allow_unpublished,
+        budget_usd=args.budget_usd,
+    )
 
 
 def _review(args: argparse.Namespace) -> int:

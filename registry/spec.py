@@ -10,6 +10,7 @@ Loading a manifest from disk, and importing the schemas module an `LLMSpec` name
 
 import math
 import re
+from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
@@ -205,6 +206,21 @@ class LLMSpec(AgentSpecBase):
         """Record the classes the loader imported from `schemas`. Called by the loader only."""
         self._input_class = input_class
         self._output_class = output_class
+
+    def with_web_domains(self, domains: Iterable[str]) -> LLMSpec:
+        """Return this spec with `domains` in place of the manifest's `tools.web.allow_domains`.
+
+        The list replaces the manifest's, it is not merged with it, and it is validated as the
+        manifest's is: a host that is not bare and lowercase raises a Pydantic `ValidationError`.
+        The copy keeps the loaded models. A spec whose manifest lists no domain has no web tools,
+        so it comes back unchanged: the override never hands out web tools the manifest does not.
+        `evals.run` applies it for a case's `citations_resolve.allow_domains`, and `factory run`
+        for `--allow-domain`.
+        """
+        if not self.tools.web.allow_domains:
+            return self
+        web = WebSpec(allow_domains=tuple(domains))
+        return self.model_copy(update={"tools": self.tools.model_copy(update={"web": web})})
 
 
 KINDS = ("llm", "jev")

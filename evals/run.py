@@ -490,7 +490,7 @@ def _run_case(
                 if "repo_path" in spec.input_class.model_fields:
                     payload["repo_path"] = str(repo_path)
                 output = runner(
-                    spec,
+                    _case_spec(spec, case),
                     payload,
                     trace,
                     repo_path=repo_path,
@@ -567,6 +567,14 @@ def _elapsed(start: float) -> int:
 
 def _judge_json(verdict: JudgeVerdict) -> dict[str, Any]:
     return {"passed": verdict.passed, "score": verdict.score, "reason": verdict.reason}
+
+
+def _case_spec(spec: LLMSpec, case: Case) -> LLMSpec:
+    """The spec to run `case` with: a `citations_resolve` case's `allow_domains` replace the
+    manifest's `tools.web.allow_domains`, so the agent may fetch exactly the hosts the check
+    accepts. A case without that check runs with the manifest's list."""
+    check = case.expected.citations_resolve
+    return spec if check is None else spec.with_web_domains(check.allow_domains)
 
 
 def parse_ref(ref: str) -> tuple[str, str | None]:

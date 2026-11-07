@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from factory.exit import AuthOrConfigError, NotFoundError
+from registry.spec import DOMAIN_PATTERN
 
 CASES_FILE = Path("evals") / "cases.yaml"
 """Where an agent's cases live, relative to the directory of its manifest."""
@@ -166,11 +167,21 @@ class CitationsCheck(_Strict):
     `registry.common_schemas.Claim`). Each citation of each claim marked as a fact is fetched
     through `web.fetch`, and its quote must be in the page. `allow_domains` is the case's web
     allow-list, as `tools.web.allow_domains` is for an agent run: a cited host that is not one of
-    them or a subdomain of one is a case error. It cannot be empty.
+    them or a subdomain of one is a case error. It cannot be empty, and each entry is a bare
+    lowercase host, as in a manifest. The eval runner also runs the agent with this list in place
+    of its manifest's `tools.web.allow_domains` (see `registry.spec.LLMSpec.with_web_domains`).
     """
 
     claims: Annotated[str, Field(min_length=1)] = "claims"
     allow_domains: Annotated[tuple[Annotated[str, Field(min_length=1)], ...], Field(min_length=1)]
+
+    @field_validator("allow_domains")
+    @classmethod
+    def _bare_hosts(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for domain in value:
+            if not re.fullmatch(DOMAIN_PATTERN, domain):
+                raise ValueError(f"allow_domains entries are bare lowercase hosts, got {domain!r}")
+        return value
 
 
 class Expected(_Strict):
