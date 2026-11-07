@@ -1,0 +1,43 @@
+name: benchmark
+version: 0.1.0
+kind: llm
+description: >-
+  Compares candidate libraries for one need on fixed criteria (licence, maintenance, documented
+  performance, size, language support), with every number cited from the page it came from, then
+  recommends one and names a spike when the decision hinges on a number nobody publishes.
+model: claude-sonnet-5-5 # verified by tests/live/test_benchmark_live.py
+effort: high
+system_prompt: system.md
+schemas: schemas.py
+input_model: BenchmarkInput
+output_model: BenchmarkOutput
+tools:
+  allow: [web.fetch, web.search, memory.search, git.read_file, rg.search]
+  deny: []
+  web:
+    # Stable hosts for package metadata and licence texts, then the documentation hosts of the
+    # libraries the eval cases name. A case's citations_resolve domains are a subset of these.
+    allow_domains:
+      - pypi.org
+      - github.com
+      - githubusercontent.com
+      - docs.python.org
+      - peps.python.org
+      - opensource.org
+      - spdx.org
+      - choosealicense.com
+      - pymupdf.readthedocs.io
+      - pypdfium2.readthedocs.io
+      - artifex.com
+      - python-httpx.org
+      - docs.aiohttp.org
+      - toml.io
+      - pola.rs
+      - pandas.pydata.org
+limits:
+  max_tool_turns: 14
+  timeout_s: 600
+  max_output_tokens: 16000
+  max_tokens_total: 1000000
+evals:
+  min_pass_rate: 0.75
