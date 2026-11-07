@@ -10,6 +10,7 @@ from tools._common import (
     DEFAULT_MAX_BYTES,
     ToolInputError,
     ToolNotFoundError,
+    ToolSpec,
     fail_hint,
     git,
     resolve_commit,
@@ -66,3 +67,37 @@ def show_diff(
             f"git diff failed for {base_ref!r}..{head_ref!r}", hint=fail_hint(proc)
         )
     return truncate(proc.stdout, max_bytes)
+
+
+TOOLS = (
+    ToolSpec(
+        name="git.read_file",
+        description="Return the contents of one file as committed at a git ref.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path relative to the repository root."},
+                "ref": {"type": "string", "description": "Commit, branch, tag or other git ref, e.g. HEAD."},
+            },
+            "required": ["path", "ref"],
+            "additionalProperties": False,
+        },
+        impl=read_file,
+    ),
+    ToolSpec(
+        name="git.show_diff",
+        description="Return the unified diff from one git ref to another, optionally for one path.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "base_ref": {"type": "string", "description": "The older ref, the diff's left side."},
+                "head_ref": {"type": "string", "description": "The newer ref, the diff's right side."},
+                "path": {"type": "string", "description": "Limit the diff to this path, relative to the repository root."},
+            },
+            "required": ["base_ref", "head_ref"],
+            "additionalProperties": False,
+        },
+        impl=show_diff,
+    ),
+)  # fmt: skip
+"""The tools this module declares; `tools.registry` collects them."""

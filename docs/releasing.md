@@ -1,6 +1,6 @@
 # Releasing
 
-A release is a tagged commit on `main` with a matching `CHANGELOG.md` section, a GitHub release, and a rebuilt Docker image. The changelog follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Every change goes under `## [Unreleased]` in the pull request that makes it, so a release only moves text.
+A release is a tagged commit on `main` with a matching `CHANGELOG.md` section, a GitHub release, and a rebuilt Docker image. The changelog follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Every change adds a fragment in `changelog.d/` in the pull request that makes it, and a release collects the fragments under `## [Unreleased]` and then moves that text, so no pull request edits `CHANGELOG.md` itself.
 
 The version is written once, in `pyproject.toml`. `factory --version` and `docker run --rm agb-agent-factory --version` read it from the installed package metadata, so no other file carries a version literal.
 
@@ -32,7 +32,16 @@ Run each step from the repository root on a clean checkout of `main`. The versio
    uv lock
    ```
 
-3. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, add an empty `## [Unreleased]` above it with no entries under it, and point the links at the bottom of the file. Replace the `[Unreleased]` link with the tag comparison and add a link for the new version:
+3. Collect the changelog fragments. The script appends each `changelog.d/<id>.<section>.md` under its `### Section` of `## [Unreleased]`, creating a missing heading in Keep a Changelog order, prints what each section gained and deletes the fragments; see [changelog.d/README.md](../changelog.d/README.md). Run it with `--dry-run` first to read the entries:
+
+   ```sh
+   python scripts/collect_changelog.py --dry-run
+   python scripts/collect_changelog.py
+   ```
+
+   Read the result once: the entries are written for a user, and a release note that repeats or contradicts another is edited here, by hand, before the rename.
+
+4. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, add an empty `## [Unreleased]` above it with no entries under it, and point the links at the bottom of the file. Replace the `[Unreleased]` link with the tag comparison and add a link for the new version:
 
    ```
    [Unreleased]: https://github.com/agb1986/agb-agent-factory/compare/vX.Y.Z...main
@@ -41,26 +50,26 @@ Run each step from the repository root on a clean checkout of `main`. The versio
 
    Remove the comment above the link block that says the link points at `commits/main`. For the first tag, `PREV` does not exist, so `[X.Y.Z]` links to `releases/tag/vX.Y.Z` instead.
 
-4. Commit the bump:
+5. Commit the bump:
 
    ```sh
-   git add pyproject.toml uv.lock CHANGELOG.md
+   git add pyproject.toml uv.lock CHANGELOG.md changelog.d
    git commit -m "chore(release): vX.Y.Z"
    ```
 
-5. Tag the commit:
+6. Tag the commit:
 
    ```sh
    git tag -a vX.Y.Z -m "vX.Y.Z"
    ```
 
-6. Push the commit and the tag together:
+7. Push the commit and the tag together:
 
    ```sh
    git push origin main --follow-tags
    ```
 
-7. Extract the release section from the changelog and create the GitHub release from it:
+8. Extract the release section from the changelog and create the GitHub release from it:
 
    ```sh
    notes="$(mktemp)"
@@ -69,13 +78,13 @@ Run each step from the repository root on a clean checkout of `main`. The versio
    rm "$notes"
    ```
 
-8. Rebuild the image and check its version, as in [deploy.md](deploy.md):
+9. Rebuild the image and check its version, as in [deploy.md](deploy.md):
 
    ```sh
    docker build -t agb-agent-factory .
    docker run --rm agb-agent-factory --version     # factory X.Y.Z
    ```
 
-9. Start the next cycle: the `## [Unreleased]` section stays in `CHANGELOG.md` for the next pull request to fill.
+10. Start the next cycle: the `## [Unreleased]` section stays in `CHANGELOG.md`, empty, and the next pull request adds its fragment to `changelog.d/`.
 
-If a step fails after step 5, the tag exists locally and may exist on the remote. Do not move a tag that has been pushed. Delete it with `git tag -d vX.Y.Z` and `git push origin :refs/tags/vX.Y.Z` only if no release was created, then fix the cause and start again from step 2.
+If a step fails after step 6, the tag exists locally and may exist on the remote. Do not move a tag that has been pushed. Delete it with `git tag -d vX.Y.Z` and `git push origin :refs/tags/vX.Y.Z` only if no release was created, then fix the cause and start again from step 2; the collected fragments are already in `CHANGELOG.md`, so step 3 then finds none.

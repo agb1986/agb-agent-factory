@@ -1,13 +1,16 @@
 """Shared plumbing for the tool implementations: errors, repository and path checks, subprocesses.
 
-Every tool in this package is read-only and confined to one repository root. The helpers here are
+Every tool in this package is confined to one repository root, and all but the two in `tools.sandbox` are read-only. The helpers here are
 the only place that runs a subprocess, resolves a path or truncates output, so the rules in
 `docs/CONVENTIONS.md` (Tools) are enforced once rather than once per tool.
 """
 
 import os
 import subprocess
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from factory.exit import AuthOrConfigError, FactoryError, NotFoundError, UsageError
 
@@ -46,6 +49,51 @@ class UnknownToolError(ToolError, NotFoundError):
 
 class ToolListError(ToolError, UsageError):
     """An agent's allow and deny lists contradict each other (exit 2)."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class ToolSpec:
+    """One tool as its module declares it; `tools.registry` collects these from every module.
+
+    `name` is the dotted name the manifests use (`git.read_file`). `description` and
+    `input_schema` go to the model as they are, so they describe only the arguments it supplies.
+    `impl` follows the registry contract: `impl(repo_path, **arguments, max_bytes=...) -> str`.
+
+    A tool is read-only unless `writes` is true; a tool that writes is sandbox-only, which the
+    registry names in `SANDBOX_ONLY`. A tool with `reaches_out` reaches the network or the host,
+    so a sandboxed agent never gets it (`SANDBOX_DENIED`). `needs_web_domains` marks a tool that
+    also needs the manifest's `tools.web.allow_domains`. A module lists its specs in a module-level
+    `TOOLS` tuple, in the order the registry should show them.
+    """
+
+    name: str
+    description: str
+    input_schema: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        }
+    )
+    impl: Callable[..., str]
+    writes: bool = False
+    reaches_out: bool = False
+    needs_web_domains: bool = False
+
+    def __post_init__(self) -> None:
+        if self.writes and self.reaches_out:
+            raise ValueError(f"{self.name}: a tool cannot both write and reach out")
+        if self.needs_web_domains and not self.reaches_out:
+            raise ValueError(f"{self.name}: a tool that needs web domains reaches out")
+
+    def definition(self) -> dict[str, Any]:
+        """Return a fresh wire-format definition: `name`, `description` and `input_schema`."""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "input_schema": self.input_schema,
+        }
 
 
 class ToolExecutionError(ToolError):

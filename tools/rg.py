@@ -5,6 +5,7 @@ from pathlib import Path
 from tools._common import (
     DEFAULT_MAX_BYTES,
     ToolInputError,
+    ToolSpec,
     fail_hint,
     resolve_root,
     run,
@@ -43,3 +44,22 @@ def search(
     if proc.returncode != 0:
         raise ToolInputError(f"rg rejected the search for {pattern!r}", hint=fail_hint(proc))
     return truncate(proc.stdout.replace(b"\n./", b"\n").removeprefix(b"./"), max_bytes)
+
+
+TOOLS = (
+    ToolSpec(
+        name="rg.search",
+        description="Search the repository's files with a ripgrep regex. Returns path:line:text lines.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "Regular expression to search for."},
+                "glob": {"type": "string", "description": "Only search paths matching this glob, e.g. '*.py'."},
+            },
+            "required": ["pattern"],
+            "additionalProperties": False,
+        },
+        impl=search,
+    ),
+)  # fmt: skip
+"""The tools this module declares; `tools.registry` collects them."""

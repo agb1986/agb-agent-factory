@@ -12,6 +12,7 @@ from tools._common import (
     DEFAULT_MAX_BYTES,
     ToolInputError,
     ToolNotFoundError,
+    ToolSpec,
     fail_hint,
     git,
     resolve_inside,
@@ -41,3 +42,27 @@ def read_file(repo_path: str | Path, path: str, *, max_bytes: int = DEFAULT_MAX_
     if not target.is_file():
         raise ToolNotFoundError(f"no file {rel.as_posix()!r} in the work tree")
     return truncate(target.read_bytes(), max_bytes)
+
+
+TOOLS = (
+    ToolSpec(
+        name="fs.list_files",
+        description="List the files in the working tree, tracked or new but not ignored, one path per line.",
+        impl=list_files,
+    ),
+    ToolSpec(
+        name="fs.read_file",
+        description="Return the current contents of one working-tree file, including edits not yet committed.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path relative to the repository root."},
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        impl=read_file,
+    ),
+)  # fmt: skip
+"""The tools this module declares; `tools.registry` collects them. `fs.write_file` is declared in
+`tools.sandbox` with the other tool that changes the work tree."""

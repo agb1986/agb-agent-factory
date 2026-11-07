@@ -1,9 +1,13 @@
-"""Tests for the registry, `tool_defs` and the wire-name mapping."""
+"""Tests for the registry, its discovery of each module's tools, `tool_defs` and the wire names."""
 
+import importlib
+import pkgutil
 import re
 
 import pytest
 
+import tools
+import tools.fs
 from factory.exit import ExitCode, exit_code
 from tools import (
     MAX_OUTPUT_BYTES,
@@ -11,37 +15,95 @@ from tools import (
     ToolListError,
     UnknownToolError,
     dotted_name,
+    registry,
     tool_defs,
     wire_name,
 )
-from tools.registry import READ_ONLY, SANDBOX_DENIED, SANDBOX_ONLY
+from tools._common import ToolSpec
+from tools.registry import NEEDS_WEB_DOMAINS, READ_ONLY, SANDBOX_DENIED, SANDBOX_ONLY, SPECS
 
-ALL = [
-    "git.read_file",
-    "git.show_diff",
-    "rg.search",
-    "fs.list_files",
-    "fs.read_file",
-    "fs.write_file",
-    "web.fetch",
-    "web.search",
-    "shell.run",
-    "sentry.list_events",
-    "sentry.read_issue",
-    "deps.graph",
-    "deps.impact",
-    "memory.search",
-]
 WIRE_PATTERN = re.compile(r"[a-zA-Z0-9_-]{1,64}")  # what the API accepts for a tool name
 
 
-def test_registry_holds_the_tools() -> None:
-    assert list(TOOLS) == ALL
+def _public_modules() -> list[str]:
+    """The names of the tools modules the registry discovers, in the order it visits them."""
+    names = sorted(m.name for m in pkgutil.iter_modules(tools.__path__))
+    return [n for n in names if not n.startswith("_") and n != "registry"]
+
+
+def _declared() -> list[ToolSpec]:
+    """Every module's specs, in discovery order: module name, then declaration order."""
+    specs: list[ToolSpec] = []
+    for name in _public_modules():
+        specs.extend(getattr(importlib.import_module(f"tools.{name}"), "TOOLS", ()))
+    return specs
+
+
+def test_registry_holds_every_declared_tool_in_discovery_order() -> None:
+    assert list(TOOLS) == [spec.name for spec in _declared()]
+    assert {"git.read_file", "rg.search", "fs.read_file", "fs.write_file", "shell.run"} <= set(
+        TOOLS
+    )
     for name, (definition, impl) in TOOLS.items():
         assert definition["name"] == name
         assert definition["description"]
         assert definition["input_schema"]["type"] == "object"
         assert callable(impl) and impl.__doc__
+
+
+def test_every_public_module_declares_tools() -> None:
+    for name in _public_modules():
+        declared = importlib.import_module(f"tools.{name}").TOOLS
+        assert isinstance(declared, tuple) and declared, name
+        assert all(isinstance(spec, ToolSpec) for spec in declared), name
+
+
+def test_tool_names_are_unique_and_prefixed() -> None:
+    names = [spec.name for spec in _declared()]
+    assert len(names) == len(set(names))
+    assert all(re.fullmatch(r"[a-z_]+\.[a-z_]+", name) for name in names)
+
+
+def test_sets_follow_the_spec_flags() -> None:
+    specs = _declared()
+    assert SANDBOX_ONLY == {s.name for s in specs if s.writes}
+    assert SANDBOX_DENIED == {s.name for s in specs if s.reaches_out}
+    assert NEEDS_WEB_DOMAINS == {s.name for s in specs if s.needs_web_domains}
+    assert READ_ONLY == {s.name for s in specs if not s.writes}
+
+
+def test_discovery_refuses_a_duplicate_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    spec = SPECS["rg.search"]
+    monkeypatch.setattr(tools.fs, "TOOLS", (*tools.fs.TOOLS, spec))
+    with pytest.raises(ValueError, match="rg.search is declared twice"):
+        registry._discover()
+
+
+def test_discovery_refuses_a_value_that_is_not_a_spec(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tools.fs, "TOOLS", (*tools.fs.TOOLS, "fs.oops"))
+    with pytest.raises(TypeError, match="tools.fs.TOOLS holds a str"):
+        registry._discover()
+
+
+def test_spec_rejects_contradictory_flags() -> None:
+    def impl(repo_path: object, *, max_bytes: int) -> str:
+        return ""
+
+    with pytest.raises(ValueError, match="cannot both write and reach out"):
+        ToolSpec(name="x.y", description="d", impl=impl, writes=True, reaches_out=True)
+    with pytest.raises(ValueError, match="needs web domains reaches out"):
+        ToolSpec(name="x.y", description="d", impl=impl, needs_web_domains=True)
+    spec = ToolSpec(name="x.y", description="d", impl=impl)
+    assert spec.definition() == {
+        "name": "x.y",
+        "description": "d",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    }
 
 
 def test_schemas_describe_only_what_the_model_supplies() -> None:
@@ -129,8 +191,8 @@ def test_sandbox_only_tool_that_is_only_denied_is_fine() -> None:
     assert [d["name"] for d in tool_defs(["fs.read_file"], ["shell.run"])] == ["fs__read_file"]
 
 
-def test_only_the_two_writing_tools_are_sandbox_only() -> None:
-    assert SANDBOX_ONLY == {"fs.write_file", "shell.run"}
+def test_the_writing_tools_are_sandbox_only() -> None:
+    assert {"fs.write_file", "shell.run"} <= SANDBOX_ONLY
     assert SANDBOX_ONLY <= set(TOOLS)
 
 
@@ -143,14 +205,9 @@ def test_sandbox_denied_tools_are_refused_with_the_flag(name: str) -> None:
     assert [d["name"] for d in defs] == [name.replace(".", "__")]
 
 
-def test_only_the_network_tools_are_sandbox_denied() -> None:
-    assert SANDBOX_DENIED == {
-        "sentry.list_events",
-        "sentry.read_issue",
-        "memory.search",
-        "web.fetch",
-        "web.search",
-    }
+def test_the_network_tools_are_sandbox_denied() -> None:
+    assert {"sentry.list_events", "sentry.read_issue", "memory.search"} <= SANDBOX_DENIED
+    assert NEEDS_WEB_DOMAINS == {"web.fetch", "web.search"} <= SANDBOX_DENIED
     assert SANDBOX_DENIED <= READ_ONLY
 
 
