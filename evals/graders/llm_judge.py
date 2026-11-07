@@ -95,7 +95,16 @@ class LLMJudge:
     `BudgetExceeded` once the budget is spent, before anything is sent or traced, and each call's
     cost is charged to it once the trace row is written, as an agent run is charged. It is safe to
     call from several threads. `close()` closes a client this object built.
+
+    A subclass that grades another way, such as the rubric grader, sets `MODEL` and `REF` and
+    overrides `_payload`, `_request` and `_judge`; the tracing and the budget stay here.
     """
+
+    MODEL: str = JUDGE_MODEL
+    """The model this judge calls and prices its rows with."""
+
+    REF: str = JUDGE_REF
+    """The `agent_ref` of this judge's trace rows."""
 
     def __init__(
         self,
@@ -125,10 +134,7 @@ class LLMJudge:
         """Return the judge's verdict on `actual`, tracing the call whether it succeeds or not."""
         if self._budget is not None:
             self._budget.check()
-        payload = {
-            "expected": expected.model_dump(mode="json", exclude_none=True, exclude={"run"}),
-            "actual": dict(actual),
-        }
+        payload = self._payload(expected, actual)
         started_at = datetime.now(UTC)
         start = time.monotonic()
         # Each reply's usage is kept as it arrives, so a call that fails after a reply is still
@@ -149,11 +155,11 @@ class LLMJudge:
                 sum(reply.cache_read_tokens or 0 for reply in replies),
                 sum(reply.cache_write_tokens or 0 for reply in replies),
             )
-            cost = cost_usd(JUDGE_MODEL, usage)
+            cost = cost_usd(self.MODEL, usage)
             self._trace.record(
                 TraceRow(
                     run_id=str(uuid.uuid4()),
-                    agent_ref=JUDGE_REF,
+                    agent_ref=self.REF,
                     kind="llm",
                     started_at=started_at,
                     duration_ms=int((time.monotonic() - start) * 1000),
@@ -175,6 +181,17 @@ class LLMJudge:
                     self._budget.charge(cost)
                 else:
                     self._budget.add(cost)
+
+    def _payload(self, expected: Expected, actual: Mapping[str, Any]) -> dict[str, Any]:
+        """Return what the model is sent, which is also the trace row's `input_json`."""
+        return {
+            "expected": expected.model_dump(mode="json", exclude_none=True, exclude={"run"}),
+            "actual": dict(actual),
+        }
+
+    def _request(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+        """Return the keyword arguments of one `messages.create` call on `messages`."""
+        return build_request(messages)
 
     def _get_client(self) -> anthropic.Anthropic:
         with self._lock:
@@ -219,7 +236,7 @@ class LLMJudge:
         self, client: anthropic.Anthropic, messages: list[dict[str, Any]], replies: list[TokenUsage]
     ) -> str:
         try:
-            message = client.messages.create(**build_request(messages), timeout=JUDGE_TIMEOUT_S)
+            message = client.messages.create(**self._request(messages), timeout=JUDGE_TIMEOUT_S)
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as exc:
             raise AuthOrConfigError(
                 f"the Messages API refused the key in {API_KEY_ENV} ({exc.status_code})",

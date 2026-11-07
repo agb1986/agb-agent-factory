@@ -9,6 +9,9 @@ grader the case names.
 The `sandbox_tests` grader adds checks that run commands: see `evals.graders.sandbox_tests`. It
 needs the repository the agent worked on, so `grade` takes its path. The `jev` grader is a Jev
 noul question, `evals.graders.jev`; `grade` takes the judge for it apart from the LLM judge.
+The `rubric` grader, `evals.graders.rubric`, adds the rubric's own deterministic checks (required
+fields, forbidden strings, paths that must exist in the fixture repository) and then scores the
+answer against its criteria; `grade` takes its judge apart too.
 """
 
 from collections.abc import Mapping
@@ -18,6 +21,7 @@ from typing import Any
 
 from evals.cases import SEVERITIES, Case, Expected, ExpectedDefect
 from evals.graders.llm_judge import Judge, JudgeVerdict
+from evals.graders.rubric import check_output
 from evals.graders.sandbox_tests import check_run
 from factory.exit import UsageError
 
@@ -107,25 +111,37 @@ def grade(
     repo_path: str | Path | None = None,
     *,
     jev_judge: Judge | None = None,
+    rubric_judge: Judge | None = None,
 ) -> Grade:
     """Grade `actual` against `case`: deterministic checks first, then the case's grader.
 
     A failed check returns a failed grade with score 0.0 and the failures as the reason, without
     calling a judge. The `sandbox_tests` grader adds the checks of `expected.run`, which run
     commands in the work tree at `repo_path` and so need it. A case with the `jev` grader goes to
-    `jev_judge` and every other case to `judge`. Raises `UsageError` for `sandbox_tests` without a
-    `repo_path` and for `jev` without a `jev_judge`.
+    `jev_judge`, a case with the `rubric` grader to `rubric_judge` after the checks of
+    `expected.rubric`, and every other case to `judge`. Raises `UsageError` for `sandbox_tests`
+    without a `repo_path`, for `jev` without a `jev_judge`, for `rubric` without a `rubric_judge`,
+    and for a rubric with `paths_exist` without a `repo_path`.
     """
     if case.grader == "jev" and jev_judge is None:
         raise UsageError("the jev grader needs a jev_judge to grade with")
+    if case.grader == "rubric" and rubric_judge is None:
+        raise UsageError("the rubric grader needs a rubric_judge to grade with")
     checks = check_deterministic(case.expected, actual)
     if case.grader == "sandbox_tests" and case.expected.run is not None:
         if repo_path is None:
             raise UsageError("the sandbox_tests grader needs the repository path to run tests in")
         ran = check_run(case.expected.run, actual, repo_path)
         checks = Deterministic(checks.passed and not ran, (*checks.failures, *ran))
+    if case.grader == "rubric" and case.expected.rubric is not None:
+        found = check_output(case.expected.rubric, actual, repo_path)
+        checks = Deterministic(checks.passed and not found, (*checks.failures, *found))
     if not checks.passed:
         return Grade(False, 0.0, "; ".join(checks.failures), checks)
-    chosen = jev_judge if case.grader == "jev" and jev_judge is not None else judge
+    chosen = judge
+    if case.grader == "jev" and jev_judge is not None:
+        chosen = jev_judge
+    elif case.grader == "rubric" and rubric_judge is not None:
+        chosen = rubric_judge
     verdict = chosen(case.expected, actual)
     return Grade(verdict.passed, verdict.score, verdict.reason, checks, verdict)
