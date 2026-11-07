@@ -54,3 +54,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 <!-- Until the first tag, the Unreleased link points at the commits on main. At the first tag, docs/releasing.md moves these entries under the new version and changes this link to compare the tag with HEAD. -->
 [Unreleased]: https://github.com/agb1986/agb-agent-factory/commits/main
+- Read-only `web.fetch` and `web.search` tools that wrap `agb`, with a per-agent domain allow-list (`tools.web.allow_domains`) enforced by the runner, a per-process fetch cache, untrusted-content data blocks, and no access from a sandboxed agent (#102).

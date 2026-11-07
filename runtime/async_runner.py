@@ -250,7 +250,12 @@ async def _run(
     """Build the tools and client, converse, validate, and retry validation once."""
     tools = [
         _ScopedTool(definition, state)
-        for definition in tool_defs(spec.tools.allow, spec.tools.deny, sandbox=spec.sandbox)
+        for definition in tool_defs(
+            spec.tools.allow,
+            spec.tools.deny,
+            sandbox=spec.sandbox,
+            web_domains=spec.tools.web.allow_domains,
+        )
     ]
     if client is not None:
         return await _converse_and_validate(client, spec, payload_json, state, tools)

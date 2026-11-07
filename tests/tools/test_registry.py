@@ -23,6 +23,8 @@ ALL = [
     "fs.list_files",
     "fs.read_file",
     "fs.write_file",
+    "web.fetch",
+    "web.search",
     "shell.run",
 ]
 WIRE_PATTERN = re.compile(r"[a-zA-Z0-9_-]{1,64}")  # what the API accepts for a tool name

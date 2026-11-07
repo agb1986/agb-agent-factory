@@ -48,6 +48,7 @@ from runtime.pricing import TokenUsage, cost_usd
 from runtime.trace import Trace
 from tools import MAX_OUTPUT_BYTES, TOOLS, ToolError, dotted_name
 from tools._common import ToolUnavailableError
+from tools.web import check_web_call
 
 API_KEY_ENV = "ANTHROPIC_API_KEY"
 """The environment variable the default client reads the API key from."""
@@ -355,6 +356,7 @@ class _ScopedTool(BetaBuiltinFunctionTool):
             return ToolResult(problem, is_error=True)
         state = self._state
         try:
+            check_web_call(self._dotted, arguments, state.spec.tools.web.allow_domains)
             content = self._impl(state.repo_path, **arguments, max_bytes=MAX_OUTPUT_BYTES)
         except ToolUnavailableError as exc:
             state.abort = exc
