@@ -9,6 +9,7 @@ Loading a manifest from disk, and importing the schemas module an `LLMSpec` name
 """
 
 import math
+import re
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
@@ -17,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator,
 NAME_PATTERN = r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
 VERSION_PATTERN = r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
 TOOL_NAME_PATTERN = r"^[a-z][a-z0-9]*(_[a-z0-9]+)*\.[a-z][a-z0-9]*(_[a-z0-9]+)*$"
+DOMAIN_PATTERN = r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
 AGENT_RANGE_PATTERN = rf"{NAME_PATTERN[:-1]}@\^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
 
 type Name = Annotated[str, Field(pattern=NAME_PATTERN)]
@@ -37,6 +39,24 @@ class EvalsSpec(_Model):
     min_pass_rate: float = Field(ge=0, le=1)
 
 
+class WebSpec(_Model):
+    """The `tools.web` block: the domains the web tools may reach for this agent.
+
+    `allow_domains` holds bare lowercase host names such as `docs.python.org`; a listed domain also
+    allows its subdomains. Empty, the default, means the agent gets no web tools.
+    """
+
+    allow_domains: tuple[str, ...] = ()
+
+    @field_validator("allow_domains")
+    @classmethod
+    def _bare_hosts(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for domain in value:
+            if not re.fullmatch(DOMAIN_PATTERN, domain):
+                raise ValueError(f"allow_domains entries are bare lowercase hosts, got {domain!r}")
+        return value
+
+
 class ToolsSpec(_Model):
     """The `tools` block: dotted tool names an agent may use and ones it must never use.
 
@@ -45,6 +65,7 @@ class ToolsSpec(_Model):
 
     allow: tuple[ToolName, ...] = ()
     deny: tuple[ToolName, ...] = ()
+    web: WebSpec = WebSpec()
 
     @model_validator(mode="after")
     def _no_overlap(self) -> ToolsSpec:

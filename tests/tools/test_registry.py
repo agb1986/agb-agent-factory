@@ -23,6 +23,8 @@ ALL = [
     "fs.list_files",
     "fs.read_file",
     "fs.write_file",
+    "web.fetch",
+    "web.search",
     "shell.run",
     "sentry.list_events",
     "sentry.read_issue",
@@ -137,11 +139,18 @@ def test_sandbox_denied_tools_are_refused_with_the_flag(name: str) -> None:
     with pytest.raises(ToolListError, match=name) as err:
         tool_defs(["fs.read_file", name], sandbox=True)
     assert exit_code(err.value) == ExitCode.USAGE
-    assert [d["name"] for d in tool_defs([name])] == [name.replace(".", "__")]
+    defs = tool_defs([name], web_domains=["example.com"])  # the allow-list the web tools need
+    assert [d["name"] for d in defs] == [name.replace(".", "__")]
 
 
 def test_only_the_network_tools_are_sandbox_denied() -> None:
-    assert SANDBOX_DENIED == {"sentry.list_events", "sentry.read_issue", "memory.search"}
+    assert SANDBOX_DENIED == {
+        "sentry.list_events",
+        "sentry.read_issue",
+        "memory.search",
+        "web.fetch",
+        "web.search",
+    }
     assert SANDBOX_DENIED <= READ_ONLY
 
 
