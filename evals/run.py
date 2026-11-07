@@ -43,6 +43,7 @@ from evals.cases import CASES_FILE, FIXTURE_REF, Case, CaseFileError, load_cases
 from evals.graders import Deterministic, Grade, grade
 from evals.graders.jev import JevJudge
 from evals.graders.llm_judge import Judge, JudgeVerdict, LLMJudge
+from evals.graders.rubric import RubricGrader
 from factory.exit import AuthOrConfigError, ExitCode, FactoryError, UsageError
 from fixtures.build import build
 from pipelines.review_panel import changed_files
@@ -281,6 +282,7 @@ def evaluate(
     eval_run_id: str | None = None,
     fixture_paths: Mapping[str, Path] | None = None,
     budget: Budget | None = None,
+    rubric_judge: Judge | None = None,
 ) -> EvalReport:
     """Run `cases` against `spec` and return the report.
 
@@ -300,7 +302,8 @@ def evaluate(
     `budget` (default: a new `Budget(DEFAULT_BUDGET_USD)`), and so are the calls of the default
     `LLMJudge` and `JevJudge`; a `judge` or `jev_judge` passed in is charged only if it was built
     with the budget. A case that runs out of budget is not a failed case: the evaluation ends with
-    `BudgetExceeded`.
+    `BudgetExceeded`. Cases with `grader: rubric` are graded by `rubric_judge`, which defaults to a
+    `RubricGrader` on `trace` with the same tag, run id and budget, built only when a case needs it.
 
     Raises `UsageError` for `workers` below 1, `CaseFileError` for `answers` or `decision` the
     agent cannot give, `AuthOrConfigError` for a missing or rejected key, `BudgetExceeded`, and
@@ -318,6 +321,13 @@ def evaluate(
     llm_judge = (
         LLMJudge(shared, tag=tag, pipeline_run_id=eval_run_id, budget=budget) if own_judge else None
     )
+    own_rubric = rubric_judge is None and any(case.grader == "rubric" for case in cases)
+    rubric_grader = (
+        RubricGrader(shared, tag=tag, pipeline_run_id=eval_run_id, budget=budget)
+        if own_rubric
+        else None
+    )
+    rubric_judge = rubric_judge if rubric_judge is not None else rubric_grader
     try:
         with tempfile.TemporaryDirectory(prefix="factory-eval-") as scratch:
             paths = fixture_paths or _build_fixtures(cases, Path(scratch))
@@ -339,10 +349,13 @@ def evaluate(
                 eval_run_id,
                 tag,
                 budget,
+                rubric_judge,
             )
     finally:
         if llm_judge is not None:
             llm_judge.close()
+        if rubric_grader is not None:
+            rubric_grader.close()
     return EvalReport(
         agent=spec.name,
         version=spec.version,
@@ -408,6 +421,7 @@ def _run_all(
     eval_run_id: str,
     tag: str,
     budget: Budget,
+    rubric_judge: Judge | None = None,
 ) -> list[CaseResult]:
     def one(case: Case) -> CaseResult:
         return _run_case(
@@ -422,6 +436,7 @@ def _run_all(
             eval_run_id,
             tag,
             budget,
+            rubric_judge,
         )
 
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="eval") as pool:
@@ -445,6 +460,7 @@ def _run_case(
     eval_run_id: str,
     tag: str,
     budget: Budget,
+    rubric_judge: Judge | None = None,
 ) -> CaseResult:
     start = time.monotonic()
     decision: str | None = None
@@ -475,7 +491,9 @@ def _run_case(
                     budget=budget,
                 )
                 actual = output.model_dump(mode="json")
-            graded = grade(case, actual, judge, repo_path, jev_judge=jev_judge)
+            graded = grade(
+                case, actual, judge, repo_path, jev_judge=jev_judge, rubric_judge=rubric_judge
+            )
         except AuthOrConfigError, BudgetExceeded, UsageError:
             raise
         except FactoryError as exc:

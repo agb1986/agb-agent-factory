@@ -160,3 +160,58 @@ def test_a_file_that_is_not_yaml_is_rejected(tmp_path: Path) -> None:
     path.write_text("cases: [unclosed\n")
     with pytest.raises(CaseFileError):
         load_cases(path)
+
+
+def _rubric(**overrides: Any) -> dict[str, Any]:
+    rubric: dict[str, Any] = {
+        "criteria": [
+            {"id": "clear", "text": "The plan is clear."},
+            {"id": "safe", "text": "The plan has a rollback.", "required": True, "floor": 0.5},
+        ],
+        "threshold": 0.7,
+        "required_fields": ["summary"],
+        "forbidden": ["TODO"],
+        "paths_exist": ["files"],
+    }
+    return rubric | overrides
+
+
+def _rubric_case(**overrides: Any) -> dict[str, Any]:
+    return _case(grader="rubric", expected={"verdict": None, "rubric": _rubric(**overrides)})
+
+
+def test_a_rubric_case_loads(tmp_path: Path) -> None:
+    [case] = _load(tmp_path, _rubric_case())
+    rubric = case.expected.rubric
+    assert rubric is not None
+    assert [(c.id, c.required, c.floor) for c in rubric.criteria] == [
+        ("clear", False, None),
+        ("safe", True, 0.5),
+    ]
+    assert (rubric.threshold, rubric.forbidden, rubric.paths_exist) == (0.7, ("TODO",), ("files",))
+
+
+def test_the_rubric_grader_needs_a_rubric(tmp_path: Path) -> None:
+    assert "expected.rubric" in _rejects(tmp_path, _case(grader="rubric"))
+
+
+def test_a_rubric_is_read_only_by_the_rubric_grader(tmp_path: Path) -> None:
+    case = _case(expected={"verdict": None, "rubric": _rubric()})
+    assert "only the rubric grader" in _rejects(tmp_path, case)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"criteria": []}, "criteria"),
+        ({"threshold": 1.5}, "threshold"),
+        ({"criteria": [{"id": "a", "text": "x", "required": True}]}, "needs a floor"),
+        ({"criteria": [{"id": "a", "text": "x", "floor": 0.5}]}, "only read on a required"),
+        ({"criteria": [{"id": "a", "text": "x"}, {"id": "a", "text": "y"}]}, "duplicate ids"),
+        ({"forbidden": [""]}, "forbidden"),
+    ],
+)
+def test_an_invalid_rubric_is_rejected(
+    tmp_path: Path, overrides: dict[str, Any], message: str
+) -> None:
+    assert message in _rejects(tmp_path, _rubric_case(**overrides))

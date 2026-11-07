@@ -21,7 +21,7 @@ SEVERITIES = ("info", "minor", "major", "blocker")
 """Finding severities, lowest first. A finding meets a `severity_floor` at or above its index."""
 
 type Severity = Literal["info", "minor", "major", "blocker"]
-type GraderName = Literal["llm_judge", "sandbox_tests", "jev"]
+type GraderName = Literal["llm_judge", "sandbox_tests", "jev", "rubric"]
 type DecisionName = Literal["skip", "review", "escalate"]
 
 FIXTURE_REF = "$fixture"
@@ -85,6 +85,53 @@ class ExpectedRun(_Strict):
         return self
 
 
+class Criterion(_Strict):
+    """One rubric criterion, which the rubric grader scores from 0 to 1.
+
+    `text` is what the grader model reads. A `required` criterion fails the case when it scores
+    under its own `floor`, whatever the mean; `floor` is needed with `required` and allowed only
+    with it.
+    """
+
+    id: Annotated[str, Field(pattern=_NAME.pattern)]
+    text: Annotated[str, Field(min_length=1)]
+    required: bool = False
+    floor: Annotated[float, Field(ge=0.0, le=1.0)] | None = None
+
+    @model_validator(mode="after")
+    def _floor_with_required(self) -> Criterion:
+        if self.required and self.floor is None:
+            raise ValueError(f"criterion {self.id}: required needs a floor")
+        if not self.required and self.floor is not None:
+            raise ValueError(f"criterion {self.id}: floor is only read on a required criterion")
+        return self
+
+
+class Rubric(_Strict):
+    """What the `rubric` grader checks, for an agent whose output is prose with no ground truth.
+
+    The deterministic checks run first, without a model: each of `required_fields`, a dotted path
+    through the output's mappings, must be present and not empty; no string anywhere in the output
+    may contain one of `forbidden` (case-sensitive); and each of `paths_exist`, a dotted path whose
+    value is a path or a list of paths, must name files or directories inside the fixture
+    repository. Only an answer that passes them is scored, and it passes when the mean of the
+    `criteria` scores reaches `threshold` and every required criterion meets its floor.
+    """
+
+    criteria: Annotated[tuple[Criterion, ...], Field(min_length=1)]
+    threshold: Annotated[float, Field(ge=0.0, le=1.0)]
+    required_fields: tuple[str, ...] = ()
+    forbidden: tuple[Annotated[str, Field(min_length=1)], ...] = ()
+    paths_exist: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _unique_criteria(self) -> Rubric:
+        ids = [criterion.id for criterion in self.criteria]
+        if len(set(ids)) != len(ids):
+            raise ValueError(f"criteria: duplicate ids in {ids}")
+        return self
+
+
 class Expected(_Strict):
     """What a good answer looks like: the verdict and the defects that must be found.
 
@@ -97,6 +144,8 @@ class Expected(_Strict):
     `decision` is what `runtime.gates.decide` must make of the output: `skip`, `escalate`, or
     `review` for neither. `risky` marks a case whose diff carries a major or blocker defect, which
     the runner's `recall_risky` counts; it needs `decision`, and the graders never see it.
+
+    `rubric` is what the `rubric` grader scores, and is required for that grader.
     """
 
     verdict: str | None
@@ -106,6 +155,7 @@ class Expected(_Strict):
     answers: dict[str, str] | None = None
     decision: DecisionName | None = None
     risky: bool = Field(default=False, exclude=True)
+    rubric: Rubric | None = None
 
     @model_validator(mode="after")
     def _risky_needs_decision(self) -> Expected:
@@ -153,6 +203,10 @@ class Case(_Strict):
             raise ValueError("expected.run: required by the sandbox_tests grader")
         if self.grader != "sandbox_tests" and self.expected.run is not None:
             raise ValueError("expected.run: only the sandbox_tests grader reads it")
+        if self.grader == "rubric" and self.expected.rubric is None:
+            raise ValueError("expected.rubric: required by the rubric grader")
+        if self.grader != "rubric" and self.expected.rubric is not None:
+            raise ValueError("expected.rubric: only the rubric grader reads it")
         return self
 
 
