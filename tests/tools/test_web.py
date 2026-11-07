@@ -17,7 +17,7 @@ from tools import (
     tool_defs,
     web,
 )
-from tools.registry import NO_SANDBOX, READ_ONLY
+from tools.registry import READ_ONLY, SANDBOX_DENIED
 from tools.web import WebDomainError, check_web_call
 
 PAGE = {
@@ -167,7 +167,7 @@ def test_web_tools_are_registered_read_only_and_say_the_content_is_untrusted() -
         definition, impl = TOOLS[name]
         assert name in READ_ONLY and impl.__doc__
         assert "untrusted" in definition["description"]
-    assert NO_SANDBOX == web.WEB_TOOLS
+    assert web.WEB_TOOLS <= SANDBOX_DENIED
 
 
 def test_tool_defs_refuses_web_tools_without_an_allow_list() -> None:

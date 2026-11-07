@@ -11,7 +11,11 @@ import pytest
 GOLDEN_DIR = Path(__file__).parent / "golden"
 
 # Marker name to the environment variable that holds the key its tests need.
-_LIVE_KEYS = {"live": "ANTHROPIC_API_KEY", "live_jev": "TYPESAFE_API_KEY"}
+_LIVE_KEYS = {
+    "live": "ANTHROPIC_API_KEY",
+    "live_jev": "TYPESAFE_API_KEY",
+    "live_sentry": "SENTRY_AUTH_TOKEN",
+}
 
 # Live tests spend real money, so a key in the environment is not enough: this must be "1" too.
 LIVE_OPT_IN = "FACTORY_LIVE"

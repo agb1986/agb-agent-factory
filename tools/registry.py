@@ -15,7 +15,7 @@ import copy
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from tools import fs, git, rg, sandbox, web
+from tools import deps, fs, git, memory, rg, sandbox, sentry, web
 from tools._common import (
     DEFAULT_MAX_BYTES,
     ToolListError,
@@ -28,9 +28,11 @@ MAX_OUTPUT_BYTES = DEFAULT_MAX_BYTES
 SANDBOX_ONLY = frozenset({"fs.write_file", "shell.run"})
 """The tools that change files or start programs; only an agent with `sandbox: true` gets them."""
 
-NO_SANDBOX = web.WEB_TOOLS
-"""The tools that reach the network. An agent with `sandbox: true` never gets them, and any other
-agent gets them only with a non-empty `tools.web.allow_domains`; see `tool_defs`."""
+SANDBOX_DENIED = (
+    frozenset({"sentry.list_events", "sentry.read_issue", "memory.search"}) | web.WEB_TOOLS
+)
+"""The tools that reach the network or the host; an agent with `sandbox: true` never gets them.
+The web tools also need a non-empty `tools.web.allow_domains`; see `tool_defs`."""
 
 _WIRE_SEPARATOR = "__"
 
@@ -171,6 +173,81 @@ TOOLS: dict[str, Tool] = {
         },
         sandbox.run_command,
     ),
+    "sentry.list_events": (
+        {
+            "name": "sentry.list_events",
+            "description": "List the events Sentry recorded for a project since a time, newest first, with issue id, title, release and environment. Read-only; needs SENTRY_AUTH_TOKEN and SENTRY_ORG.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "since": {"type": "string", "description": "ISO 8601 time; only events at or after it are listed, e.g. 2026-11-01T00:00:00Z."},
+                    "project": {"type": "string", "description": "Sentry project slug; defaults to SENTRY_PROJECT."},
+                },
+                "required": ["since"],
+                "additionalProperties": False,
+            },
+        },
+        sentry.list_events,
+    ),
+    "sentry.read_issue": (
+        {
+            "name": "sentry.read_issue",
+            "description": "Return one Sentry issue as compact JSON: counts, release tag, the stack trace of its latest event and its breadcrumbs. Read-only; needs SENTRY_AUTH_TOKEN.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "The numeric Sentry issue id."},
+                },
+                "required": ["id"],
+                "additionalProperties": False,
+            },
+        },
+        sentry.read_issue,
+    ),
+    "deps.graph": (
+        {
+            "name": "deps.graph",
+            "description": "Return the import graph of the repository: its Python, TypeScript and JavaScript modules and the import edges between them, one line per importing module. Python is read with the ast module, TypeScript and JavaScript from their import, export and require statements. Imports of the standard library and installed packages are counted as external. Dynamic imports, path aliases and other imports that name no single file are listed as unresolved with a reason, never guessed. An import of a barrel file is an edge to the barrel itself, not to the module a re-exported name comes from.",
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
+        },
+        deps.graph,
+    ),
+    "deps.impact": (
+        {
+            "name": "deps.impact",
+            "description": "Return the modules that import any of the given files, directly or through other modules, each with its depth (1 for a direct importer). It walks the deps.graph import graph, so unresolved imports such as dynamic imports and path aliases are not followed and the set may be incomplete; the output says when the repository has any.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "paths": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Module file paths relative to the repository root."},
+                },
+                "required": ["paths"],
+                "additionalProperties": False,
+            },
+        },
+        deps.impact,
+    ),
+    "memory.search": (
+        {
+            "name": "memory.search",
+            "description": "Search the machine's long-term memory (claude-mem and OpenViking) and return the best matches, each with its source and a stable ref to cite. Read-only. Reaches the host, so a pipeline must never allow it to an agent with `sandbox: true`.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "What to look for, in plain words."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 25, "description": "Most results to return. Default 10."},
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+        memory.search,
+    ),
 }  # fmt: skip
 
 READ_ONLY: frozenset[str] = frozenset(
@@ -182,6 +259,11 @@ READ_ONLY: frozenset[str] = frozenset(
         "fs.read_file",
         "web.fetch",
         "web.search",
+        "sentry.list_events",
+        "sentry.read_issue",
+        "deps.graph",
+        "deps.impact",
+        "memory.search",
     }
 )
 """Names of the tools in `TOOLS` that change nothing. The action guard (`runtime.guard`) skips them.
@@ -224,10 +306,10 @@ def tool_defs(
     The result follows the order of `allow`, drops repeats, and names each tool with `__` in place
     of dots. The definitions are copies, so a caller can change them freely. Raises
     `UnknownToolError` for a name in either list that is not in `TOOLS`, and `ToolListError` when
-    a name is in both lists, or when `allow` names a `SANDBOX_ONLY` tool and `sandbox` is false.
-    `sandbox` is the manifest's `sandbox` flag. `NO_SANDBOX` tools (`web.fetch`, `web.search`) raise
-    `ToolListError` when `sandbox` is true, or when `web_domains`, the manifest's
-    `tools.web.allow_domains`, is empty.
+    a name is in both lists, when `allow` names a `SANDBOX_ONLY` tool and `sandbox` is false, or a
+    `SANDBOX_DENIED` tool and `sandbox` is true. `sandbox` is the manifest's `sandbox` flag. The
+    web tools (`web.fetch`, `web.search`) also raise `ToolListError` when `web_domains`, the
+    manifest's `tools.web.allow_domains`, is empty.
     """
     allowed = list(dict.fromkeys(allow))
     denied = list(dict.fromkeys(deny))
@@ -245,12 +327,13 @@ def tool_defs(
             f"sandbox-only tools need a sandboxed agent: {', '.join(refused)}",
             hint="set `sandbox: true` in the manifest or remove them from tools.allow",
         )
-    networked = [name for name in allowed if name in NO_SANDBOX]
-    if networked and sandbox:
+    barred = [name for name in allowed if name in SANDBOX_DENIED]
+    if barred and sandbox:
         raise ToolListError(
-            f"web tools are never available in the sandbox: {', '.join(networked)}",
-            hint="remove them from tools.allow or set `sandbox: false`",
+            f"tools not available inside the sandbox: {', '.join(barred)}",
+            hint="remove them from tools.allow or set `sandbox: false` in the manifest",
         )
+    networked = [name for name in allowed if name in web.WEB_TOOLS]
     if networked and not list(web_domains):
         raise ToolListError(
             f"web tools need an allow-list: {', '.join(networked)}",
