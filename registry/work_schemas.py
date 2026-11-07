@@ -34,3 +34,25 @@ class CommandRun(BaseModel):
     output: str = Field(
         description="The last lines of the command's output, enough to show why it passed or failed."
     )
+
+
+class FileCoverage(BaseModel):
+    """Line coverage of one source file, as `evals.coverage` measures it in the sandbox."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(description="Path relative to the repository root.")
+    statements: int = Field(description="How many lines hold code that can run.")
+    covered: int = Field(description="How many of those lines ran during the test run.")
+    missing_lines: list[int] = Field(
+        description="The lines that hold code and did not run, 1-based and in order."
+    )
+
+
+class CoverageReport(BaseModel):
+    """Line coverage of some source files after one pytest run in the sandbox."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    files: list[FileCoverage] = Field(description="One entry per target path, in the order given.")
+    pytest_exit_code: int = Field(description="The exit code of the pytest run measured.")

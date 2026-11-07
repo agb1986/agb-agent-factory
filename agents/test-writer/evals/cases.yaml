@@ -1,5 +1,8 @@
 # Eval cases for test-writer. Each one gives the agent a reviewer's finding about a fixture from
 # fixtures/src/ and grades the work tree it leaves: the sandbox runs its new tests (expected.run).
+# The cover-mode cases (`mode: cover`) give it target paths and their coverage report instead, as
+# measured in the sandbox at the fixture's HEAD, and check the lines its tests cover
+# (expected.run.coverage).
 # `repo_path` is not in the payload: the eval runner fills it in with a private copy of the built
 # fixture repository.
 cases:
@@ -125,4 +128,61 @@ cases:
       run:
         new_tests: fail
         production: unchanged
+    grader: sandbox_tests
+
+  # Cover mode. The payload's coverage report is what evals.coverage measures on the fixture's
+  # HEAD (tests/evals/test_coverage.py checks that it still is, when Docker is there). The grader
+  # measures again before and after the agent's tests, so expected.run.coverage is the
+  # deterministic check.
+  - id: cover-new-module
+    fixture: untested-change
+    payload:
+      mode: cover
+      target_paths: [pricing/discount.py]
+      coverage:
+        pytest_exit_code: 0
+        files:
+          - path: pricing/discount.py
+            statements: 5
+            covered: 0
+            missing_lines: [1, 4, 6, 7, 8]
+    expected:
+      verdict: null
+      criteria: >-
+        The new tests call apply_discount with a percent inside 0..100 and with one outside it, and
+        expect the rounded price and the ValueError. They pass on the current code.
+      run:
+        new_tests: pass
+        production: unchanged
+        coverage:
+          paths: [pricing/discount.py]
+          min_gain: 5
+          max_missing: 0
+    grader: sandbox_tests
+
+  - id: cover-missing-branches
+    fixture: partly-covered
+    payload:
+      mode: cover
+      target_paths: [inventory/stock.py]
+      coverage:
+        pytest_exit_code: 0
+        files:
+          - path: inventory/stock.py
+            statements: 14
+            covered: 6
+            missing_lines: [7, 9, 15, 16, 17, 18, 19, 20]
+    expected:
+      verdict: null
+      criteria: >-
+        The new tests reach both error branches of reserve and every branch of restock: a negative
+        quantity, a total above capacity and one at or below it. They pass on the current code.
+      run:
+        new_tests: pass
+        production: unchanged
+        suite: pass
+        coverage:
+          paths: [inventory/stock.py]
+          min_gain: 8
+          max_missing: 0
     grader: sandbox_tests

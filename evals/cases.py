@@ -61,6 +61,26 @@ class ExpectedDefect(_Strict):
         return self
 
 
+class ExpectedCoverage(_Strict):
+    """How much line coverage of `paths` the agent's tests must add, measured by `evals.coverage`.
+
+    The grader measures the whole suite twice in the sandbox: on a copy of the work tree with the
+    agent's changes undone, and on the work tree as the agent left it. At least `min_gain` lines
+    must become covered over all `paths`, and when `max_missing` is set, at most that many may
+    still be missing after.
+    """
+
+    paths: Annotated[tuple[str, ...], Field(min_length=1)]
+    min_gain: Annotated[int, Field(ge=1)] = 1
+    max_missing: Annotated[int, Field(ge=0)] | None = None
+
+    @model_validator(mode="after")
+    def _unique_paths(self) -> ExpectedCoverage:
+        if len(set(self.paths)) != len(self.paths):
+            raise ValueError(f"paths: duplicates in {list(self.paths)}")
+        return self
+
+
 class ExpectedRun(_Strict):
     """What running the tests in the sandbox must show, for an agent that writes tests or code.
 
@@ -70,6 +90,7 @@ class ExpectedRun(_Strict):
     back to their `base` state, which shows the test fails because of the defect and for no other
     reason. `suite` runs every test in the repository. `production` and `tests` say whether the
     agent changed any file that is not, or is, a test file, compared with the fixture's HEAD.
+    `coverage` is the line coverage the agent's changes must add (see `ExpectedCoverage`).
     """
 
     new_tests: Literal["fail", "pass"] | None = None
@@ -77,6 +98,7 @@ class ExpectedRun(_Strict):
     suite: Literal["pass"] | None = None
     production: Literal["changed", "unchanged"] | None = None
     tests: Literal["changed", "unchanged"] | None = None
+    coverage: ExpectedCoverage | None = None
 
     @model_validator(mode="after")
     def _base_needs_new_tests(self) -> ExpectedRun:

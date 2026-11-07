@@ -1,0 +1,16 @@
+fixture: partly-covered
+summary: >-
+  Adds the public function restock next to reserve. Both are correct, but the tests cover only the
+  happy path of reserve: neither of its error branches runs, and nothing calls restock.
+defects:
+  - id: restock-untested
+    file: inventory/stock.py
+    line_start: 13
+    line_end: 20
+    severity: minor
+    category: testing
+    title: New public function has no test
+    snippet: "def restock"
+    description: >-
+      restock has a validation branch and a cap at capacity, and no test covers either. The error
+      branches of reserve are untested as well.

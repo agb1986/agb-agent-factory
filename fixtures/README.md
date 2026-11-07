@@ -47,6 +47,7 @@ fixture**; add a new one instead.
 | `clean-refactor` | Renames `calc` to `invoice_total`, extracts two helpers, same behaviour | none |
 | `untested-change` | Adds the public `apply_discount` with no test | 1 (minor, testing) |
 | `untested-change-covered` | `untested-change`, plus a passing test file for `apply_discount` (a fixer eval: nothing to fix) | none |
+| `partly-covered` | Adds the public `restock` with no test, next to `reserve`, whose error branches are untested too (a test-writer cover-mode eval) | 1 (minor, testing) |
 | `mixed-red` | `mixed`, plus `test_order_at_the_threshold_ships_free`, which fails on `head` (a fixer eval: fix `shipping.py` only) | 2 (major logic, info style) |
 | `sql-injection-red` | `sql-injection`, plus a test that passes a hostile name to `find_by_name` and fails on `head` (a fixer eval) | 1 (blocker, security) |
 | `mixed` | Three files: a `>=` flipped to `>` (bug), a camelCase local (nit), comment-only edits (harmless) | 2 (major logic, info style) |

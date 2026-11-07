@@ -1,7 +1,7 @@
 name: test-writer
-version: 0.1.2
+version: 0.2.0
 kind: llm
-description: Writes a test that reproduces a reported defect and runs it in the sandbox to see it fail.
+description: Writes a test that reproduces a reported defect and sees it fail in the sandbox, or, in cover mode, passing tests for the uncovered lines of given files.
 model: claude-sonnet-5-5 # verified by tests/live/test_test_writer_live.py
 effort: xhigh
 system_prompt: system.md

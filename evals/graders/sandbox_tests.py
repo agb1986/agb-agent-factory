@@ -3,8 +3,8 @@
 An agent that writes tests or fixes code is graded on the work tree it left behind, not on what it
 says. `check_run` runs pytest in the offline sandbox (`tools.sandbox.run_in_sandbox`) over that
 tree and compares the outcome with a case's `expected.run`: the new tests fail or pass, they pass
-once the fixture is put back to its `base` state, the whole suite passes, and production code and
-test files changed or did not. It returns the failures as strings and never calls a model; the
+once the fixture is put back to its `base` state, the whole suite passes, production code and
+test files changed or did not, and the tests add line coverage (`evals.coverage`). It returns the failures as strings and never calls a model; the
 caller (`evals.graders.grade`) merges them with the other deterministic checks.
 
 The checks run commands, so they need Docker and the image `tools.sandbox.SANDBOX_IMAGE`; without
@@ -18,9 +18,17 @@ from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from evals.cases import ExpectedRun
+from evals.cases import ExpectedCoverage, ExpectedRun
+from evals.coverage import CoverageError, coverage_delta, measure_coverage, restore_head
 from fixtures.build import BASE_REF
-from tools._common import ToolError, ToolExecutionError, git, resolve_inside, resolve_root
+from tools._common import (
+    ToolError,
+    ToolExecutionError,
+    ToolInputError,
+    git,
+    resolve_inside,
+    resolve_root,
+)
 from tools.sandbox import run_in_sandbox
 
 PYTEST = ["python", "-m", "pytest", "-q"]
@@ -101,7 +109,40 @@ def check_run(expected: ExpectedRun, actual: Mapping[str, Any], repo_path: str |
             failures.append(
                 f"the full suite fails (exit code {result.exit_code}): {_tail(result.output)}"
             )
+    if expected.coverage is not None:
+        failures.extend(_check_coverage(expected.coverage, root))
     return failures
+
+
+def _check_coverage(expected: ExpectedCoverage, root: Path) -> list[str]:
+    """Compare the coverage of `expected.paths` before and after the agent's changes."""
+    try:
+        after = measure_coverage(root, expected.paths)
+        with tempfile.TemporaryDirectory(prefix="factory-eval-cover-") as scratch:
+            copy = Path(scratch) / "repo"
+            shutil.copytree(root, copy, symlinks=True)
+            restore_head(copy, changed_files(copy))
+            before = measure_coverage(copy, expected.paths)
+    except ToolInputError as exc:
+        return [f"coverage: {exc.message}"]
+    except (CoverageError, ToolExecutionError) as exc:
+        return [f"coverage could not be measured: {exc.message}"]
+    delta = coverage_delta(before, after)
+    failures: list[str] = []
+    if delta.gained < expected.min_gain:
+        failures.append(
+            f"coverage gained {delta.gained} lines, expected at least {expected.min_gain}"
+        )
+    if expected.max_missing is not None and delta.missing > expected.max_missing:
+        failures.append(
+            f"coverage still misses {delta.missing} lines, expected at most "
+            f"{expected.max_missing}: {_missing_text(delta.still_missing)}"
+        )
+    return failures
+
+
+def _missing_text(missing: Mapping[str, list[int]]) -> str:
+    return "; ".join(f"{path} {', '.join(map(str, lines))}" for path, lines in missing.items())
 
 
 def _check_changes(expected: ExpectedRun, root: Path) -> list[str]:

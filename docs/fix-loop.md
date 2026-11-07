@@ -1,6 +1,6 @@
 # The fix loop
 
-`factory fix` takes one finding of a review, has `test-writer@^0.1` write a test that reproduces it and `fixer@^0.1` change the code until the test passes, runs the whole suite in the sandbox, and puts the change through the review panel of `factory review`. When the panel approves, the change comes out as a patch that `git apply` takes. The code is in `pipelines/fix_loop.py`, with the host side of the sandbox (the clone, its commits and the container) in `pipelines/sandbox.py`. The command line is summarised in [CONVENTIONS.md](CONVENTIONS.md#cli-shape), and the choice of runtime in [ADR 0001](decisions/0001-fixer-runtime.md).
+`factory fix` takes one finding of a review, has `test-writer@^0.2` write a test that reproduces it and `fixer@^0.1` change the code until the test passes, runs the whole suite in the sandbox, and puts the change through the review panel of `factory review`. When the panel approves, the change comes out as a patch that `git apply` takes. The code is in `pipelines/fix_loop.py`, with the host side of the sandbox (the clone, its commits and the container) in `pipelines/sandbox.py`. The command line is summarised in [CONVENTIONS.md](CONVENTIONS.md#cli-shape), and the choice of runtime in [ADR 0001](decisions/0001-fixer-runtime.md).
 
 ## Usage
 
