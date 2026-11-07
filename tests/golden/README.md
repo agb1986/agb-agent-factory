@@ -2,7 +2,7 @@
 
 These files pin the `--json` output of the `factory` commands. `tests/test_golden_cli.py` runs each
 command through `factory.cli.main` with a fake model, parses the one document on stdout, replaces
-the fields that change on every run (`duration_ms`, `git_sha`, `pipeline_run_id`, `eval_run_id`) with
+the fields that change on every run (`duration_ms`, `git_sha`, `pipeline_run_id`, `eval_run_id`, `run_id`) with
 fixed values, and compares the result to `tests/golden/<name>.json`.
 
 | File | Command |
@@ -16,6 +16,7 @@ fixed values, and compares the result to `tests/golden/<name>.json`.
 | `cost.json` | `factory cost --since 2026-10-20 --json` |
 | `cost-by-kind.json` | `factory cost --since 2026-10-20 --by kind --json` |
 | `deps.json` | `factory deps <repo> --impact pkg/b.py --json` |
+| `run.json` | `factory run answerer@^0.1 --input payload.json --json`, on a test agent |
 
 ## When a golden test fails
 

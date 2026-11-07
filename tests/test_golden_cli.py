@@ -26,9 +26,11 @@ from fixtures.build import build
 from pipelines import fix_loop, review_panel, triage
 from registry import AgentRef
 from registry.spec import LLMSpec
+from runtime import run_once
 from runtime.trace import Trace, TraceRow
 from tests.pipelines.test_fix_loop import FINDING, FakeSandbox, FixRunner
 from tests.pipelines.test_review_panel import FakeJev
+from tests.test_run_cli import PAYLOAD, FakeRunner, write_llm
 
 Golden = Callable[[str, Any], None]
 
@@ -38,6 +40,7 @@ VOLATILE: dict[str, Any] = {
     "git_sha": "<git-sha>",
     "pipeline_run_id": "pipeline-run-1",
     "eval_run_id": "eval-run-1",
+    "run_id": "run-1",
 }
 FIXTURES = ("off-by-one", "clean-refactor", "untested-change", "mixed")
 SUMMARY = "A change."
@@ -319,3 +322,18 @@ def test_deps_json(tmp_path: Path, capsys: pytest.CaptureFixture[str], golden: G
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / name).write_text(text, encoding="utf-8")
     golden("deps", _run(["deps", str(tmp_path), "--impact", "pkg/b.py", "--json"], capsys))
+
+
+# --- run
+
+
+def test_run_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                  capsys: pytest.CaptureFixture[str], golden: Golden) -> None:  # fmt: skip
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(tmp_path / "traces.duckdb"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(run_once, "run", FakeRunner())
+    write_llm(tmp_path, "answerer", "0.1.0")
+    (tmp_path / "payload.json").write_text(json.dumps(PAYLOAD))
+    argv = ["run", "answerer@^0.1", "--input", "payload.json", "--allow-unpublished", "--json"]
+    golden("run", _run(argv, capsys))
