@@ -168,6 +168,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=1.0,
         help="multiply every event time by this, to slow a short run down for viewing",
     )
+    deps_parser = sub.add_parser(
+        "deps",
+        help="print the import graph of a repository, or the modules that import some files",
+        epilog="example: factory deps . --impact tools/_common.py --json",
+    )
+    deps_parser.add_argument("repo_path", help="the top of the work tree to read")
+    deps_parser.add_argument(
+        "--impact",
+        nargs="+",
+        action="extend",
+        metavar="PATH",
+        help="print the modules that import these files, transitively, with their depth",
+    )
+    deps_parser.add_argument(
+        "--json", action="store_true", help="print one JSON document instead of text"
+    )
     return parser
 
 
@@ -200,6 +216,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cost(args)
         if args.command == "trace":
             return _trace(args)
+        if args.command == "deps":
+            return _deps(args)
     except Exception as exc:  # noqa: BLE001 - the root handler maps every failure to a code
         return _fail(exc, as_json=getattr(args, "json", False))
     parser.print_usage(sys.stderr)
@@ -290,6 +308,13 @@ def _trace(args: argparse.Namespace) -> int:
     from runtime.agent_flow import command
 
     return command(args.pipeline_run_id, out=args.out, stretch=args.stretch)
+
+
+def _deps(args: argparse.Namespace) -> int:
+    """Print the import graph of a repository, or the impact set of the `--impact` files."""
+    from tools.deps import command
+
+    return command(args.repo_path, impact_paths=args.impact, as_json=args.json)
 
 
 def _fail(exc: Exception, *, as_json: bool) -> int:
