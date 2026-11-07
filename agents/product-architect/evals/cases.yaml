@@ -1,0 +1,158 @@
+# Eval cases for product-architect. Each one gives the agent an idea, or raw feedback, about a
+# fixture from fixtures/src/ and grades the PRD with the rubric grader: deterministic field checks
+# first, then a small model scores the criteria. A PRD has no single right answer, so these cases
+# check that it is grounded in the repository and invents nothing, not that it matches a script.
+# `repo_path` is not in the payload: the eval runner fills it in with the built fixture repository.
+cases:
+  - id: invoice-percentage-discount
+    fixture: clean-refactor
+    payload:
+      ref: head
+      idea: >-
+        Customers keep asking for percentage discounts on invoices, like 10% off, instead of only
+        a fixed amount off. We should support that.
+    expected:
+      verdict: null
+      rubric:
+        criteria:
+          - id: invents-nothing
+            text: >-
+              Every goal and constraint comes from the idea or from the repository; the answer
+              does not add a discount size, a cap, a deadline or a feature the idea did not state.
+            required: true
+            floor: 0.6
+          - id: tax-order
+            text: >-
+              The answer notes that invoice_total in billing/invoice.py applies tax before
+              subtracting the discount, and asks or warns whether a percentage applies before or
+              after tax.
+            required: true
+            floor: 0.5
+          - id: flat-discount-kept
+            text: >-
+              The answer addresses what happens to the existing flat discount: kept alongside,
+              replaced, or combined, as a goal, constraint or open question.
+          - id: open-questions-useful
+            text: >-
+              The open questions are decisions the requester can answer, such as rounding,
+              stacking with a flat discount, or limits on the percentage, each with why it
+              matters.
+        threshold: 0.7
+        required_fields: [problem, goals, user_stories, open_questions, related_files]
+        forbidden: [TODO, lorem ipsum]
+        paths_exist: [related_files]
+    grader: rubric
+
+  - id: receipts-local-currency
+    fixture: mixed
+    payload:
+      ref: head
+      idea: >-
+        Shoppers outside the eurozone want to see prices on their receipts in their own currency.
+    expected:
+      verdict: null
+      rubric:
+        criteria:
+          - id: invents-nothing
+            text: >-
+              The answer does not pick currencies, an exchange-rate source, a refresh interval or
+              a rounding rule the idea did not state; such choices appear as open questions.
+            required: true
+            floor: 0.6
+          - id: grounded-in-config
+            text: >-
+              The answer cites the single CURRENCY = "EUR" setting in shop/config.py, or the
+              two-decimal price formatting in shop/format.py, as a constraint or risk.
+            required: true
+            floor: 0.5
+          - id: charge-vs-display
+            text: >-
+              The answer asks whether shoppers are charged in their own currency or only shown a
+              converted amount, and says what that changes.
+          - id: scope-clear
+            text: >-
+              Goals stay on receipts as the idea asks, and anything wider, such as checkout or
+              the product pages, is a non-goal or an open question rather than a goal.
+        threshold: 0.7
+        required_fields: [problem, goals, user_stories, open_questions, related_files]
+        forbidden: [TODO, lorem ipsum]
+        paths_exist: [related_files]
+    grader: rubric
+
+  - id: feedback-slow-order-history
+    fixture: n-plus-one
+    payload:
+      ref: head
+      idea: >-
+        ugh the order history page takes forever to load now that we have a few thousand orders.
+        also can I get it as a CSV?? I have to copy it into a spreadsheet every month by hand
+      feedback:
+        - The orders list was fine last year but it gets slower every month.
+        - Would be great to export orders for our accountant.
+    expected:
+      verdict: null
+      rubric:
+        criteria:
+          - id: invents-nothing
+            text: >-
+              The answer does not set a load-time target, CSV columns, a date range or an export
+              schedule the feedback did not give; those appear as open questions.
+            required: true
+            floor: 0.6
+          - id: both-asks
+            text: >-
+              The answer covers both asks from the feedback: the slow order history and the CSV
+              export, as separate goals.
+            required: true
+            floor: 0.5
+          - id: grounded-in-code
+            text: >-
+              The answer points at orders_with_customer_names in orders/db.py, which runs one
+              customer query per order, as a constraint or risk behind the slowness.
+          - id: problem-not-solution
+            text: >-
+              The goals state outcomes the user wants, such as the history loading fast enough or
+              an export existing, and leave the technical fix to a constraint, risk or question.
+        threshold: 0.7
+        required_fields: [problem, goals, user_stories, open_questions, related_files]
+        forbidden: [TODO, lorem ipsum]
+        paths_exist: [related_files]
+    grader: rubric
+
+  - id: contradictory-free-shipping
+    fixture: mixed
+    payload:
+      ref: head
+      idea: >-
+        Make shipping free for every order, starting next month. And make sure no order under
+        50 EUR ever ships for free, we lose money on those.
+    expected:
+      verdict: null
+      rubric:
+        criteria:
+          - id: names-the-conflict
+            text: >-
+              The answer says that free shipping for every order and no free shipping under
+              50 EUR cannot both hold, quoting or paraphrasing both sides.
+            required: true
+            floor: 0.7
+          - id: asks-which-wins
+            text: >-
+              The first or a leading open question asks which of the two rules wins, and says
+              what each answer would mean for what gets built.
+            required: true
+            floor: 0.6
+          - id: grounded-in-shipping
+            text: >-
+              The answer cites the current rule in shop/shipping.py: FREE_SHIPPING_THRESHOLD of
+              5000 cents and a flat 499 charge, or the strict greater-than comparison.
+          - id: no-side-taken
+            text: >-
+              The answer does not pick one side as the plan; no user story or constraint treats
+              either rule as decided.
+        threshold: 0.7
+        required_fields: [problem, open_questions]
+        empty_fields: [goals]
+        forbidden: [TODO, lorem ipsum]
+        paths_exist: [related_files]
+    grader: rubric

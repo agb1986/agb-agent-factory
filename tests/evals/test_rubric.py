@@ -136,6 +136,26 @@ def test_required_fields_must_be_present_and_not_empty() -> None:
     )
 
 
+def test_empty_fields_must_be_present_and_empty() -> None:
+    rubric = Rubric(
+        criteria=RUBRIC.criteria, threshold=0.5, empty_fields=("findings", "summary", "plan.goals")
+    )
+    assert check_output(rubric, ACTUAL, None) == (
+        "field summary must be empty",
+        "empty field plan.goals is missing",
+    )
+
+
+def test_a_field_cannot_be_both_required_and_empty() -> None:
+    with pytest.raises(ValueError, match="both name summary"):
+        Rubric(
+            criteria=RUBRIC.criteria,
+            threshold=0.5,
+            required_fields=("summary",),
+            empty_fields=("summary",),
+        )
+
+
 def test_a_forbidden_string_is_found_in_nested_strings_case_sensitively() -> None:
     rubric = Rubric(criteria=RUBRIC.criteria, threshold=0.5, forbidden=("TODO", "rolling"))
     actual = ACTUAL | {"findings": [{"body": "TODO later"}], "summary": "Rolling only."}

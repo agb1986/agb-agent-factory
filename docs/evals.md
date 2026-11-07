@@ -26,7 +26,8 @@ Their outputs have a right answer, and a case that does not check it measures no
 
 Some agents write prose with no single right answer: a plan, a ticket, documentation, a research
 report. For those, and only those, a case may use `grader: rubric`. Planning, documentation and
-research agents are the only agents allowed to.
+research agents are the only agents allowed to. The first is the planning agent `product-architect`,
+which turns an idea or raw feedback into a PRD.
 
 A rubric case has `expected.verdict: null` and an `expected.rubric` block:
 
@@ -58,6 +59,9 @@ Grading runs in this order:
 1. The output schema, as for every agent: an answer that does not validate never reaches a grader.
 2. The deterministic checks of the rubric, with no model call:
    - each of `required_fields`, a dotted path through the output, must be present and not empty;
+   - each of `empty_fields` must be present and empty (null, blank or an empty list), for an
+     answer that must hold something back, such as a plan with no goals for a request that
+     contradicts itself; a field cannot be in both lists;
    - no string anywhere in the output may contain one of `forbidden` (case-sensitive);
    - each of `paths_exist`, a dotted path whose value is a path or a list of paths, must name
      files or directories that exist inside the fixture repository.
