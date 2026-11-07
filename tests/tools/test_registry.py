@@ -14,7 +14,7 @@ from tools import (
     tool_defs,
     wire_name,
 )
-from tools.registry import READ_ONLY, SANDBOX_ONLY
+from tools.registry import READ_ONLY, SANDBOX_DENIED, SANDBOX_ONLY
 
 ALL = [
     "git.read_file",
@@ -24,6 +24,10 @@ ALL = [
     "fs.read_file",
     "fs.write_file",
     "shell.run",
+    "sentry.list_events",
+    "sentry.read_issue",
+    "deps.graph",
+    "deps.impact",
     "memory.search",
 ]
 WIRE_PATTERN = re.compile(r"[a-zA-Z0-9_-]{1,64}")  # what the API accepts for a tool name
@@ -126,6 +130,19 @@ def test_sandbox_only_tool_that_is_only_denied_is_fine() -> None:
 def test_only_the_two_writing_tools_are_sandbox_only() -> None:
     assert SANDBOX_ONLY == {"fs.write_file", "shell.run"}
     assert SANDBOX_ONLY <= set(TOOLS)
+
+
+@pytest.mark.parametrize("name", sorted(SANDBOX_DENIED))
+def test_sandbox_denied_tools_are_refused_with_the_flag(name: str) -> None:
+    with pytest.raises(ToolListError, match=name) as err:
+        tool_defs(["fs.read_file", name], sandbox=True)
+    assert exit_code(err.value) == ExitCode.USAGE
+    assert [d["name"] for d in tool_defs([name])] == [name.replace(".", "__")]
+
+
+def test_only_the_network_tools_are_sandbox_denied() -> None:
+    assert SANDBOX_DENIED == {"sentry.list_events", "sentry.read_issue", "memory.search"}
+    assert SANDBOX_DENIED <= READ_ONLY
 
 
 def test_every_tool_is_either_read_only_or_sandbox_only() -> None:

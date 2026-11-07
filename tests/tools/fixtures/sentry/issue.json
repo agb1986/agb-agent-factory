@@ -1,0 +1,17 @@
+{
+  "id": "4501",
+  "shortId": "SHOP-1X",
+  "title": "KeyError: 'plan_id'",
+  "culprit": "billing.subscriptions in change_plan",
+  "level": "error",
+  "status": "unresolved",
+  "platform": "python",
+  "count": "342",
+  "userCount": 87,
+  "firstSeen": "2026-10-20T11:02:51Z",
+  "lastSeen": "2026-11-05T09:14:22Z",
+  "firstRelease": {"version": "shop@2.7.9"},
+  "lastRelease": {"version": "shop@2.8.1"},
+  "project": {"id": "12", "slug": "shop-backend"},
+  "permalink": "https://sentry.example.test/organizations/acme/issues/4501/"
+}

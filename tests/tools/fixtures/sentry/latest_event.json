@@ -1,0 +1,42 @@
+{
+  "id": "7f3c1a9e0b2d4c5e8a6b1d2c3e4f5a6b",
+  "eventID": "7f3c1a9e0b2d4c5e8a6b1d2c3e4f5a6b",
+  "groupID": "4501",
+  "dateCreated": "2026-11-05T09:14:22Z",
+  "tags": [
+    {"key": "environment", "value": "production"},
+    {"key": "release", "value": "shop@2.8.1"},
+    {"key": "level", "value": "error"}
+  ],
+  "entries": [
+    {
+      "type": "breadcrumbs",
+      "data": {
+        "values": [
+          {"type": "http", "category": "httplib", "level": "info", "timestamp": "2026-11-05T09:14:21.120000Z", "message": null, "data": {"url": "https://billing.example.test/v1/plans", "method": "GET", "status_code": 200}},
+          {"type": "default", "category": "query", "level": "info", "timestamp": "2026-11-05T09:14:21.300000Z", "message": "SELECT id FROM subscriptions WHERE user_id = %s"},
+          {"type": "default", "category": "auth", "level": "info", "timestamp": "2026-11-05T09:14:22.001000Z", "message": "session refreshed"}
+        ]
+      }
+    },
+    {
+      "type": "exception",
+      "data": {
+        "values": [
+          {
+            "type": "KeyError",
+            "value": "'plan_id'",
+            "module": "builtins",
+            "stacktrace": {
+              "frames": [
+                {"filename": "wsgi.py", "function": "application", "lineNo": 41, "inApp": false, "context": [[41, "    return app(environ, start_response)"]]},
+                {"filename": "billing/views.py", "function": "change_plan", "lineNo": 88, "inApp": true, "context": [[88, "    plan = payload['plan_id']"]]},
+                {"filename": "billing/subscriptions.py", "function": "apply_plan", "lineNo": 17, "inApp": true, "context": [[17, "    return PLANS[body['plan_id']]"]]}
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
