@@ -64,7 +64,7 @@ from runtime.trace import Trace, TraceRow
 from tools._common import ToolError, resolve_commit, resolve_inside
 from tools.sandbox import SandboxResult
 
-TEST_WRITER: tuple[str, str] = ("test-writer", "^0.1")
+TEST_WRITER: tuple[str, str] = ("test-writer", "^0.2")
 """The agent that writes the failing tests and the version range it is pinned to."""
 
 FIXER: tuple[str, str] = ("fixer", "^0.1")

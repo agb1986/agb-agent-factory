@@ -36,7 +36,7 @@ def _image_present() -> bool:
 @pytest.mark.live
 @pytest.mark.skipif(not _image_present(), reason=f"docker image {SANDBOX_IMAGE} absent")
 def test_the_agent_writes_a_test_that_fails_for_the_planted_defect(tmp_path: Path) -> None:
-    spec = resolve("test-writer", "^0.1")
+    spec = resolve("test-writer", "^0.2")
     assert isinstance(spec, LLMSpec)
     with anthropic.Anthropic() as client:
         assert spec.model in {model.id for model in client.models.list()}

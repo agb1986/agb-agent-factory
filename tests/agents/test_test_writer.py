@@ -27,7 +27,7 @@ FINDING: dict[str, Any] = {
 
 @pytest.fixture(scope="module")
 def spec() -> LLMSpec:
-    found = resolve("test-writer", "^0.1")
+    found = resolve("test-writer", "^0.2")
     assert isinstance(found, LLMSpec)
     return found
 
@@ -57,7 +57,7 @@ def _output(**overrides: Any) -> dict[str, Any]:
 
 
 def test_manifest_resolves_to_the_documented_version(spec: LLMSpec) -> None:
-    assert spec.address == "test-writer@0.1.2"
+    assert spec.address == "test-writer@0.2.0"
     assert spec.model == "claude-sonnet-5-5"
     assert spec.effort == "xhigh"
     assert spec.sandbox is True
@@ -117,6 +117,44 @@ def test_input_needs_a_repo_and_a_finding(spec: LLMSpec) -> None:
         spec.input_class.model_validate({"repo_path": "/repo"})
     with pytest.raises(ValidationError):
         spec.input_class.model_validate({"repo_path": "/repo", "finding": FINDING, "extra": 1})
+
+
+COVERAGE: dict[str, Any] = {
+    "pytest_exit_code": 0,
+    "files": [{"path": "a.py", "statements": 3, "covered": 1, "missing_lines": [2, 3]}],
+}
+
+
+def test_the_mode_defaults_to_reproduce(spec: LLMSpec) -> None:
+    parsed = spec.input_class.model_validate({"repo_path": "/repo", "finding": FINDING})
+    assert parsed.model_dump()["mode"] == "reproduce"
+
+
+def test_cover_mode_takes_target_paths_and_their_coverage(spec: LLMSpec) -> None:
+    parsed = spec.input_class.model_validate(
+        {"repo_path": "/repo", "mode": "cover", "target_paths": ["a.py"], "coverage": COVERAGE}
+    )
+    dumped = parsed.model_dump()
+    assert dumped["finding"] is None
+    assert dumped["coverage"]["files"][0]["missing_lines"] == [2, 3]
+    assert spec.input_class.model_validate_json(parsed.model_dump_json()) == parsed
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"mode": "cover", "target_paths": ["a.py"]},
+        {"mode": "cover", "coverage": COVERAGE},
+        {"mode": "cover", "target_paths": ["b.py"], "coverage": COVERAGE},
+        {"mode": "cover", "target_paths": ["a.py"], "coverage": COVERAGE, "finding": FINDING},
+        {"finding": FINDING, "target_paths": ["a.py"]},
+        {"finding": FINDING, "coverage": COVERAGE},
+        {"mode": "explore", "finding": FINDING},
+    ],
+)
+def test_fields_that_do_not_fit_the_mode_are_rejected(spec: LLMSpec, bad: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        spec.input_class.model_validate({"repo_path": "/repo", **bad})
 
 
 def test_output_round_trips_through_json(spec: LLMSpec) -> None:
@@ -184,3 +222,17 @@ def test_the_cases_cover_a_failing_test_and_a_coverage_test(cases: list[Case]) -
     kinds = {case.expected.run.new_tests for case in cases if case.expected.run}
     assert kinds == {"fail", "pass"}
     assert all(case.expected.run.production == "unchanged" for case in cases if case.expected.run)
+
+
+def test_cover_cases_check_the_coverage_they_add(cases: list[Case]) -> None:
+    cover = [case for case in cases if case.payload.get("mode") == "cover"]
+    assert len(cover) >= 2
+    assert len(cases) - len(cover) >= 5
+    for case in cover:
+        run = case.expected.run
+        assert run is not None and run.coverage is not None
+        assert run.new_tests == "pass"
+        assert list(run.coverage.paths) == case.payload["target_paths"]
+        missing = sum(len(entry["missing_lines"]) for entry in case.payload["coverage"]["files"])
+        assert run.coverage.min_gain == missing
+        assert run.coverage.max_missing == 0
