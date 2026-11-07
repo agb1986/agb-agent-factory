@@ -26,6 +26,8 @@ ALL = [
     "shell.run",
     "sentry.list_events",
     "sentry.read_issue",
+    "deps.graph",
+    "deps.impact",
 ]
 WIRE_PATTERN = re.compile(r"[a-zA-Z0-9_-]{1,64}")  # what the API accepts for a tool name
 

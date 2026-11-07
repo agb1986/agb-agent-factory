@@ -15,7 +15,7 @@ import copy
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from tools import fs, git, rg, sandbox, sentry
+from tools import deps, fs, git, rg, sandbox, sentry
 from tools._common import (
     DEFAULT_MAX_BYTES,
     ToolListError,
@@ -171,6 +171,34 @@ TOOLS: dict[str, Tool] = {
         },
         sentry.read_issue,
     ),
+    "deps.graph": (
+        {
+            "name": "deps.graph",
+            "description": "Return the import graph of the repository: its Python, TypeScript and JavaScript modules and the import edges between them, one line per importing module. Python is read with the ast module, TypeScript and JavaScript from their import, export and require statements. Imports of the standard library and installed packages are counted as external. Dynamic imports, path aliases and other imports that name no single file are listed as unresolved with a reason, never guessed. An import of a barrel file is an edge to the barrel itself, not to the module a re-exported name comes from.",
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
+        },
+        deps.graph,
+    ),
+    "deps.impact": (
+        {
+            "name": "deps.impact",
+            "description": "Return the modules that import any of the given files, directly or through other modules, each with its depth (1 for a direct importer). It walks the deps.graph import graph, so unresolved imports such as dynamic imports and path aliases are not followed and the set may be incomplete; the output says when the repository has any.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "paths": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Module file paths relative to the repository root."},
+                },
+                "required": ["paths"],
+                "additionalProperties": False,
+            },
+        },
+        deps.impact,
+    ),
 }  # fmt: skip
 
 READ_ONLY: frozenset[str] = frozenset(
@@ -182,6 +210,8 @@ READ_ONLY: frozenset[str] = frozenset(
         "fs.read_file",
         "sentry.list_events",
         "sentry.read_issue",
+        "deps.graph",
+        "deps.impact",
     }
 )
 """Names of the tools in `TOOLS` that change nothing. The action guard (`runtime.guard`) skips them.

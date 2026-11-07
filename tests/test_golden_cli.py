@@ -6,6 +6,7 @@ Refresh the files with `pytest tests/test_golden_cli.py --update-golden`; see `t
 """
 
 import json
+import subprocess
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -299,3 +300,22 @@ def test_cost_json(
     golden(
         "cost-by-kind", _run(["cost", "--since", "2026-10-20", "--by", "kind", "--json"], capsys)
     )
+
+
+# --- deps
+
+DEPS_FILES = {
+    "pkg/__init__.py": "from pkg.a import f\n",
+    "pkg/a.py": "import json\n\nfrom . import b\n\n\ndef f(): ...\n",
+    "pkg/b.py": "import importlib\n\nimport pkg.a\n\nimportlib.import_module(name)\n",
+    "web/main.ts": "import { f } from './lib';\nimport x from '@/alias';\n",
+    "web/lib/index.ts": "export const f = 1;\n",
+}
+
+
+def test_deps_json(tmp_path: Path, capsys: pytest.CaptureFixture[str], golden: Golden) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    for name, text in DEPS_FILES.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    golden("deps", _run(["deps", str(tmp_path), "--impact", "pkg/b.py", "--json"], capsys))
