@@ -1,0 +1,8 @@
+fixture: sast-false-positive
+summary: >-
+  Moves the notification service's auth header into auth_headers, naming the header and the
+  environment variable as constants, and adds backoff_delays, retry waits with random jitter. The
+  token is still read from the environment. A static analyser flags the two name constants as
+  hard-coded passwords and the jitter as weak randomness; all three are false positives, since
+  neither constant is a credential and the jitter is not used for anything secret.
+defects: []

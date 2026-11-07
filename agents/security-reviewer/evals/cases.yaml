@@ -56,3 +56,33 @@ cases:
           line_end: 15
           severity_floor: major
     grader: llm_judge
+
+  - id: secret-in-config
+    fixture: secret-in-config
+    payload:
+      base: base
+      head: head
+    expected:
+      verdict: request_changes
+      defects:
+        - id: payments-token-in-config
+          file: payments/config.py
+          line_start: 4
+          line_end: 4
+          severity_floor: major
+    grader: llm_judge
+
+  - id: sast-false-positive
+    fixture: sast-false-positive
+    payload:
+      base: base
+      head: head
+    expected:
+      verdict: approve
+      defects: []
+      criteria: >-
+        The scanner flags TOKEN_HEADER and TOKEN_ENV as hard-coded passwords and the jitter in
+        backoff_delays as weak randomness; all three are false positives. No finding may report
+        either constant as a hard-coded secret, or the retry jitter as weak randomness, at major or
+        blocker severity, and the verdict must be approve.
+    grader: llm_judge

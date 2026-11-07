@@ -221,7 +221,7 @@ def _run(panel: Panel, repo: Path, trace: Trace, runner: FakeRunner, **kwargs: A
 def test_the_panel_resolves_the_pinned_versions(panel: Panel) -> None:
     assert [spec.address for spec in panel.reviewers] == [
         "code-reviewer@1.2.0",
-        "security-reviewer@1.0.0",
+        "security-reviewer@1.1.0",
         "perf-reviewer@0.3.0",
     ]
     assert panel.judge.address == "judge@2.0.0"
@@ -315,7 +315,7 @@ def test_a_reviewer_that_raises_is_reported_and_the_panel_goes_on(
     assert statuses["code-reviewer"]["status"] == "ok"
     payload = runner.calls[-1]["payload"]
     assert list(payload["reviews"]) == [CODE + "1.2.0", PERF + "0.3.0"]
-    assert [f["reviewer"] for f in payload["failed_reviewers"]] == [SECURITY + "1.0.0"]
+    assert [f["reviewer"] for f in payload["failed_reviewers"]] == [SECURITY + "1.1.0"]
     assert "declined" in payload["failed_reviewers"][0]["error"]
 
 

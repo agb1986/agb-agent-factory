@@ -1,0 +1,18 @@
+fixture: secret-in-config
+summary: >-
+  Adds an API token to the payments settings module and default_charge_request, which charges with
+  that configured token. Until now every caller passed its token in.
+defects:
+  - id: payments-token-in-config
+    file: payments/config.py
+    line_start: 4
+    line_end: 4
+    severity: blocker
+    category: hardcoded-secret
+    title: Payments API token committed in the settings module
+    snippet: "PAYMENTS_API_TOKEN = "
+    description: >-
+      The payments API token is a string literal in a module that is committed, so anyone who can
+      read the repository or its history can charge through the account, and rotating it needs a
+      code change. Read it from the environment, for example os.environ["PAYMENTS_API_TOKEN"], and
+      rotate the leaked value.
