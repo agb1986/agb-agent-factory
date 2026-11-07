@@ -1,0 +1,237 @@
+# Eval cases for benchmark. Each one gives the agent a need and its candidates, about a fixture from
+# fixtures/src/ that only supplies a repository for the tools, and grades the comparison with the
+# rubric grader: deterministic field checks first, then `citations_resolve`, which fetches every
+# cited page and looks for the quote, then a small model scores the criteria. Each case's
+# criteria hold the hand-written expected recommendation.
+#
+# Candidates are given in every case, so the cases need web.fetch and never web.search. Each
+# case's `citations_resolve.allow_domains` is a subset of the manifest's `tools.web.allow_domains`
+# (tests/agents/test_benchmark.py checks it). `repo_path` is not in the payload: the eval runner
+# fills it in with the built fixture repository.
+cases:
+  - id: pdf-agpl-ruled-out
+    fixture: clean-refactor
+    payload:
+      need: >-
+        A Python library to render PDF pages to images inside a closed-source commercial product
+        that we distribute to customers. The licence must be permissive: no copyleft, and no paid
+        licence.
+      candidates:
+        - name: PyMuPDF
+          url: https://pypi.org/project/PyMuPDF/
+        - name: pypdfium2
+          url: https://pypi.org/project/pypdfium2/
+    expected:
+      verdict: null
+      rubric:
+        criteria:
+          - id: picks-pypdfium2
+            text: >-
+              The recommendation is pypdfium2, and pypdfium2 has status recommended.
+            required: true
+            floor: 0.8
+          - id: agpl-rules-out-pymupdf
+            text: >-
+              PyMuPDF has status ruled_out, and the reason is its GNU AGPL licence (its only
+              alternative being a paid commercial licence from Artifex, which the need excludes),
+              backed by a licence cell that cites the PyMuPDF page.
+            required: true
+            floor: 0.8
+          - id: permissive-licence-cited
+            text: >-
+              The licence cell for pypdfium2 states Apache-2.0 and/or BSD-3-Clause and cites a
+              page that says so.
+          - id: no-spike-needed
+            text: >-
+              The answer treats the licence as deciding the choice and proposes no spike.
+          - id: unknowns-not-guessed
+            text: >-
+              Criteria the pages do not state are cells marked as not facts that say the data is
+              not published, rather than numbers without citations.
+        threshold: 0.7
+        required_fields: [candidates, table, recommendation, depends_on]
+        empty_fields: [spike]
+        forbidden: [TODO, lorem ipsum]
+      citations_resolve:
+        claims: table
+        allow_domains:
+          - pypi.org
+          - github.com
+          - githubusercontent.com
+          - opensource.org
+          - spdx.org
+          - choosealicense.com
+          - pymupdf.readthedocs.io
+          - pypdfium2.readthedocs.io
+          - artifex.com
+    grader: rubric
+
+  - id: http-client-throughput-spike
+    fixture: mixed
+    payload:
+      need: >-
+        An asyncio HTTP client library for a crawler that must sustain 5,000 concurrent HTTPS
+        requests from a single Python process. We will pick whichever has the higher throughput
+        at that concurrency; both licences are acceptable to us.
+      candidates:
+        - name: httpx
+          url: https://pypi.org/project/httpx/
+        - name: aiohttp
+          url: https://pypi.org/project/aiohttp/
+    expected:
+      verdict: null
+      rubric:
+        criteria:
+          - id: no-published-throughput
+            text: >-
+              The answer says that neither candidate publishes a throughput figure at 5,000
+              concurrent requests, and its performance cells for both are not facts (or are
+              facts only about what the page says, with no throughput number invented).
+            required: true
+            floor: 0.8
+          - id: names-a-spike
+            text: >-
+              The spike measures throughput (such as requests per second, or time to complete a
+              fixed batch) of httpx and aiohttp at 5,000 concurrent HTTPS requests from one
+              process, and says the higher result picks the library.
+            required: true
+            floor: 0.7
+          - id: decision-deferred
+            text: >-
+              The recommendation says the choice cannot be made from published data and depends
+              on the spike; any provisional pick is labelled as provisional.
+            required: true
+            floor: 0.6
+          - id: neither-ruled-out
+            text: >-
+              Neither candidate is ruled out: both licences are acceptable and both are
+              maintained, so both are recommended or viable.
+          - id: cited-basics
+            text: >-
+              The licence and maintenance cells that are facts cite the PyPI or documentation
+              pages, such as httpx's BSD licence line or a release date from a file table.
+        threshold: 0.7
+        required_fields: [candidates, table, recommendation, depends_on, spike.name, spike.measures]
+        forbidden: [TODO, lorem ipsum]
+      citations_resolve:
+        claims: table
+        allow_domains:
+          - pypi.org
+          - github.com
+          - githubusercontent.com
+          - opensource.org
+          - spdx.org
+          - choosealicense.com
+          - python-httpx.org
+          - docs.aiohttp.org
+    grader: rubric
+
+  - id: toml-unmaintained
+    fixture: clean-refactor
+    payload:
+      need: >-
+        A TOML parser for a project that must keep supporting Python 3.10, where the standard
+        library has no tomllib. Our config files use TOML 1.0 syntax, and we want a library that
+        is still maintained.
+      candidates:
+        - name: toml
+          url: https://pypi.org/project/toml/
+        - name: tomli
+          url: https://pypi.org/project/tomli/
+    expected:
+      verdict: null
+      rubric:
+        criteria:
+          - id: picks-tomli
+            text: >-
+              The recommendation is tomli, and tomli has status recommended.
+            required: true
+            floor: 0.8
+          - id: toml-stale
+            text: >-
+              The answer shows toml is not a good fit because its latest release dates from 2020,
+              cited from its PyPI page, and/or because it does not state TOML 1.0 support; toml is
+              ruled_out or at most viable.
+            required: true
+            floor: 0.7
+          - id: tomli-recent-and-compatible
+            text: >-
+              The answer cites a recent tomli release and its stated TOML compatibility, and notes
+              that tomllib is the standard-library version of tomli from Python 3.11.
+          - id: no-spike-needed
+            text: >-
+              The answer treats maintenance and TOML support as deciding the choice and proposes
+              no spike.
+        threshold: 0.7
+        required_fields: [candidates, table, recommendation, depends_on]
+        empty_fields: [spike]
+        forbidden: [TODO, lorem ipsum]
+      citations_resolve:
+        claims: table
+        allow_domains:
+          - pypi.org
+          - github.com
+          - githubusercontent.com
+          - docs.python.org
+          - peps.python.org
+          - opensource.org
+          - spdx.org
+          - choosealicense.com
+          - toml.io
+    grader: rubric
+
+  - id: dataframe-python-and-rust
+    fixture: mixed
+    payload:
+      need: >-
+        A dataframe library our team can use from both Python and Rust, so that a pipeline
+        prototyped in Python can later be ported to a Rust service with the same API concepts.
+        Any OSI-approved permissive licence is fine.
+      candidates:
+        - name: pandas
+          url: https://pypi.org/project/pandas/
+        - name: polars
+          url: https://pypi.org/project/polars/
+    expected:
+      verdict: null
+      rubric:
+        criteria:
+          - id: picks-polars
+            text: >-
+              The recommendation is polars, and polars has status recommended.
+            required: true
+            floor: 0.8
+          - id: language-decides
+            text: >-
+              The answer rests the choice on language support: polars documents bindings for
+              Python and Rust (cited), while pandas is a Python package with no Rust API, so
+              pandas is ruled_out for this need.
+            required: true
+            floor: 0.7
+          - id: licences-both-permissive
+            text: >-
+              The licence cells cite polars as MIT and pandas as BSD 3, and the answer does not
+              rule either out on licence.
+          - id: performance-not-overclaimed
+            text: >-
+              Any performance cell either quotes a figure from a fetched page or says only what
+              the page claims; no speed-up factor appears without a citation.
+          - id: no-spike-needed
+            text: >-
+              The answer treats language support as deciding the choice and proposes no spike.
+        threshold: 0.7
+        required_fields: [candidates, table, recommendation, depends_on]
+        empty_fields: [spike]
+        forbidden: [TODO, lorem ipsum]
+      citations_resolve:
+        claims: table
+        allow_domains:
+          - pypi.org
+          - github.com
+          - githubusercontent.com
+          - opensource.org
+          - spdx.org
+          - choosealicense.com
+          - pola.rs
+          - pandas.pydata.org
+    grader: rubric

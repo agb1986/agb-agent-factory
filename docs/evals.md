@@ -28,6 +28,8 @@ Some agents write prose with no single right answer: a plan, a ticket, documenta
 report. For those, and only those, a case may use `grader: rubric`. Planning, documentation and
 research agents are the only agents allowed to. The first is the planning agent `product-architect`,
 which turns an idea or raw feedback into a PRD.
+The research agent `benchmark` compares candidate libraries for one need, and every number in its
+table is a `Claim` that `citations_resolve` checks against the cited page (#105).
 
 A rubric case has `expected.verdict: null` and an `expected.rubric` block:
 
