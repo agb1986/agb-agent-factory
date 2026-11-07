@@ -34,8 +34,16 @@ REQUIRED = {
     "missing-index-hint",
     "hardcoded-secret",
     "path-traversal",
+    "secret-in-config",
+    "sast-false-positive",
 }
-CLEAN = {"clean-refactor", "docs-only", "test-only", "untested-change-covered"}
+CLEAN = {
+    "clean-refactor",
+    "docs-only",
+    "test-only",
+    "untested-change-covered",
+    "sast-false-positive",
+}
 FAILS_ON_HEAD = {"off-by-one-red", "mixed-red", "sql-injection-red"}
 """Fixtures built for the fixer: one test fails on `head` on purpose, and passes on `base`."""
 FIXTURES = fixture_build.discover()

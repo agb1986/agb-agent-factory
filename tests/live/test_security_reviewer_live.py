@@ -36,11 +36,15 @@ CATEGORIES = {
 def test_review_finds_the_planted_injection_and_is_traced(tmp_path: Path) -> None:
     spec = resolve("security-reviewer", "^1.0")
     assert isinstance(spec, LLMSpec)
-    if shutil.which("rg") is None:
-        # A missing `rg` ends a run as soon as the model calls `rg.search`, so without it the
-        # agent runs with the two git tools, which is a supported configuration.
-        allowed = tuple(name for name in spec.tools.allow if name != "rg.search")
-        spec = spec.model_copy(update={"tools": ToolsSpec(allow=allowed, deny=("rg.search",))})
+    # A missing `rg` or `bandit` ends a run as soon as the model calls the tool that needs it, so
+    # without one the agent runs with the rest, which is a supported configuration.
+    missing = tuple(
+        tool for tool, binary in (("rg.search", "rg"), ("sast.scan", "bandit"))
+        if shutil.which(binary) is None
+    )  # fmt: skip
+    if missing:
+        allowed = tuple(name for name in spec.tools.allow if name not in missing)
+        spec = spec.model_copy(update={"tools": ToolsSpec(allow=allowed, deny=missing)})
     with anthropic.Anthropic() as client:
         assert spec.model in {model.id for model in client.models.list()}
 

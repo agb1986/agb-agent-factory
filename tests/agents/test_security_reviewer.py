@@ -60,7 +60,7 @@ def _finding(**overrides: Any) -> dict[str, Any]:
 
 
 def test_manifest_resolves_to_the_documented_version(spec: LLMSpec) -> None:
-    assert spec.address == "security-reviewer@1.0.0"
+    assert spec.address == "security-reviewer@1.1.0"
     assert spec.model == "claude-sonnet-5-5"
     assert spec.effort == "high"
     assert spec.evals.min_pass_rate == 0.75
@@ -71,11 +71,11 @@ def test_manifest_resolves_to_the_documented_version(spec: LLMSpec) -> None:
     )
 
 
-def test_tools_are_the_three_read_only_ones_and_all_exist(spec: LLMSpec) -> None:
-    assert list(spec.tools.allow) == ["git.read_file", "git.show_diff", "rg.search"]
+def test_tools_are_the_four_read_only_ones_and_all_exist(spec: LLMSpec) -> None:
+    assert list(spec.tools.allow) == ["git.read_file", "git.show_diff", "rg.search", "sast.scan"]
     assert not spec.tools.deny
     assert set(spec.tools.allow) <= set(TOOLS)
-    assert len(tool_defs(spec.tools.allow)) == 3
+    assert len(tool_defs(spec.tools.allow)) == 4
 
 
 def test_models_are_the_ones_the_manifest_names(spec: LLMSpec) -> None:
@@ -212,9 +212,16 @@ def test_prompt_takes_line_numbers_from_rg_when_it_can(spec: LLMSpec) -> None:
     assert "count by hand" in text
 
 
+def test_prompt_makes_the_reviewer_verify_scanner_findings(spec: LLMSpec) -> None:
+    text = spec.system_prompt_file.read_text(encoding="utf-8")
+    assert "Verify every `sast.scan` finding against the code before you report it" in text
+    assert "never copy a tool finding into a review" in text
+    assert "A review never depends on `sast.scan`" in text
+
+
 def test_the_planted_categories_are_in_the_fixed_list() -> None:
     fixtures = discover()
-    for name in ("hardcoded-secret", "path-traversal"):
+    for name in ("hardcoded-secret", "path-traversal", "secret-in-config"):
         for defect in fixtures[name].load_manifest().defects:
             assert defect.category in CATEGORIES
 
@@ -274,3 +281,11 @@ def test_the_cases_cover_clean_and_defective_changes(cases: list[dict[str, Any]]
     assert verdicts == {"approve", "request_changes"}
     assert any(not case["expected"]["defects"] for case in cases)
     assert Path(AGENT_DIR / "evals" / "cases.yaml").is_file()
+
+
+def test_the_scanner_cases_cover_a_true_and_a_false_positive(cases: list[dict[str, Any]]) -> None:
+    by_id = {case["id"]: case for case in cases}
+    assert by_id["secret-in-config"]["expected"]["verdict"] == "request_changes"
+    false_positive = by_id["sast-false-positive"]["expected"]
+    assert (false_positive["verdict"], false_positive["defects"]) == ("approve", [])
+    assert "TOKEN_HEADER" in false_positive["criteria"]
