@@ -15,7 +15,7 @@ import copy
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from tools import deps, fs, git, rg, sandbox, sentry
+from tools import deps, fs, git, memory, rg, sandbox, sentry
 from tools._common import (
     DEFAULT_MAX_BYTES,
     ToolListError,
@@ -28,7 +28,7 @@ MAX_OUTPUT_BYTES = DEFAULT_MAX_BYTES
 SANDBOX_ONLY = frozenset({"fs.write_file", "shell.run"})
 """The tools that change files or start programs; only an agent with `sandbox: true` gets them."""
 
-SANDBOX_DENIED = frozenset({"sentry.list_events", "sentry.read_issue"})
+SANDBOX_DENIED = frozenset({"sentry.list_events", "sentry.read_issue", "memory.search"})
 """The tools that need the network and a token; an agent with `sandbox: true` never gets them."""
 
 _WIRE_SEPARATOR = "__"
@@ -199,6 +199,22 @@ TOOLS: dict[str, Tool] = {
         },
         deps.impact,
     ),
+    "memory.search": (
+        {
+            "name": "memory.search",
+            "description": "Search the machine's long-term memory (claude-mem and OpenViking) and return the best matches, each with its source and a stable ref to cite. Read-only. Reaches the host, so a pipeline must never allow it to an agent with `sandbox: true`.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "What to look for, in plain words."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 25, "description": "Most results to return. Default 10."},
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+        memory.search,
+    ),
 }  # fmt: skip
 
 READ_ONLY: frozenset[str] = frozenset(
@@ -212,6 +228,7 @@ READ_ONLY: frozenset[str] = frozenset(
         "sentry.read_issue",
         "deps.graph",
         "deps.impact",
+        "memory.search",
     }
 )
 """Names of the tools in `TOOLS` that change nothing. The action guard (`runtime.guard`) skips them.

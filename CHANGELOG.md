@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - `sentry.list_events` and `sentry.read_issue`, read-only tools that return a Sentry project's recent events and an issue's stack trace, release tag, breadcrumbs and counts as compact JSON; they read `SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and `SENTRY_PROJECT` from the environment and are never given to a sandboxed agent (#107).
+- Read-only `memory.search` tool over `agb mem search`, with a result limit and a size cap, never for sandboxed agents (#89).
 - Documented conventions for manifests, agent layout, output, gates, the trace row and secrets (#1).
 - Package scaffold with uv, ruff, ty, pytest and pre-commit (#2).
 - Read-only `git.read_file`, `git.show_diff` and `rg.search` tools, with path validation (#3).

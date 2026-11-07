@@ -28,6 +28,7 @@ ALL = [
     "sentry.read_issue",
     "deps.graph",
     "deps.impact",
+    "memory.search",
 ]
 WIRE_PATTERN = re.compile(r"[a-zA-Z0-9_-]{1,64}")  # what the API accepts for a tool name
 
@@ -139,8 +140,8 @@ def test_sandbox_denied_tools_are_refused_with_the_flag(name: str) -> None:
     assert [d["name"] for d in tool_defs([name])] == [name.replace(".", "__")]
 
 
-def test_only_the_sentry_tools_are_sandbox_denied() -> None:
-    assert SANDBOX_DENIED == {"sentry.list_events", "sentry.read_issue"}
+def test_only_the_network_tools_are_sandbox_denied() -> None:
+    assert SANDBOX_DENIED == {"sentry.list_events", "sentry.read_issue", "memory.search"}
     assert SANDBOX_DENIED <= READ_ONLY
 
 
