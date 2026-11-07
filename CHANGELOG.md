@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- `sentry.list_events` and `sentry.read_issue`, read-only tools that return a Sentry project's recent events and an issue's stack trace, release tag, breadcrumbs and counts as compact JSON; they read `SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and `SENTRY_PROJECT` from the environment and are never given to a sandboxed agent (#107).
+- Read-only `memory.search` tool over `agb mem search`, with a result limit and a size cap, never for sandboxed agents (#89).
 - Documented conventions for manifests, agent layout, output, gates, the trace row and secrets (#1).
 - Package scaffold with uv, ruff, ty, pytest and pre-commit (#2).
 - Read-only `git.read_file`, `git.show_diff` and `rg.search` tools, with path validation (#3).
@@ -51,6 +53,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Live tests are opt-in: `live` and `live_jev` tests are deselected unless `FACTORY_LIVE=1` is set, in addition to the key. One shared `FACTORY_TRACE_DB` is documented for orchestrated workers (#72).
 - `unless` on a gate, which keeps it from firing when the gate it names fires. `diff-triage@0.3.0` gives `unsure` `unless: low_risk`, so a low-risk diff is skipped whatever the routing confidence, and its `reviewers` question names what `code-perf` and `code-security` are for (#75).
 - `action-guard@0.1.1` no longer refuses a write inside a worktree that sits under `/tmp`, `/home` or another listed prefix; the outside test applies to the path the call names, and its eval gains a case for it. `test-writer@0.1.2` tests only the behaviour the finding names and calls the code only as the existing tests do, so its test passes on the code before the change. Fixer and test-writer meet their eval floors (#75).
+- `deps.graph` and `deps.impact`, read-only tools that return the import graph of a Python, TypeScript or JavaScript repository and the modules that import some files, with their depth, and `factory deps <repo> [--impact PATH ...] [--json]`. Dynamic imports, path aliases and other imports that name no single file are reported as unresolved, never guessed (#88).
 - `rubric` eval grader: deterministic checks on required fields, forbidden strings and fixture paths, then Haiku scores each criterion from 0 to 1, passing on the mean and every required criterion's floor, traced with its cost under the eval's run id. Allowed only for planning, documentation and research agents, as docs/evals.md says (#85).
 
 <!-- Until the first tag, the Unreleased link points at the commits on main. At the first tag, docs/releasing.md moves these entries under the new version and changes this link to compare the tag with HEAD. -->

@@ -1,0 +1,88 @@
+{
+  "modules": [
+    {
+      "path": "pkg/__init__.py",
+      "language": "python"
+    },
+    {
+      "path": "pkg/a.py",
+      "language": "python"
+    },
+    {
+      "path": "pkg/b.py",
+      "language": "python"
+    },
+    {
+      "path": "web/lib/index.ts",
+      "language": "typescript"
+    },
+    {
+      "path": "web/main.ts",
+      "language": "typescript"
+    }
+  ],
+  "edges": [
+    {
+      "source": "pkg/__init__.py",
+      "target": "pkg/a.py",
+      "line": 1
+    },
+    {
+      "source": "pkg/a.py",
+      "target": "pkg/b.py",
+      "line": 3
+    },
+    {
+      "source": "pkg/b.py",
+      "target": "pkg/a.py",
+      "line": 3
+    },
+    {
+      "source": "web/main.ts",
+      "target": "web/lib/index.ts",
+      "line": 1
+    }
+  ],
+  "unresolved": [
+    {
+      "source": "pkg/b.py",
+      "line": 5,
+      "specifier": "<expr>",
+      "reason": "dynamic"
+    },
+    {
+      "source": "web/main.ts",
+      "line": 2,
+      "specifier": "@/alias",
+      "reason": "alias"
+    }
+  ],
+  "external": [
+    {
+      "source": "pkg/a.py",
+      "line": 1,
+      "specifier": "json"
+    },
+    {
+      "source": "pkg/b.py",
+      "line": 1,
+      "specifier": "importlib"
+    }
+  ],
+  "skipped": [],
+  "impact": {
+    "paths": [
+      "pkg/b.py"
+    ],
+    "impacted": [
+      {
+        "path": "pkg/a.py",
+        "depth": 1
+      },
+      {
+        "path": "pkg/__init__.py",
+        "depth": 2
+      }
+    ]
+  }
+}
