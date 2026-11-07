@@ -15,7 +15,7 @@ import copy
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from tools import fs, git, rg, sandbox
+from tools import fs, git, memory, rg, sandbox
 from tools._common import (
     DEFAULT_MAX_BYTES,
     ToolListError,
@@ -137,10 +137,33 @@ TOOLS: dict[str, Tool] = {
         },
         sandbox.run_command,
     ),
+    "memory.search": (
+        {
+            "name": "memory.search",
+            "description": "Search the machine's long-term memory (claude-mem and OpenViking) and return the best matches, each with its source and a stable ref to cite. Read-only. Reaches the host, so a pipeline must never allow it to an agent with `sandbox: true`.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "What to look for, in plain words."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 25, "description": "Most results to return. Default 10."},
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+        memory.search,
+    ),
 }  # fmt: skip
 
 READ_ONLY: frozenset[str] = frozenset(
-    {"git.read_file", "git.show_diff", "rg.search", "fs.list_files", "fs.read_file"}
+    {
+        "git.read_file",
+        "git.show_diff",
+        "rg.search",
+        "fs.list_files",
+        "fs.read_file",
+        "memory.search",
+    }
 )
 """Names of the tools in `TOOLS` that change nothing. The action guard (`runtime.guard`) skips them.
 
