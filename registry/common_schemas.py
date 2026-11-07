@@ -11,6 +11,7 @@ the names their manifest's `input_model` and `output_model` give. The judge cons
 when it merges the panel's reviews.
 """
 
+from datetime import datetime
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -66,3 +67,49 @@ class ReviewOutput(BaseModel):
     findings: list[Finding] = Field(description="Every finding; empty when the change is clean.")
     summary: str = Field(description="Two or three sentences on what the change does and its risk.")
     verdict: Verdict = Field(description="approve, or request_changes when any finding matters.")
+
+
+class Citation(BaseModel):
+    """A source for a claim: the page, a passage copied from it, and when it was read.
+
+    The `citations_resolve` eval check (`evals/graders/citations.py`) fetches `url` and looks for
+    `quote` in the page text, so the quote must be copied from the page and not paraphrased.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(
+        min_length=1, pattern=r"^https?://", description="http(s) URL of the page that says it."
+    )
+    quote: str = Field(
+        min_length=1,
+        description="A passage copied word for word from the page that supports the claim.",
+    )
+    retrieved_at: datetime = Field(description="When the page was read, as an ISO 8601 timestamp.")
+
+
+class Claim(BaseModel):
+    """One statement of a research output, marked as a fact or not, with its sources.
+
+    This is how an output marks a fact: `fact` is true. A statement of fact, one that could be
+    checked against a source, needs at least one citation; an opinion, a recommendation or a
+    summary of the agent's own reasoning sets `fact` to false and may cite nothing. A research
+    agent's output model holds a list of `Claim` and nothing else needs marking. The
+    `citations_resolve` eval check reads exactly these fields: `fact` and `citations`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, description="The statement, in one or two sentences.")
+    fact: bool = Field(
+        description="True for a statement of fact that a source can confirm, false for any other."
+    )
+    citations: list[Citation] = Field(
+        description="The sources; at least one when `fact` is true, otherwise may be empty."
+    )
+
+    @model_validator(mode="after")
+    def _fact_is_cited(self) -> Self:
+        if self.fact and not self.citations:
+            raise ValueError("a claim marked as a fact needs at least one citation")
+        return self

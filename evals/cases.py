@@ -132,6 +132,20 @@ class Rubric(_Strict):
         return self
 
 
+class CitationsCheck(_Strict):
+    """What the `citations_resolve` check reads, for a research agent whose claims carry citations.
+
+    `claims` is a dotted path through the output to a list of claims (see
+    `registry.common_schemas.Claim`). Each citation of each claim marked as a fact is fetched
+    through `web.fetch`, and its quote must be in the page. `allow_domains` is the case's web
+    allow-list, as `tools.web.allow_domains` is for an agent run: a cited host that is not one of
+    them or a subdomain of one is a case error. It cannot be empty.
+    """
+
+    claims: Annotated[str, Field(min_length=1)] = "claims"
+    allow_domains: Annotated[tuple[Annotated[str, Field(min_length=1)], ...], Field(min_length=1)]
+
+
 class Expected(_Strict):
     """What a good answer looks like: the verdict and the defects that must be found.
 
@@ -146,6 +160,7 @@ class Expected(_Strict):
     the runner's `recall_risky` counts; it needs `decision`, and the graders never see it.
 
     `rubric` is what the `rubric` grader scores, and is required for that grader.
+    `citations_resolve` turns on the check of that name, which only a `rubric` case may use.
     """
 
     verdict: str | None
@@ -156,6 +171,7 @@ class Expected(_Strict):
     decision: DecisionName | None = None
     risky: bool = Field(default=False, exclude=True)
     rubric: Rubric | None = None
+    citations_resolve: CitationsCheck | None = None
 
     @model_validator(mode="after")
     def _risky_needs_decision(self) -> Expected:
@@ -207,6 +223,8 @@ class Case(_Strict):
             raise ValueError("expected.rubric: required by the rubric grader")
         if self.grader != "rubric" and self.expected.rubric is not None:
             raise ValueError("expected.rubric: only the rubric grader reads it")
+        if self.grader != "rubric" and self.expected.citations_resolve is not None:
+            raise ValueError("expected.citations_resolve: only a rubric case may use it")
         return self
 
 
