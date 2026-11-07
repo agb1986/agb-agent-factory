@@ -15,7 +15,7 @@ import copy
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from tools import fs, git, rg, sandbox
+from tools import fs, git, rg, sandbox, sentry
 from tools._common import (
     DEFAULT_MAX_BYTES,
     ToolListError,
@@ -27,6 +27,9 @@ MAX_OUTPUT_BYTES = DEFAULT_MAX_BYTES
 
 SANDBOX_ONLY = frozenset({"fs.write_file", "shell.run"})
 """The tools that change files or start programs; only an agent with `sandbox: true` gets them."""
+
+SANDBOX_DENIED = frozenset({"sentry.list_events", "sentry.read_issue"})
+"""The tools that need the network and a token; an agent with `sandbox: true` never gets them."""
 
 _WIRE_SEPARATOR = "__"
 
@@ -137,10 +140,49 @@ TOOLS: dict[str, Tool] = {
         },
         sandbox.run_command,
     ),
+    "sentry.list_events": (
+        {
+            "name": "sentry.list_events",
+            "description": "List the events Sentry recorded for a project since a time, newest first, with issue id, title, release and environment. Read-only; needs SENTRY_AUTH_TOKEN and SENTRY_ORG.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "since": {"type": "string", "description": "ISO 8601 time; only events at or after it are listed, e.g. 2026-11-01T00:00:00Z."},
+                    "project": {"type": "string", "description": "Sentry project slug; defaults to SENTRY_PROJECT."},
+                },
+                "required": ["since"],
+                "additionalProperties": False,
+            },
+        },
+        sentry.list_events,
+    ),
+    "sentry.read_issue": (
+        {
+            "name": "sentry.read_issue",
+            "description": "Return one Sentry issue as compact JSON: counts, release tag, the stack trace of its latest event and its breadcrumbs. Read-only; needs SENTRY_AUTH_TOKEN.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "The numeric Sentry issue id."},
+                },
+                "required": ["id"],
+                "additionalProperties": False,
+            },
+        },
+        sentry.read_issue,
+    ),
 }  # fmt: skip
 
 READ_ONLY: frozenset[str] = frozenset(
-    {"git.read_file", "git.show_diff", "rg.search", "fs.list_files", "fs.read_file"}
+    {
+        "git.read_file",
+        "git.show_diff",
+        "rg.search",
+        "fs.list_files",
+        "fs.read_file",
+        "sentry.list_events",
+        "sentry.read_issue",
+    }
 )
 """Names of the tools in `TOOLS` that change nothing. The action guard (`runtime.guard`) skips them.
 
@@ -178,7 +220,8 @@ def tool_defs(
     The result follows the order of `allow`, drops repeats, and names each tool with `__` in place
     of dots. The definitions are copies, so a caller can change them freely. Raises
     `UnknownToolError` for a name in either list that is not in `TOOLS`, and `ToolListError` when
-    a name is in both lists, or when `allow` names a `SANDBOX_ONLY` tool and `sandbox` is false.
+    a name is in both lists, when `allow` names a `SANDBOX_ONLY` tool and `sandbox` is false, or a `SANDBOX_DENIED` tool
+    and `sandbox` is true.
     `sandbox` is the manifest's `sandbox` flag.
     """
     allowed = list(dict.fromkeys(allow))
@@ -196,6 +239,12 @@ def tool_defs(
         raise ToolListError(
             f"sandbox-only tools need a sandboxed agent: {', '.join(refused)}",
             hint="set `sandbox: true` in the manifest or remove them from tools.allow",
+        )
+    barred = [name for name in allowed if name in SANDBOX_DENIED]
+    if barred and sandbox:
+        raise ToolListError(
+            f"tools not available inside the sandbox: {', '.join(barred)}",
+            hint="remove them from tools.allow or set `sandbox: false` in the manifest",
         )
     defs: list[ToolDef] = []
     for name in allowed:
