@@ -191,3 +191,9 @@ def test_manifest_allow_domains_are_bare_lowercase_hosts() -> None:
     for bad in ["https://docs.python.org", "Docs.Python.org", "docs.python.org/x", "localhost", ""]:
         with pytest.raises(ValueError, match="allow_domains"):
             ToolsSpec.model_validate({"web": {"allow_domains": [bad]}})
+
+
+def test_unwrap_returns_the_text_inside_the_data_block() -> None:
+    wrapped = web._wrap("a page", "line one\nline two", 4096)
+    assert web.unwrap(wrapped) == "line one\nline two"
+    assert web.unwrap("plain text") == "plain text"

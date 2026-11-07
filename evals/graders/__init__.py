@@ -11,7 +11,9 @@ needs the repository the agent worked on, so `grade` takes its path. The `jev` g
 noul question, `evals.graders.jev`; `grade` takes the judge for it apart from the LLM judge.
 The `rubric` grader, `evals.graders.rubric`, adds the rubric's own deterministic checks (required
 fields, forbidden strings, paths that must exist in the fixture repository) and then scores the
-answer against its criteria; `grade` takes its judge apart too.
+answer against its criteria; `grade` takes its judge apart too. A rubric case may also set
+`expected.citations_resolve`: `evals.graders.citations` then fetches the pages the answer cites,
+through the fetcher `grade` is given, and fails the case when a quote is not in its page.
 """
 
 from collections.abc import Mapping
@@ -20,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from evals.cases import SEVERITIES, Case, Expected, ExpectedDefect
+from evals.graders.citations import Fetcher, check_citations, web_fetcher
 from evals.graders.llm_judge import Judge, JudgeVerdict
 from evals.graders.rubric import check_output
 from evals.graders.sandbox_tests import check_run
@@ -112,6 +115,7 @@ def grade(
     *,
     jev_judge: Judge | None = None,
     rubric_judge: Judge | None = None,
+    fetcher: Fetcher | None = None,
 ) -> Grade:
     """Grade `actual` against `case`: deterministic checks first, then the case's grader.
 
@@ -122,6 +126,12 @@ def grade(
     `expected.rubric`, and every other case to `judge`. Raises `UsageError` for `sandbox_tests`
     without a `repo_path`, for `jev` without a `jev_judge`, for `rubric` without a `rubric_judge`,
     and for a rubric with `paths_exist` without a `repo_path`.
+
+    A case with `expected.citations_resolve` has it checked once the other checks have passed and
+    before a judge is called; the pages come from `fetcher`, which defaults to `web.fetch`. A page
+    that cannot be fetched or is outside the case's domains raises `CitationCheckError`, not a
+    failed grade. Raises `UsageError` when the check is set and `fetcher` and `repo_path` are both
+    None.
     """
     if case.grader == "jev" and jev_judge is None:
         raise UsageError("the jev grader needs a jev_judge to grade with")
@@ -136,6 +146,12 @@ def grade(
     if case.grader == "rubric" and case.expected.rubric is not None:
         found = check_output(case.expected.rubric, actual, repo_path)
         checks = Deterministic(checks.passed and not found, (*checks.failures, *found))
+    if checks.passed and case.expected.citations_resolve is not None:
+        if fetcher is None and repo_path is None:
+            raise UsageError("citations_resolve needs a fetcher or the repository path")
+        fetch = fetcher if fetcher is not None else web_fetcher(str(repo_path))
+        cited = check_citations(case.expected.citations_resolve, actual, fetch)
+        checks = Deterministic(not cited, cited)
     if not checks.passed:
         return Grade(False, 0.0, "; ".join(checks.failures), checks)
     chosen = judge

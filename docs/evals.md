@@ -80,3 +80,61 @@ Write criteria that a reader could check against the answer alone, one property 
 such as "the plan is good" scores whatever the model feels; "the plan says how to undo the change"
 scores what the plan says. Mark a criterion `required` when an answer without it is wrong however
 well it does on the rest.
+
+## The `citations_resolve` check
+
+`rubric` scores how well a research agent reasons; it cannot tell whether the facts are true.
+`citations_resolve` covers that. It is a deterministic check, not a grader: a rubric case turns it
+on with `expected.citations_resolve`, and only a `rubric` case may.
+
+**Which agents need it.** Every research agent: any agent whose output states facts about the
+world taken from web pages (issues #104 and #105 are the first). A research agent publishes only
+when its cases use both, `rubric` for the reasoning and `citations_resolve` for the truth, and at
+least one case must set `citations_resolve`. Planning and documentation agents, which state no
+sourced facts, use `rubric` alone. Reviewers, fixers, the judge and the Jev agents use neither.
+
+**How an output marks a fact.** The output model holds a list of `Claim`
+(`registry/common_schemas.py`), each with `text`, `fact` and `citations`. A claim with
+`fact: true` must have at least one `Citation` (`url`, `quote`, `retrieved_at`) and the schema
+rejects it otherwise; a claim with `fact: false` (an opinion, a recommendation, a summary of the
+agent's own reasoning) may cite nothing and is not checked.
+
+```yaml
+  expected:
+    verdict: null
+    rubric: {criteria: [...], threshold: 0.7}
+    citations_resolve:
+      claims: claims            # dotted path to the list of claims; this is the default
+      allow_domains: [docs.python.org, peps.python.org]
+  grader: rubric
+```
+
+Order of grading: the output schema, the rubric's deterministic checks, `citations_resolve`, then
+the grader model. A case that fails an earlier step never reaches a later one, so a false quote
+costs no grading call.
+
+What it does, for each citation of each claim marked as a fact:
+
+1. The URL's host must be one of `allow_domains` or a subdomain of one, the same rule the runtime
+   applies to an agent run (`tools.web.check_web_call`). `allow_domains` is the case's own list
+   and cannot be empty.
+2. The page is fetched through `web.fetch` (`agb web fetch --markdown`), once per URL per case.
+3. The quote must appear in the page text. Both are normalised the same way first, and nothing
+   else is forgiven: the untrusted-data block around the page is removed, Unicode NFKC is applied,
+   Markdown links and images become their text, heading, quote, list and number markers at the
+   start of a line are dropped, `*`, backticks and emphasis underscores (not those inside a word)
+   are dropped, curly quotes and en and em dashes become ASCII, and every run of whitespace
+   becomes one space. Case, word order and every word are kept, so a quote that is absent, or
+   paraphrased, fails.
+
+The outcomes:
+
+- A quote that is not in its page, a fact with no citation, an output with no claim marked as a
+  fact, or a missing or non-list `claims` path **fails** the case. The reason lists each failed
+  citation by its path, such as `claims.2.citations.0`.
+- A URL outside `allow_domains`, an invalid URL, or a fetch that fails or times out is a **case
+  error** (`CitationCheckError`), never a pass and never a failed quote: the check could not be
+  made. A missing `agb` ends the eval, as for every tool.
+
+The fetcher is injectable (`evaluate(..., fetcher=...)`, a function from URL to page text), so
+tests and calibration runs need no network.

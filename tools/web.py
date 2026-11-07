@@ -112,6 +112,19 @@ def _wrap(label: str, text: str, max_bytes: int) -> str:
     return f"{header}{body}{footer}"
 
 
+def unwrap(result: str) -> str:
+    """Return the page text inside the untrusted-data block of a `fetch` or `search` result.
+
+    Text that is not in such a block is returned unchanged. Only the block's own markers are
+    removed; the text is not otherwise altered.
+    """
+    start = result.find(_BEGIN)
+    end = result.rfind(_END)
+    if start < 0 or end < start:
+        return result
+    return result[start + len(_BEGIN) : end].removeprefix("\n").removesuffix("\n")
+
+
 def _agb(args: list[str]) -> Any:
     """Run `agb` with `args` and return its parsed JSON output; raise `ToolExecutionError` if not."""
     proc = run(["agb", *args], Path.cwd())

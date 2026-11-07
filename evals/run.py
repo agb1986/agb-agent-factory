@@ -41,6 +41,7 @@ from pydantic import BaseModel
 
 from evals.cases import CASES_FILE, FIXTURE_REF, Case, CaseFileError, load_cases
 from evals.graders import Deterministic, Grade, grade
+from evals.graders.citations import Fetcher
 from evals.graders.jev import JevJudge
 from evals.graders.llm_judge import Judge, JudgeVerdict, LLMJudge
 from evals.graders.rubric import RubricGrader
@@ -283,6 +284,7 @@ def evaluate(
     fixture_paths: Mapping[str, Path] | None = None,
     budget: Budget | None = None,
     rubric_judge: Judge | None = None,
+    fetcher: Fetcher | None = None,
 ) -> EvalReport:
     """Run `cases` against `spec` and return the report.
 
@@ -304,6 +306,8 @@ def evaluate(
     with the budget. A case that runs out of budget is not a failed case: the evaluation ends with
     `BudgetExceeded`. Cases with `grader: rubric` are graded by `rubric_judge`, which defaults to a
     `RubricGrader` on `trace` with the same tag, run id and budget, built only when a case needs it.
+    A case with `expected.citations_resolve` has the pages it cites read through `fetcher`, which
+    defaults to `web.fetch`; one that cannot be read is a case error.
 
     Raises `UsageError` for `workers` below 1, `CaseFileError` for `answers` or `decision` the
     agent cannot give, `AuthOrConfigError` for a missing or rejected key, `BudgetExceeded`, and
@@ -350,6 +354,7 @@ def evaluate(
                 tag,
                 budget,
                 rubric_judge,
+                fetcher,
             )
     finally:
         if llm_judge is not None:
@@ -422,6 +427,7 @@ def _run_all(
     tag: str,
     budget: Budget,
     rubric_judge: Judge | None = None,
+    fetcher: Fetcher | None = None,
 ) -> list[CaseResult]:
     def one(case: Case) -> CaseResult:
         return _run_case(
@@ -437,6 +443,7 @@ def _run_all(
             tag,
             budget,
             rubric_judge,
+            fetcher,
         )
 
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="eval") as pool:
@@ -461,6 +468,7 @@ def _run_case(
     tag: str,
     budget: Budget,
     rubric_judge: Judge | None = None,
+    fetcher: Fetcher | None = None,
 ) -> CaseResult:
     start = time.monotonic()
     decision: str | None = None
@@ -492,7 +500,13 @@ def _run_case(
                 )
                 actual = output.model_dump(mode="json")
             graded = grade(
-                case, actual, judge, repo_path, jev_judge=jev_judge, rubric_judge=rubric_judge
+                case,
+                actual,
+                judge,
+                repo_path,
+                jev_judge=jev_judge,
+                rubric_judge=rubric_judge,
+                fetcher=fetcher,
             )
         except AuthOrConfigError, BudgetExceeded, UsageError:
             raise
