@@ -3,8 +3,8 @@
 It is for agents whose output has no planted defect to find, such as a plan, a ticket, a document
 or a research report; which agents may use it is in docs/evals.md. A case's `expected.rubric`
 lists the criteria, the pass threshold on their mean, and the deterministic checks that run first
-(`check_output`): required fields, forbidden strings, and paths that must exist in the fixture
-repository. The output schema itself was already validated by the runner.
+(`check_output`): required fields, fields that must be empty, forbidden strings, and paths that
+must exist in the fixture repository. The output schema itself was already validated by the runner.
 
 `RubricGrader` has the signature of a `Judge`. It sends the criteria (without the threshold and the
 floors, so they cannot sway the scores) and the agent's answer to `RUBRIC_MODEL` with a fixed
@@ -123,7 +123,8 @@ def check_output(
     """Run the rubric's deterministic checks on `actual` and return one line per failure.
 
     A required field is a dotted path through the output's mappings that must be present and not
-    null, blank or an empty collection. A forbidden string fails wherever it appears, as a
+    null, blank or an empty collection; an empty field must be present and be exactly that.
+    A forbidden string fails wherever it appears, as a
     case-sensitive substring, in any string of the output; the failure names each field it is in.
     A `paths_exist` field must hold a path or a list of paths, each resolving, symlinks followed,
     to an existing file or directory inside `repo_path`. Raises `UsageError` when the rubric has
@@ -136,6 +137,12 @@ def check_output(
             failures.append(f"required field {field} is missing")
         elif _empty(value):
             failures.append(f"required field {field} is empty")
+    for field in rubric.empty_fields:
+        found, value = _lookup(actual, field)
+        if not found:
+            failures.append(f"empty field {field} is missing")
+        elif not _empty(value):
+            failures.append(f"field {field} must be empty")
     for phrase in rubric.forbidden:
         where = [path for path, text in _strings(actual, "") if phrase in text]
         if where:

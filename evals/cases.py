@@ -111,8 +111,10 @@ class Rubric(_Strict):
     """What the `rubric` grader checks, for an agent whose output is prose with no ground truth.
 
     The deterministic checks run first, without a model: each of `required_fields`, a dotted path
-    through the output's mappings, must be present and not empty; no string anywhere in the output
-    may contain one of `forbidden` (case-sensitive); and each of `paths_exist`, a dotted path whose
+    through the output's mappings, must be present and not empty; each of `empty_fields` must be
+    present and empty, for an answer that must hold something back, such as a plan with no goals
+    for a request that contradicts itself; no string anywhere in the output may contain one of
+    `forbidden` (case-sensitive); and each of `paths_exist`, a dotted path whose
     value is a path or a list of paths, must name files or directories inside the fixture
     repository. Only an answer that passes them is scored, and it passes when the mean of the
     `criteria` scores reaches `threshold` and every required criterion meets its floor.
@@ -121,6 +123,7 @@ class Rubric(_Strict):
     criteria: Annotated[tuple[Criterion, ...], Field(min_length=1)]
     threshold: Annotated[float, Field(ge=0.0, le=1.0)]
     required_fields: tuple[str, ...] = ()
+    empty_fields: tuple[str, ...] = ()
     forbidden: tuple[Annotated[str, Field(min_length=1)], ...] = ()
     paths_exist: tuple[str, ...] = ()
 
@@ -129,6 +132,8 @@ class Rubric(_Strict):
         ids = [criterion.id for criterion in self.criteria]
         if len(set(ids)) != len(ids):
             raise ValueError(f"criteria: duplicate ids in {ids}")
+        if both := sorted(set(self.required_fields) & set(self.empty_fields)):
+            raise ValueError(f"required_fields and empty_fields both name {', '.join(both)}")
         return self
 
 

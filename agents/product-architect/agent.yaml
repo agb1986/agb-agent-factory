@@ -1,0 +1,20 @@
+name: product-architect
+version: 0.1.0
+kind: llm
+description: Turns an idea or raw feedback into a product requirements document, with the unknowns as open questions.
+model: claude-sonnet-5-5 # verified by tests/live/test_product_architect_live.py
+effort: high
+system_prompt: system.md
+schemas: schemas.py
+input_model: PRDInput
+output_model: PRDOutput
+tools:
+  allow: [git.read_file, rg.search, deps.graph, memory.search]
+  deny: []
+limits:
+  max_tool_turns: 10
+  timeout_s: 300
+  max_output_tokens: 8192
+  max_tokens_total: 200000
+evals:
+  min_pass_rate: 0.75
