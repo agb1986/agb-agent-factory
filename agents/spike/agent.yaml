@@ -1,0 +1,34 @@
+name: spike
+version: 0.1.0
+kind: llm
+description: >-
+  Writes throwaway code in a networked sandbox to learn how an API or a package really behaves,
+  and reports the payload shapes, edge cases, working code and failures it saw, with the facts it
+  read cited.
+model: claude-sonnet-5-5 # verified by tests/live/test_spike_live.py
+# Medium, not high: the work is a loop of short steps (write a probe, run it, read the output), and
+# what the agent reports is what the sandbox printed, not what it reasoned out. Thinking spent on
+# every one of up to 16 turns multiplies the cost, and the eval passes at medium.
+effort: medium
+system_prompt: system.md
+schemas: schemas.py
+input_model: SpikeInput
+output_model: SpikeOutput
+sandbox: spike
+guard: action-guard@^0.2
+tools:
+  allow: [fs.list_files, fs.read_file, fs.write_file, shell.run, web.fetch]
+  deny: []
+  web:
+    allow_domains:
+      - httpbin.org
+      - jsonplaceholder.typicode.com
+      - pypi.org
+      - docs.pypi.org
+      - github.com
+      - docs.python.org
+      - requests.readthedocs.io
+      - www.python-httpx.org
+limits: {max_tool_turns: 16, timeout_s: 600, max_output_tokens: 12000, max_tokens_total: 600000}
+evals:
+  min_pass_rate: 0.75

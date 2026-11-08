@@ -154,9 +154,9 @@ def _resolve_worker(
     spec = resolve(name, version_range, published_only=not allow_unpublished, trace_path=trace_path)
     if not isinstance(spec, LLMSpec):
         raise UsageError(f"{spec.address} is not an LLM agent, so the fix loop cannot run it")
-    if not spec.sandbox:
+    if spec.sandbox_profile != "offline":
         raise UsageError(
-            f"{spec.address} is not sandboxed, so it cannot write files or run the tests",
+            f"{spec.address} is not sandboxed offline, so it cannot work on the repository",
             hint="set `sandbox: true` in its manifest",
         )
     return spec

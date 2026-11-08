@@ -71,6 +71,7 @@ from runtime.runner import (
 )
 from runtime.trace import Trace, TraceRow
 from tools import tool_defs
+from tools.sandbox import spike_root
 
 _LOOP: ContextVar[asyncio.AbstractEventLoop | None] = ContextVar("_LOOP", default=None)
 """The loop of the run this context is inside, so a nested `run` can hand an async run to it."""
@@ -133,7 +134,63 @@ async def _arun(
     sleep: Callable[[float], Awaitable[None]],
     sync_default: bool,
 ) -> BaseModel:
-    """`arun`, building a synchronous default client when `sync_default` is true, as `run` does."""
+    """`arun`, building a synchronous default client when `sync_default` is true, as `run` does.
+
+    An agent with `sandbox: spike` never sees the caller's repository: the run gets a fresh, empty
+    scratch directory from `tools.sandbox.spike_root` as its root instead, and `repo_path` is
+    ignored. The directory and any container left in it are removed when the run ends.
+    """
+    if spec.sandbox_profile == "spike":
+        with spike_root() as scratch:
+            return await _arun_at(
+                spec,
+                payload,
+                trace,
+                repo_path=scratch,
+                pipeline_run_id=pipeline_run_id,
+                parent_run_id=parent_run_id,
+                run_id=run_id,
+                hook=hook,
+                client=client,
+                tag=tag,
+                budget=budget,
+                sleep=sleep,
+                sync_default=sync_default,
+            )
+    return await _arun_at(
+        spec,
+        payload,
+        trace,
+        repo_path=repo_path,
+        pipeline_run_id=pipeline_run_id,
+        parent_run_id=parent_run_id,
+        run_id=run_id,
+        hook=hook,
+        client=client,
+        tag=tag,
+        budget=budget,
+        sleep=sleep,
+        sync_default=sync_default,
+    )
+
+
+async def _arun_at(
+    spec: LLMSpec,
+    payload: Mapping[str, Any] | BaseModel,
+    trace: Trace,
+    *,
+    repo_path: str | Path | None,
+    pipeline_run_id: str | None,
+    parent_run_id: str | None,
+    run_id: str | None,
+    hook: ToolHook | None,
+    client: anthropic.AsyncAnthropic | anthropic.Anthropic | None,
+    tag: str | None,
+    budget: Budget | None,
+    sleep: Callable[[float], Awaitable[None]],
+    sync_default: bool,
+) -> BaseModel:
+    """The body of `_arun`, with `repo_path` already chosen."""
     payload_json = _validate_payload(spec, payload)
     if spec.tools.allow and repo_path is None:
         raise UsageError(

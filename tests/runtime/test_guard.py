@@ -305,6 +305,50 @@ def test_a_jev_guard_is_not_wired(trace: Trace) -> None:
         build_guard_hook(jev_spec, trace, parent_run_id="p")
 
 
+# --- the spike profile ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("sandbox", [None, "offline"])
+def test_only_the_spike_profile_adds_a_sandbox_field(sandbox: str | None) -> None:
+    rendered = render_call(
+        write("src/a.py"), worktree_root=ROOT, task_summary="Fix a bug.", sandbox=sandbox
+    )
+    assert "sandbox" not in rendered
+    assert rendered == render_call(write("src/a.py"), worktree_root=ROOT, task_summary="Fix a bug.")
+
+
+def test_the_spike_profile_is_told_to_the_guard(trace: Trace) -> None:
+    asked: list[Mapping[str, Any]] = []
+
+    def record(payload: Mapping[str, Any]) -> Verdict:
+        asked.append(payload)
+        return Verdict(True, "fine")
+
+    hook_for(trace, record, sandbox="spike").before_tool(shell("pip install requests"))
+    assert asked == [
+        {
+            "tool": "shell.run",
+            "arguments": {"command": "pip install requests"},
+            "worktree_root": ROOT,
+            "task_summary": "Fix a bug.",
+            "sandbox": "spike",
+        }
+    ]
+
+
+def test_build_guard_hook_passes_the_sandbox_profile(trace: Trace, tmp_path: Path) -> None:
+    spike = resolve("spike", "^0.1")
+    assert isinstance(spike, LLMSpec)
+    hook = build_guard_hook(spike, trace, parent_run_id="p", repo_path=tmp_path)
+    assert hook._sandbox == "spike"
+    assert hook._guard_ref.startswith("action-guard@0.2.")
+    fixer = resolve("fixer", "^0.1")
+    assert isinstance(fixer, LLMSpec)
+    hook = build_guard_hook(fixer, trace, parent_run_id="p", repo_path=tmp_path)
+    assert hook._sandbox == "offline"
+    assert hook._guard_ref.startswith("action-guard@0.1.")
+
+
 # --- through the runner --------------------------------------------------------------------------
 
 

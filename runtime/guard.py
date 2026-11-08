@@ -17,6 +17,11 @@ Each decision is one trace row. Its `kind` and `agent_ref` are the guard agent's
 guard is an LLM agent the row is the guard run's own row, so it carries the tokens and the cost.
 
 The guard agent comes from the `guard` field of the guarded agent's manifest, as `name@^MAJOR.MINOR`.
+For an agent whose manifest says `sandbox: spike`, the rendered input also carries
+`"sandbox": "spike"`, so that the guard applies its rules for the networked profile; the guard must
+then be one whose input has that field, `action-guard@^0.2`. For every other agent the input is
+unchanged, so `action-guard@^0.1` keeps working.
+
 Two forms exist, chosen by the agent's `kind`: `llm`, the working form, and `jev`, a noul answering
 "is this tool call safe inside the sandbox?". Turning a noul probability into allow or deny needs a
 threshold, and thresholds live in `runtime/gates.py`, so `build_guard_hook` refuses the `jev` form
@@ -72,14 +77,23 @@ type Ask = Callable[[Mapping[str, Any]], Verdict]
 """Puts one rendered tool call to the guard agent and returns its verdict, or raises `AskFailed`."""
 
 
-def render_call(call: ToolCall, *, worktree_root: str, task_summary: str) -> dict[str, Any]:
-    """Return the guard agent's input for `call`: tool, arguments, worktree root and task summary."""
-    return {
+def render_call(
+    call: ToolCall, *, worktree_root: str, task_summary: str, sandbox: str | None = None
+) -> dict[str, Any]:
+    """Return the guard agent's input for `call`: tool, arguments, worktree root and task summary.
+
+    `sandbox` is the guarded agent's sandbox profile. Only `spike` is rendered, as a `sandbox`
+    field; any other value leaves the input as the 0.1 guards expect it.
+    """
+    payload: dict[str, Any] = {
         "tool": call.name,
         "arguments": dict(call.arguments),
         "worktree_root": worktree_root,
         "task_summary": task_summary,
     }
+    if sandbox == "spike":
+        payload["sandbox"] = "spike"
+    return payload
 
 
 class GuardHook:
@@ -88,7 +102,8 @@ class GuardHook:
     One instance is for one run: it counts that run's denials. `parent_run_id` is the id of the run
     being guarded and goes into every decision row. `guard_ref` and `guard_kind` are the guard
     agent's address and kind. `inner` is a hook the caller passed to the run; it is asked first, a
-    denial from it is returned as it is and does not count, and it sees `after_tool`.
+    denial from it is returned as it is and does not count, and it sees `after_tool`. `sandbox`
+    is the guarded agent's sandbox profile, passed on to `render_call`.
     """
 
     def __init__(
@@ -105,6 +120,7 @@ class GuardHook:
         tag: str | None = None,
         inner: ToolHook | None = None,
         max_denials: int = MAX_DENIALS,
+        sandbox: str | None = None,
     ) -> None:
         self._ask = ask
         self._trace = trace
@@ -117,6 +133,7 @@ class GuardHook:
         self._tag = tag
         self._inner = inner
         self._max_denials = max_denials
+        self._sandbox = sandbox
         self.denials = 0
 
     def before_tool(self, call: ToolCall) -> ToolDecision:
@@ -128,7 +145,10 @@ class GuardHook:
         if call.name in READ_ONLY:
             return ToolDecision.allow()
         payload = render_call(
-            call, worktree_root=self._worktree_root, task_summary=self._task_summary
+            call,
+            worktree_root=self._worktree_root,
+            task_summary=self._task_summary,
+            sandbox=self._sandbox,
         )
         started_at = datetime.now(UTC)
         start = time.monotonic()
@@ -253,7 +273,8 @@ def build_guard_hook(
     """Return the `GuardHook` for one run of `spec`, which must have a `guard` address.
 
     The address is resolved with `registry.resolve`. A `jev` guard raises `UsageError`: that form is
-    documented but not wired. `repo_path` becomes the worktree root the guard is told about.
+    documented but not wired. `repo_path` becomes the worktree root the guard is told about, and
+    the spec's sandbox profile is passed on to the hook.
     """
     if spec.guard is None:
         raise UsageError(f"{spec.address} has no guard", hint="set `guard` in its manifest")
@@ -283,4 +304,5 @@ def build_guard_hook(
         pipeline_run_id=pipeline_run_id,
         tag=tag,
         inner=inner,
+        sandbox=spec.sandbox_profile,
     )

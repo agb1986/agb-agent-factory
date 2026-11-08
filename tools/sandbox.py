@@ -1,22 +1,43 @@
-"""The sandbox-only tools: write a work-tree file, and run one allow-listed command offline.
+"""The sandbox-only tools: write a work-tree file, and run one allow-listed command in a container.
 
 These are the only tools in the registry that change anything. `tools.registry.tool_defs` hands
-them out only to an agent whose manifest says `sandbox: true`. `fs.write_file` writes inside the
+them out only to an agent whose manifest sets `sandbox`. `fs.write_file` writes inside the
 repository root and nowhere else. `shell.run` takes an argument list, never a shell string, and
-starts only the programs in `ALLOWED_PROGRAMS`, inside a throwaway Docker container that has no
-network and sees only the work tree. This is option (a) of `docs/decisions/0001-fixer-runtime.md`.
+starts only allow-listed programs inside a throwaway Docker container. This is option (a) of
+`docs/decisions/0001-fixer-runtime.md`.
+
+There are two profiles, picked by the manifest's `sandbox` value.
+
+- `true`, the offline profile (`docker_argv`, `run_in_sandbox`). The container has no network and
+  sees only the work tree of the repository the agent was given, with its `.git` read-only. The
+  programs are `ALLOWED_PROGRAMS`. The image must already hold the dependencies of the repository
+  under test, because nothing can be installed at run time.
+- `spike`, the networked profile (`spike_docker_argv`, `run_spike`). It is for an agent that writes
+  throwaway code to learn how an API or package really behaves. The container has the default
+  bridge network and may install packages, but no source repository is mounted: the runtime gives
+  the agent a fresh empty directory (`runtime.async_runner`), and that directory is the only
+  writable mount. The programs are `SPIKE_PROGRAMS`; git is not one of them. Packages install into
+  the directory itself (`PYTHONUSERBASE`), so they are gone when the run ends. The CPU, memory and
+  process limits are the offline profile's, and each command has the hard wall-clock limit
+  `SPIKE_TIMEOUT_S`.
+
+The network of the spike profile is not filtered: a command can reach any host the Docker bridge
+can, including addresses on the host's own networks. What stops it is the action guard, which
+reads every `shell.run` call before it runs, under its rules for this profile (`action-guard`
+0.2). Nothing secret is passed into the container.
 
 The container is built from `tools/sandbox.Dockerfile` and tagged `SANDBOX_IMAGE`, or runs the image
-named by `FACTORY_SANDBOX_IMAGE` when that is set (`sandbox_image`). It must already hold the
-dependencies of the repository under test, because nothing can be installed at run time.
+named by `FACTORY_SANDBOX_IMAGE` when that is set (`sandbox_image`). Both profiles use it.
 """
 
+import contextlib
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,6 +91,15 @@ TIMEOUT_S = 120
 
 TIMEOUT_EXIT_CODE = 124
 """Exit code reported for a command that ran past `TIMEOUT_S`, as `timeout(1)` does."""
+
+SPIKE_PROGRAMS = frozenset({"pip", "pytest", "python", "uv"})
+"""The only executables `shell.run` starts under the spike profile, given as bare names."""
+
+SPIKE_TIMEOUT_S = 90
+"""Hard wall-clock limit for one command under the spike profile, container start included."""
+
+PROFILE_LABEL = "factory.sandbox.profile"
+"""Docker label naming the profile of a spike container, so one can be told apart in `docker ps`."""
 
 _MAX_ARGS = 64
 _MAX_ARG_CHARS = 32_768
@@ -135,13 +165,13 @@ def run_command(
     return f"exit code {result.exit_code}\n{truncate(result.output, max_bytes)}"
 
 
-def check_argv(argv: object) -> list[str]:
+def check_argv(argv: object, *, programs: frozenset[str] = ALLOWED_PROGRAMS) -> list[str]:
     """Return `argv` as a list of strings after checking it may run, else raise `ToolInputError`.
 
     It must be a non-empty list of at most 64 strings without NUL. The first is a bare executable
-    name from `ALLOWED_PROGRAMS`; a path such as `/usr/bin/python` is refused. For `git` the
-    second is a subcommand from `GIT_READ_ONLY`, and no argument is an option that writes a file
-    or starts a program.
+    name from `programs`, `ALLOWED_PROGRAMS` by default; a path such as `/usr/bin/python` is
+    refused. For `git` the second is a subcommand from `GIT_READ_ONLY`, and no argument is an
+    option that writes a file or starts a program.
     """
     if not isinstance(argv, list | tuple) or not argv:
         raise ToolInputError("argv must be a non-empty list of strings")
@@ -152,10 +182,10 @@ def check_argv(argv: object) -> list[str]:
     if any(len(item) > _MAX_ARG_CHARS for item in argv):
         raise ToolInputError(f"an argv item is over {_MAX_ARG_CHARS} characters")
     items = list(argv)
-    if items[0] not in ALLOWED_PROGRAMS:
+    if items[0] not in programs:
         raise ToolInputError(
             f"program not allowed: {items[0]!r}",
-            hint=f"allowed programs: {', '.join(sorted(ALLOWED_PROGRAMS))}",
+            hint=f"allowed programs: {', '.join(sorted(programs))}",
         )
     if items[0] == "git":
         _check_git(items[1:])
@@ -244,10 +274,111 @@ def run_in_sandbox(
         raise ToolInputError(f"{root}/.git is not a directory", hint="use a plain clone")
     require_image()
     name = f"{_CONTAINER_PREFIX}{uuid.uuid4().hex[:12]}"
+    return _run_container(docker_argv(root, items, name), items, name, timeout_s)
+
+
+def run_spike_command(
+    repo_path: str | Path, argv: Sequence[str], *, max_bytes: int = DEFAULT_MAX_BYTES
+) -> str:
+    """`run_command` for the spike profile: run `argv` with `run_spike` and report the same way."""
+    result = run_spike(repo_path, argv)
+    return f"exit code {result.exit_code}\n{truncate(result.output, max_bytes)}"
+
+
+def spike_docker_argv(root: Path, argv: Sequence[str], name: str) -> list[str]:
+    """Return the `docker run` argument list for `argv` under the spike profile, over `root`.
+
+    It differs from `docker_argv` in four places. The network is the default bridge, not `none`.
+    `root` is a scratch directory, not a repository, and it is the only volume: its `.git` is not
+    mounted. The `/tmp` tmpfs is larger, 256 MiB, for builds. The environment sends pip and uv
+    installs into `/work/.local` and their caches into `/work/.cache`, inside the scratch
+    directory, because the root filesystem is read-only and nothing may outlive the run. The CPU,
+    memory and process limits, the read-only root, the dropped capabilities and the host user's
+    uid are the same. Both labels are set: `ROOT_LABEL` for `kill_sandboxes`, and `PROFILE_LABEL`.
+    """
+    return [
+        "docker",
+        "run",
+        "--rm",
+        "--name",
+        name,
+        "--label",
+        f"{ROOT_LABEL}={root}",
+        "--label",
+        f"{PROFILE_LABEL}=spike",
+        "--network",
+        "bridge",
+        "--cpus",
+        "1",
+        "--memory",
+        "512m",
+        "--pids-limit",
+        "128",
+        "--read-only",
+        "--tmpfs",
+        "/tmp:rw,size=256m",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--user",
+        f"{os.getuid()}:{os.getgid()}",
+        "--env",
+        "HOME=/tmp",
+        "--env",
+        "PYTHONDONTWRITEBYTECODE=1",
+        "--env",
+        "PYTEST_ADDOPTS=-p no:cacheprovider",
+        "--env",
+        "PIP_USER=1",
+        "--env",
+        f"PYTHONUSERBASE={_WORKDIR}/.local",
+        "--env",
+        "PIP_NO_CACHE_DIR=1",
+        "--env",
+        "PIP_DISABLE_PIP_VERSION_CHECK=1",
+        "--env",
+        "PIP_NO_WARN_SCRIPT_LOCATION=1",
+        "--env",
+        f"UV_CACHE_DIR={_WORKDIR}/.cache/uv",
+        "--env",
+        "UV_PYTHON_DOWNLOADS=never",
+        "--volume",
+        f"{root}:{_WORKDIR}:rw",
+        "--workdir",
+        _WORKDIR,
+        sandbox_image(),
+        *argv,
+    ]
+
+
+def run_spike(
+    repo_path: str | Path, argv: Sequence[str], *, timeout_s: int = SPIKE_TIMEOUT_S
+) -> SandboxResult:
+    """Run `argv` under the spike profile with the scratch directory `repo_path` as `/work`.
+
+    `repo_path` is the directory the runtime made for the run, the top of an empty work tree so
+    that the `fs` tools accept it. The checks and the timeout follow `run_in_sandbox`, with
+    `SPIKE_PROGRAMS` in place of `ALLOWED_PROGRAMS` and `SPIKE_TIMEOUT_S` as the default limit.
+    """
+    root = resolve_root(repo_path)
+    items = check_argv(argv, programs=SPIKE_PROGRAMS)
+    require_image()
+    name = f"{_CONTAINER_PREFIX}spike-{uuid.uuid4().hex[:12]}"
+    return _run_container(spike_docker_argv(root, items, name), items, name, timeout_s)
+
+
+def _run_container(
+    command: list[str], items: list[str], name: str, timeout_s: int
+) -> SandboxResult:
+    """Run the `docker run` list `command`; past `timeout_s`, kill container `name` and report 124.
+
+    Killing the `docker` client does not stop its container, so the container is killed by name.
+    """
     start = time.monotonic()
     try:
         proc = subprocess.run(
-            docker_argv(root, items, name),
+            command,
             capture_output=True,
             stdin=subprocess.DEVNULL,
             timeout=timeout_s,
@@ -260,6 +391,43 @@ def run_in_sandbox(
     return SandboxResult(
         tuple(items), proc.returncode, proc.stdout + proc.stderr, time.monotonic() - start
     )
+
+
+SPIKE_EXCLUDES = (".local/", ".cache/")
+"""Directories the spike profile's installs and caches use, kept out of `fs.list_files`."""
+
+
+@contextlib.contextmanager
+def spike_root() -> Generator[Path]:
+    """Make the scratch directory of one spike run, yield it, then kill its containers and delete it.
+
+    The directory is new and empty, under the system temporary directory. It is made the top of an
+    empty git work tree, because the `fs` tools accept only such a root (`resolve_root`), and the
+    install and cache directories in `SPIKE_EXCLUDES` are listed in its `.git/info/exclude`. The
+    container sees `.git` as plain files of the scratch directory; git is not among its programs.
+    Raises `ToolUnavailableError` when git cannot initialise it.
+    """
+    root = Path(tempfile.mkdtemp(prefix="factory-spike-")).resolve()
+    try:
+        proc = subprocess.run(
+            ["git", "init", "--quiet", str(root)],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise ToolUnavailableError(
+                f"git init failed for the spike scratch directory: {proc.stderr.decode(errors='replace').strip()}",
+                hint="install git, which the fs tools need for their root",
+            )
+        exclude = root / ".git" / "info" / "exclude"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        with exclude.open("a", encoding="utf-8") as handle:
+            handle.write("".join(f"{line}\n" for line in SPIKE_EXCLUDES))
+        yield root
+    finally:
+        kill_sandboxes(root)
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def kill_sandboxes(repo_path: str | Path) -> int:
@@ -342,6 +510,8 @@ TOOLS = (
         },
         impl=run_command,
         writes=True,
+        spike_description="Run one command in a networked sandbox whose working directory, /work, is your own empty scratch directory; no source repository is mounted. Allowed programs: python, pip, uv, pytest. The network is on, so [\"pip\", \"install\", \"<package>\"] works and installs into /work/.local, and code you run may make HTTP requests. Each command is killed after 90 seconds. Returns the exit code and the combined output.",
+        spike_impl=run_spike_command,
     ),
 )  # fmt: skip
 """The tools this module declares, the only ones that write; `tools.registry` collects them."""

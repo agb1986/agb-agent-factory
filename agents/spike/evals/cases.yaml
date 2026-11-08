@@ -1,0 +1,169 @@
+# Eval cases for spike. Each one asks a question about a stable public API that only running code
+# answers fully, and grades the answer three ways: the deterministic checks (the fields the answer
+# must fill and the strings it must not hold), every claim marked as a fact must quote its page word
+# for word (`citations_resolve`), and a small model scores it against the rubric. The APIs are
+# httpbin.org, jsonplaceholder.typicode.com and the PyPI JSON API, which have kept their shapes for
+# years. Each documentation page a case cites is a plain HTML page that web.fetch can read; the JSON
+# itself comes from code run in the spike sandbox.
+#
+# Spike takes no repository. `fixture` is required by the case schema, so each case names the small
+# off-by-one fixture, and the runner does not pass it on: SpikeInput has no `repo_path`. `verdict`
+# is null because the output has no verdict field.
+cases:
+  - id: httpbin-echo-shapes
+    fixture: off-by-one
+    payload:
+      target: https://httpbin.org
+      question: >-
+        What do GET https://httpbin.org/get?name=ada&n=2 and a POST to https://httpbin.org/post
+        with the JSON body {"name": "ada", "tags": ["x", "y"]} send back? Give the top-level keys
+        of each response and their types, and say where the query parameters and the JSON body
+        show up, and whether the numbers in the query string come back as numbers or as strings.
+    expected:
+      verdict: null
+      citations_resolve:
+        claims: claims
+        allow_domains: [httpbin.org, github.com]
+      rubric:
+        criteria:
+          - id: shapes-observed
+            text: >-
+              The answer gives the shape of both responses from output it observed: for GET /get
+              at least args, headers, origin and url, and for POST /post at least json and data,
+              with the query parameters under args and the JSON body under json.
+            required: true
+            floor: 0.6
+          - id: query-values-are-strings
+            text: >-
+              The answer says the query parameter n comes back as the string "2", not the number
+              2, and backs it with an observation whose output shows it.
+          - id: observations-reproducible
+            text: >-
+              Each observation names the command that was run and copies output that supports its
+              finding, and the working code is a script that makes both requests.
+            required: true
+            floor: 0.6
+        threshold: 0.7
+        required_fields: [summary, observations, payload_shapes, working_code.content, claims]
+        forbidden: [TODO, lorem ipsum]
+    grader: rubric
+
+  - id: httpbin-status-and-redirects
+    fixture: off-by-one
+    payload:
+      target: https://httpbin.org
+      question: >-
+        Using only Python's standard library, how do https://httpbin.org/status/404,
+        https://httpbin.org/status/418 and https://httpbin.org/redirect/2 behave? Say what
+        urllib.request.urlopen does with each one: whether it raises, which exception and status
+        code, what body comes back, and whether redirects are followed and where they end.
+      context: We want to know which errors our client must catch before we write it.
+    expected:
+      verdict: null
+      citations_resolve:
+        claims: claims
+        allow_domains: [httpbin.org, github.com]
+      rubric:
+        criteria:
+          - id: errors-observed
+            text: >-
+              The answer shows, from observed output, that urlopen raises urllib.error.HTTPError
+              for /status/404 and for /status/418, with codes 404 and 418, and reports what body
+              or text came back for 418.
+            required: true
+            floor: 0.6
+          - id: redirects-followed
+            text: >-
+              The answer shows, from observed output, that urlopen follows the redirects of
+              /redirect/2 and ends on a 200 response, naming the final URL (such as /get).
+            required: true
+            floor: 0.6
+          - id: edges-listed
+            text: >-
+              The edge cases name each behaviour as an edge, such as the exception type to catch,
+              and each one points to the observation or the page it comes from.
+        threshold: 0.7
+        required_fields: [summary, observations, edge_cases, working_code.content, claims]
+        forbidden: [TODO, lorem ipsum]
+    grader: rubric
+
+  - id: jsonplaceholder-nested-resources
+    fixture: off-by-one
+    payload:
+      target: https://jsonplaceholder.typicode.com
+      question: >-
+        What is the shape of a post from GET /posts/1, how many comments does
+        GET /posts/1/comments return and what does one look like, and what comes back for a post
+        that does not exist, such as /posts/9999? Also, does a POST to /posts with a new post
+        really create it, so that a later GET finds it?
+    expected:
+      verdict: null
+      citations_resolve:
+        claims: claims
+        allow_domains: [jsonplaceholder.typicode.com, github.com]
+      rubric:
+        criteria:
+          - id: shapes-observed
+            text: >-
+              The answer gives the shape of a post (userId, id, title, body) and of a comment
+              (postId, id, name, email, body) from observed output, and the number of comments
+              for post 1 as observed (5).
+            required: true
+            floor: 0.6
+          - id: missing-post
+            text: >-
+              The answer reports from observed output that /posts/9999 answers 404, and what body
+              came back with it.
+          - id: post-not-persisted
+            text: >-
+              The answer shows from observed output that the POST answers with a new id (such as
+              101) but that a later GET of that id does not find it, so writes are faked, not kept.
+            required: true
+            floor: 0.6
+          - id: docs-versus-observed
+            text: >-
+              The answer cites the guide for what the service documents, such as resources having
+              relations or the nested routes, and keeps that apart from what the code observed.
+        threshold: 0.7
+        required_fields: [summary, observations, payload_shapes, edge_cases, working_code.content, claims]
+        forbidden: [TODO, lorem ipsum]
+    grader: rubric
+
+  - id: pypi-json-shape-and-unknown-project
+    fixture: off-by-one
+    payload:
+      target: https://pypi.org/pypi/<project>/json
+      question: >-
+        What are the top-level keys of the PyPI JSON API response for the project requests, and
+        what is under info (name a few fields and their types)? What does the API answer for a
+        project that does not exist, such as factory-spike-no-such-project-7f3c? Does the API
+        documentation say what that answer will be?
+    expected:
+      verdict: null
+      citations_resolve:
+        claims: claims
+        allow_domains: [docs.pypi.org, pypi.org, github.com]
+      rubric:
+        criteria:
+          - id: shape-observed
+            text: >-
+              The answer lists the top-level keys it observed for requests, including info,
+              releases and urls, and names several fields of info, such as name, version and
+              summary, with their types.
+            required: true
+            floor: 0.6
+          - id: unknown-project-observed
+            text: >-
+              The answer shows from observed output that an unknown project answers 404 (an
+              HTTPError when using urllib), and what body came back.
+            required: true
+            floor: 0.6
+          - id: documented-versus-observed
+            text: >-
+              The answer cites the documentation for the route or what the response returns, and
+              says plainly whether the documentation covers the 404 case, without claiming the
+              documentation says something it does not.
+        threshold: 0.7
+        required_fields: [summary, observations, payload_shapes, edge_cases, working_code.content, claims]
+        forbidden: [TODO, lorem ipsum]
+    grader: rubric

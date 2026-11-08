@@ -30,6 +30,9 @@ research agents are the only agents allowed to. The first is the planning agent 
 which turns an idea or raw feedback into a PRD.
 The research agent `benchmark` compares candidate libraries for one need, and every number in its
 table is a `Claim` that `citations_resolve` checks against the cited page (#105).
+The research agent `spike` runs throwaway code in the networked spike sandbox to learn an API's
+real shape; its cases are graded by rubric on the observations it reports, each with the command
+and the output, and by `citations_resolve` on the facts it read (#106).
 
 A rubric case has `expected.verdict: null` and an `expected.rubric` block:
 

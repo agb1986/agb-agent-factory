@@ -46,8 +46,9 @@ from runtime.errors import AgentTimeoutError, ModelAPIError, TokenLimitError, To
 from runtime.hooks import ToolCall, ToolHook, ToolResult
 from runtime.pricing import TokenUsage, cost_usd
 from runtime.trace import Trace
-from tools import MAX_OUTPUT_BYTES, TOOLS, ToolError, dotted_name
+from tools import MAX_OUTPUT_BYTES, ToolError, dotted_name
 from tools._common import ToolUnavailableError
+from tools.registry import impl_for
 from tools.web import check_web_call
 
 API_KEY_ENV = "ANTHROPIC_API_KEY"
@@ -318,7 +319,7 @@ class _ScopedTool(BetaBuiltinFunctionTool):
     def __init__(self, definition: dict[str, Any], state: _RunState) -> None:
         self._definition = definition
         self._dotted = dotted_name(definition["name"])
-        self._impl = TOOLS[self._dotted][1]
+        self._impl = impl_for(self._dotted, state.spec.sandbox)
         self._state = state
 
     def to_dict(self) -> BetaToolParam:
