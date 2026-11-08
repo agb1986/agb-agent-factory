@@ -17,6 +17,7 @@ Each section states one rule and gives a minimal example. A ticket that has to i
 | Fixture repositories | [Fixtures](#fixtures) | `fixtures/build.py`, `fixtures/schema.py` (#9) |
 | Gates and routing | [Gates](#gates) | `runtime/gates.py`, `pipelines/triage.py` (#18) |
 | Trace row | [Trace row](#trace-row) | `runtime/trace.py` (#6) |
+| Work items, states and the orchestrator | [Work items](#work-items) | `runtime/work_items.py` (#82) |
 | Secrets | [Secrets](#secrets) | `runtime/runner.py` (#5), `runtime/jev_runner.py` (#17) |
 | Deployment image | [Deployment](#deployment) | `Dockerfile`, `compose.yaml`, `scripts/scan_image.py` (#28) |
 | CLI shape | [CLI shape](#cli-shape) | `factory/cli.py` |
@@ -496,6 +497,129 @@ A version becomes publishable by passing its evals. Migration 2 adds the `publis
 A `Trace` holds one DuckDB connection for its lifetime and opens it on first use, rather than opening per call. DuckDB allows one read-write process per file, so holding the connection keeps the single writer (#26) in charge of the file and saves a file open on every run; close it with `close()` or a `with` block. That one connection is shared by runs gathered on an event loop and by hooks and guard runs on worker threads, and a DuckDB connection must not be used from two threads at once, so every public `Trace` method holds the instance's reentrant lock (#26). It is a lock rather than a writer task and a queue: a row is one fast insert, and a queue would need a flush before every read and a loop that callers on worker threads do not have. Schema changes are numbered migrations in `runtime/trace.py`: append a `(version, sql)` pair, never edit a shipped one, and `ensure_schema()` applies the missing ones and records them in `schema_version`. `cost_usd` is null for a model with no entry in `runtime/pricing.py`, and aggregates treat null as zero.
 
 `web.fetch(url)` and `web.search(query)` (`tools/web.py`) give an agent read-only web access by running `agb web fetch <url> --markdown --json --yes` and `agb web search <query> -n 10 --json --yes`; the factory owns no HTTP client. Three rules apply to them. First, the allow-list: `tools.web.allow_domains` in the manifest names the hosts, and `tool_defs` raises `ToolListError` for an agent that allows a web tool without one. The runner also checks every call (`tools.web.check_web_call`): a `web.fetch` URL whose host is neither a listed domain nor a subdomain of one is refused with `WebDomainError` (a `ToolError`, exit 2), which goes back to the model as an error result and never runs. `web.search` names no host, so it needs only a non-empty list. Two callers may replace the manifest's list for one run, never merging with it and never giving web tools to an agent whose manifest lists no domain: an eval case that sets `citations_resolve.allow_domains`, and `factory run --allow-domain`. Redirects that `agb` follows after the check are not re-checked. Second, never in the sandbox: `SANDBOX_DENIED` in `tools/registry.py` holds both names, and `tool_defs` refuses them for `sandbox: true`, which keeps `--network none` meaningful. Third, fetched content is untrusted: both tools wrap their text in a block that begins with a line saying it is data and not instructions, between `<<<BEGIN FETCHED CONTENT>>>` and `<<<END FETCHED CONTENT>>>` (an end marker inside the page is removed), the registry descriptions say the same, and agent prompts that allow web tools must say so too. Output is capped at `MAX_OUTPUT_BYTES` with the usual truncation marker, and each `agb` call has the 30 s tool timeout. Fetched pages are cached for the life of the process, keyed by URL, in a module-level dict in `tools/web.py` that `tools.web.reset_cache()` empties, so a retried agent does not fetch twice; searches are not cached. Both are in `READ_ONLY`.
+
+## Work items
+
+A work item is one unit of work the factory can take from idea to pull request: a feature, a bug, a refactor, documentation, a research question or an incident. "Ticket" means the same thing; the command is `factory ticket` (#82). Agents stay stateless. The work item lives in the store, and an agent sees only the part of it a pipeline passes as payload. The reasons are in [ADR 0002](decisions/0002-work-items.md).
+
+The store is two tables in the trace store's DuckDB file (`FACTORY_TRACE_DB`, see [Trace row](#trace-row)), added as numbered migrations to `MIGRATIONS` in `runtime/trace.py`. `runtime/work_items.py` (#82) uses the `Trace` instance's connection and lock, so one process still holds one connection and one writer. `work_items` holds one row per item:
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | VARCHAR | `wi-<n>`, `n` counting up from 1 in the store. Never reused, never a GitHub issue number |
+| `kind` | VARCHAR | `feature`, `bug`, `refactor`, `docs`, `research` or `incident` |
+| `title` | VARCHAR | One line, at most 120 characters |
+| `body` | VARCHAR | Markdown: what to do and why |
+| `acceptance` | JSON | A list of strings, at least one. Each is a criterion a test or a reader can check. A research item's criterion is the question answered |
+| `repo` | VARCHAR | The repository: `owner/name` on GitHub, or an absolute path to a local checkout with no remote, such as a fixture |
+| `ref` | VARCHAR | The ref work starts from. The pipeline resolves it to a commit when it starts and records that commit in the event |
+| `parent` | VARCHAR, null | `wi-<n>` for another item, or `prd:<pipeline_run_id>` for the PRD a plan loop stored under `data/plans/<run-id>.md` (#92) |
+| `depends_on` | JSON | A list of item ids. Each must exist, and the graph stays acyclic; both are checked on every write |
+| `impacted_paths` | JSON | A list of paths relative to the repository root, empty when unknown. Written by story-breakdown from `deps.impact` (#91) |
+| `size` | VARCHAR, null | `S`, `M` or `L` when story-breakdown set it |
+| `status` | VARCHAR | One of the states below. A copy of the last event's `to_status`, written in the same transaction |
+| `pipeline_run_ids` | JSON | Every pipeline run that worked on the item, in order, appended by `link_run` |
+| `created_at`, `updated_at` | TIMESTAMPTZ | In UTC |
+
+The cost so far is not a column. It is the sum of `cost_usd` over the trace rows whose `pipeline_run_id` is in `pipeline_run_ids`, computed on read as `Trace.cost_by_pipeline_run` does, so it can never drift from the trace.
+
+`work_item_events` holds one row per change of status, the creation included:
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `work_item_id` | VARCHAR | The item |
+| `at` | TIMESTAMPTZ | When, in UTC |
+| `from_status` | VARCHAR, null | Null for the creation event |
+| `to_status` | VARCHAR | The new state |
+| `actor` | VARCHAR | `human` for a command a person runs, `pipeline:<module>` for a pipeline (`pipeline:build_loop`), `store` for a promotion `ready()` makes |
+| `pipeline_run_id` | VARCHAR, null | The run that made the move; null for `human` and `store` |
+| `reason` | VARCHAR | Why. Never empty |
+
+An agent gets an item as the `Ticket` model in `registry/common_schemas.py`: `kind`, `title`, `body`, `acceptance`, `repo`, `ref` and `impacted_paths`. It never sees `status`, the cost, the run ids or the events, and no tool lets an agent read or write the store. story-breakdown returns tickets in the same shape without ids, with dependencies given as indexes into its own list; the plan loop turns them into ids.
+
+```json
+{"id": "wi-7", "kind": "feature", "title": "Add --since to factory ticket list",
+ "body": "List only items created after a date.", "acceptance": ["`--since 2026-11-01` omits older items"],
+ "repo": "agb1986/agb-agent-factory", "ref": "main", "parent": "wi-3", "depends_on": ["wi-6"],
+ "impacted_paths": ["factory/cli.py"], "size": "S", "status": "todo", "pipeline_run_ids": []}
+```
+
+### States
+
+| State | Meaning |
+| --- | --- |
+| `todo` | Written, with dependencies not all `done` or not yet promoted |
+| `ready` | Every dependency is `done`; a pipeline may take it |
+| `in_progress` | One pipeline run is working on it |
+| `in_review` | A pull request is open; a person decides |
+| `blocked` | Stopped for a reason no human question settles: a dropped dependency, or a run that failed for a cause outside the item (sandbox, API, a killed process) |
+| `escalated` | Stopped on a question for a human, held in an escalation record (#93) |
+| `done` | Finished: its pull request merged, or its research answer accepted |
+| `dropped` | Abandoned on purpose |
+
+`done` and `dropped` are final. A regression in finished work is a new item with the old one as `parent`.
+
+### Transitions
+
+`move(id, to, reason)` checks the pair against one table in `runtime/work_items.py` and refuses every other pair with `IllegalTransitionError`, a `UsageError` (exit 2). An unknown id raises `WorkItemNotFound`, a `NotFoundError` (exit 3). The "moved by" column names the code that normally makes each move. `factory ticket move` lets a person make any legal move, with actor `human`, so work the pipelines do not cover yet, such as a research item, moves by hand along the same path.
+
+| From | To | Moved by | When |
+| --- | --- | --- | --- |
+| (none) | `todo` | `factory ticket add` (#82), the plan loop (#92), the hotfix pipeline (#109) | The item is written |
+| `todo` | `ready` | `ready()` and `factory ticket ready` (#82), actor `store` | Every dependency is `done` |
+| `todo` | `blocked` | `ready()`, actor `store` | A dependency was dropped |
+| `todo`, `ready`, `in_review`, `blocked`, `escalated` | `dropped` | A person | The work is abandoned |
+| `ready` | `in_progress` | The build loop (#87), the hotfix pipeline (#109) | The run starts, before the clone |
+| `in_progress` | `in_review` | The build loop (#87) | The panel said `ship` and the pull request is open |
+| `in_progress` | `blocked` | The build loop (#87) | Until #93: a second `request_changes`, a `blocked` output, a failed suite or a budget stop. After #93: only a failure outside the item |
+| `in_progress` | `escalated` | The pipeline that stopped, through #93 | A `blocked` output, a budget stop, a second `request_changes`, or the item contradicting the code |
+| `in_progress` | `ready` | A person | A run was killed before it could move the item |
+| `in_review` | `done` | A person | The pull request merged |
+| `in_review` | `ready` | A person | The pull request was closed or needs changes; the reason says which |
+| `blocked` | `todo`, `ready` | A person | The cause is cleared |
+| `blocked` | `escalated` | The escalation code of #93 | A question for a human is written about it |
+| `escalated` | `ready` | `factory escalations answer` (#93) | The answer is stored and goes to the next run as payload |
+
+A pipeline moves its item out of `in_progress` in a `finally` block, as the runner writes its trace row: to `blocked` with `<ErrorClass>: <message>` as the reason when nothing more specific applies. Before it moves an item to `in_progress` it links its pipeline run id with `link_run`.
+
+These moves are illegal for everyone, people included:
+
+- Any move out of `done` or `dropped`.
+- Any move into `in_progress` from a state other than `ready`.
+- Any move into `done` from a state other than `in_review`. Nothing skips review.
+- Any move into `ready` while a dependency is not `done`.
+- `escalated` to `in_progress`: an answered item goes through `ready`, so the run that takes it gets the answer.
+- `in_review` to `in_progress`, and `in_progress` to `dropped`: stop the run or close the pull request first.
+- A move to the state the item is already in.
+- Any move an agent makes. Only pipelines and `factory` commands call `move`.
+
+### The orchestrator
+
+Prioritisation and assignment are code over the store, and no model decides them. This extends [Gates](#gates): no LLM assigns work, picks the next item or sets its priority. The `ready` items are ordered by this key, first difference wins:
+
+1. `incident` before every other kind.
+2. More items that depend on it, directly or through others, first.
+3. The `value` of a Jev `score` question, higher first, when a ranking agent ran and its `confidence` reached the threshold in its manifest. A missing, failed or unsure answer leaves this key out; it never stops the order.
+4. Older `created_at` first, then the lower id.
+
+A Jev ranking is a trace row of its own, `kind` `jev`, tagged `rank:decision`, with the probabilities and no cost of its own, as the triage decision row is. No issue builds a ranking agent yet, and until one exists the third key is absent.
+
+The kind decides the pipeline, by a fixed table in code. `feature` and `bug` go to the build loop with `feature-coder` (#87). `refactor` and `docs` go to the build loop with `refactorer` (#98) and `documentation-agent` (#97) once they exist, and with `feature-coder` until then. `incident` goes to the hotfix pipeline (#109). `research` has no pipeline; a person runs the research agent with `factory run` and moves the item. Two items run at the same time only when code has checked that their `impacted_paths` are disjoint and both non-empty. In phase 7 there is no scheduler: a person names the item with `factory build <id>`.
+
+### Teams
+
+A team is a label, not a unit the registry knows. An agent's manifest may declare it with an optional `team` field, one of `planning`, `dev`, `qa`, `sre`, `research`, `decomp`, `hitl` and `analytics` (the eight teams of [ADR 0002](decisions/0002-work-items.md#the-eight-teams-of-spmd-and-the-phases)). An unknown value fails the manifest like any other bad field.
+
+```yaml
+name: feature-coder
+version: 0.1.0
+kind: llm
+team: dev
+```
+
+The resolver, the runner and the publish gate never read `team`. It never reaches a model, and setting or changing it bumps no version, as moving a model into `registry/common_schemas.py` bumps none. `factory list` and the factory metrics report (#96) may read it to group agents.
+
+Composition lives in `pipelines/`, one module per loop, named after what the loop does: `pipelines/build_loop.py` (#87), `pipelines/plan_loop.py` (#92). A loop may compose agents of several teams; the build loop runs `dev` and `qa` agents. The module's docstring names the teams it composes. There is no team object, no team manifest and no team version.
 
 ## Secrets
 
