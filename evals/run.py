@@ -485,7 +485,7 @@ def _run_case(
                     decision = _decision_name(decide(spec, answers, cut or capture.truncated))
                     actual["decision"] = decision
             else:
-                if spec.sandbox:
+                if spec.sandbox_profile == "offline":
                     repo_path = _private_copy(repo_path, Path(scratch))
                 if "repo_path" in spec.input_class.model_fields:
                     payload["repo_path"] = str(repo_path)

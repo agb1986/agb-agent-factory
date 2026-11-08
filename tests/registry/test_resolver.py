@@ -123,6 +123,39 @@ def test_sandbox_and_total_token_cap_are_read(make_agent: MakeAgent, agents_dir:
     assert spec.limits.max_tokens_total == 9000
 
 
+@pytest.mark.parametrize(
+    ("line", "sandbox", "profile"),
+    [
+        ("", False, None),
+        ("sandbox: false\n", False, None),
+        ("sandbox: true\n", True, "offline"),
+        ("sandbox: spike\n", "spike", "spike"),
+    ],
+)
+def test_each_sandbox_value_names_its_profile(
+    line: str,
+    sandbox: bool | str,
+    profile: str | None,
+    make_agent: MakeAgent,
+    agents_dir: Path,
+) -> None:
+    make_agent("fixer", "1.0.0", edit=lambda t: t + line)
+    spec = resolve("fixer", "^1.0", agents_dir)
+    assert isinstance(spec, LLMSpec)
+    assert spec.sandbox == sandbox
+    assert type(spec.sandbox) is type(sandbox)
+    assert spec.sandbox_profile == profile
+
+
+@pytest.mark.parametrize("value", ["maybe", "Spike", "offline", "[spike]"])
+def test_other_sandbox_values_are_refused(
+    value: str, make_agent: MakeAgent, agents_dir: Path
+) -> None:
+    make_agent("fixer", "1.0.0", edit=lambda t: t + f"sandbox: {value}\n")
+    with pytest.raises(ManifestError, match="sandbox"):
+        resolve("fixer", "^1.0", agents_dir)
+
+
 def test_max_retries_defaults_to_two_and_is_read(make_agent: MakeAgent, agents_dir: Path) -> None:
     make_agent("reviewer", "1.2.0")
     make_agent(

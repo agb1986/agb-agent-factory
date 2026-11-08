@@ -124,14 +124,14 @@ def resolve_cover_agent(
     """Resolve the test-writer that cover mode runs, the same range the fix loop pins.
 
     Unless `allow_unpublished` is set, only published versions resolve. Raises `UsageError` when
-    it is not a sandboxed LLM agent, and the resolver's `NotFoundError` subclasses (exit 3) when
+    it is not an LLM agent with `sandbox: true`, and the resolver's `NotFoundError` subclasses (exit 3) when
     the agent or a matching version is missing.
     """
     name, version_range = TEST_WRITER
     spec = resolve(name, version_range, published_only=not allow_unpublished, trace_path=trace_path)
-    if not isinstance(spec, LLMSpec) or not spec.sandbox:
+    if not isinstance(spec, LLMSpec) or spec.sandbox_profile != "offline":
         raise UsageError(
-            f"{spec.address} is not a sandboxed LLM agent, so cover mode cannot run it"
+            f"{spec.address} is not an LLM agent in the offline sandbox, so cover mode cannot run it"
         )
     return spec
 

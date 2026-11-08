@@ -64,6 +64,10 @@ class ToolSpec:
     so a sandboxed agent never gets it (`SANDBOX_DENIED`). `needs_web_domains` marks a tool that
     also needs the manifest's `tools.web.allow_domains`. A module lists its specs in a module-level
     `TOOLS` tuple, in the order the registry should show them.
+
+    `spike_impl` and `spike_description`, when set, replace `impl` and `description` for an agent
+    whose manifest says `sandbox: spike` (`tools.registry.impl_for`): `shell.run` runs its command
+    in the networked profile there, and tells the model so.
     """
 
     name: str
@@ -80,6 +84,8 @@ class ToolSpec:
     writes: bool = False
     reaches_out: bool = False
     needs_web_domains: bool = False
+    spike_impl: Callable[..., str] | None = None
+    spike_description: str | None = None
 
     def __post_init__(self) -> None:
         if self.writes and self.reaches_out:
@@ -87,11 +93,17 @@ class ToolSpec:
         if self.needs_web_domains and not self.reaches_out:
             raise ValueError(f"{self.name}: a tool that needs web domains reaches out")
 
-    def definition(self) -> dict[str, Any]:
-        """Return a fresh wire-format definition: `name`, `description` and `input_schema`."""
+    def definition(self, *, spike: bool = False) -> dict[str, Any]:
+        """Return a fresh wire-format definition: `name`, `description` and `input_schema`.
+
+        With `spike` the description is `spike_description` when the tool has one.
+        """
+        description = self.description
+        if spike and self.spike_description is not None:
+            description = self.spike_description
         return {
             "name": self.name,
-            "description": self.description,
+            "description": description,
             "input_schema": self.input_schema,
         }
 

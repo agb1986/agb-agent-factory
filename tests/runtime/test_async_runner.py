@@ -20,7 +20,7 @@ from registry.spec import LLMSpec
 from runtime import async_runner, runner
 from runtime.async_runner import arun
 from runtime.budget import Budget, BudgetExceeded
-from runtime.errors import AgentTimeoutError
+from runtime.errors import AgentError, AgentTimeoutError
 from runtime.hooks import ToolCall, ToolDecision, ToolResult
 from runtime.pricing import TokenUsage, cost_usd
 from runtime.trace import Trace, TraceRow
@@ -386,6 +386,53 @@ def test_gathered_runs_overshoot_the_budget_by_at_most_one_message_each(
     assert len(found) == 3
     assert all(row["error"].startswith("BudgetExceeded: ") for row in found)
     assert sum(row["cost_usd"] for row in found) == pytest.approx(budget.spent)
+
+
+# --- the spike profile -------------------------------------------------------------------------
+
+
+def test_a_spike_run_gets_a_fresh_scratch_root_instead_of_the_repo(
+    spec: LLMSpec, trace: Trace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("tools.sandbox.kill_sandboxes", lambda _root: 0)
+    roots: list[Path] = []
+
+    def record_root(repo_path: str | Path, *, max_bytes: int, **arguments: Any) -> str:
+        root = Path(repo_path)
+        roots.append(root)
+        assert root.is_dir() and root.name.startswith("factory-spike-")
+        assert sorted(path.name for path in root.iterdir()) == [".git"]
+        return "empty"
+
+    replace_read_file(monkeypatch, record_root)
+    spike = spec.model_copy(update={"sandbox": "spike"})
+    api = FakeAsyncAPI(asks_for_tool(), answer())
+    output = asyncio.run(
+        arun(spike, PAYLOAD, trace, repo_path="/the/caller/repo", client=api.async_client())
+    )
+    assert output.model_dump() == {"ok": True}
+    [root] = roots
+    assert root != Path("/the/caller/repo")
+    assert not root.exists()
+
+
+def test_a_spike_run_removes_its_scratch_root_when_it_fails(
+    spec: LLMSpec, trace: Trace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("tools.sandbox.kill_sandboxes", lambda _root: 0)
+    roots: list[Path] = []
+
+    def record_root(repo_path: str | Path, *, max_bytes: int, **arguments: Any) -> str:
+        roots.append(Path(repo_path))
+        return "empty"
+
+    replace_read_file(monkeypatch, record_root)
+    spike = spec.model_copy(update={"sandbox": "spike"})
+    api = FakeAsyncAPI(asks_for_tool(), api_error(400))
+    with pytest.raises(AgentError):
+        asyncio.run(arun(spike, PAYLOAD, trace, client=api.async_client()))
+    [root] = roots
+    assert not root.exists()
 
 
 # --- the trace lock ----------------------------------------------------------------------------

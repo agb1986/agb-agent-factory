@@ -214,3 +214,42 @@ def test_the_network_tools_are_sandbox_denied() -> None:
 def test_every_tool_is_either_read_only_or_sandbox_only() -> None:
     assert READ_ONLY | SANDBOX_ONLY == set(TOOLS)
     assert not READ_ONLY & SANDBOX_ONLY
+
+
+# --- the spike profile
+
+
+def test_the_spike_profile_hands_out_the_sandbox_tools_and_the_web_tools() -> None:
+    names = ["fs.write_file", "shell.run", "web.fetch", "web.search"]
+    defs = tool_defs(names, sandbox="spike", web_domains=["httpbin.org"])
+    assert [d["name"] for d in defs] == [wire_name(name) for name in names]
+
+
+@pytest.mark.parametrize("name", sorted(SANDBOX_DENIED - NEEDS_WEB_DOMAINS))
+def test_the_spike_profile_still_refuses_the_other_network_tools(name: str) -> None:
+    with pytest.raises(ToolListError, match=name):
+        tool_defs(["fs.read_file", name], sandbox="spike")
+
+
+def test_the_spike_profile_still_needs_the_web_allow_list() -> None:
+    with pytest.raises(ToolListError):
+        tool_defs(["web.fetch"], sandbox="spike")
+
+
+def test_shell_run_has_a_spike_implementation_and_description() -> None:
+    spec = SPECS["shell.run"]
+    assert spec.spike_impl is not None
+    assert registry.impl_for("shell.run", "spike") is spec.spike_impl
+    for sandbox in (True, False):
+        assert registry.impl_for("shell.run", sandbox) is spec.impl
+    (offline,) = tool_defs(["shell.run"], sandbox=True)
+    (spike,) = tool_defs(["shell.run"], sandbox="spike")
+    assert offline["description"] != spike["description"]
+    assert "networked sandbox" in spike["description"]
+    assert offline["input_schema"] == spike["input_schema"]
+
+
+def test_tools_without_a_spike_implementation_keep_their_own() -> None:
+    for name, spec in SPECS.items():
+        if spec.spike_impl is None:
+            assert registry.impl_for(name, "spike") is spec.impl, name

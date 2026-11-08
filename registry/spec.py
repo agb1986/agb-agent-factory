@@ -152,7 +152,12 @@ class LLMSpec(AgentSpecBase):
     `guard` is optional and names the action-guard agent, as `name@^MAJOR.MINOR`, that must allow
     each of this agent's tool calls that is not read-only; see `runtime.guard`.
     `sandbox` says the agent runs where it may write files and run commands: only then does the
-    tool registry hand out the sandbox-only tools (`fs.write_file`, `shell.run`).
+    tool registry hand out the sandbox-only tools (`fs.write_file`, `shell.run`). It takes one of
+    three values. `false`, the default, is no sandbox. `true` is the offline profile: the agent
+    works on the repository it is given, and its commands run with no network. `spike` is the
+    networked profile of `tools.sandbox`: the agent gets a fresh empty directory instead of a
+    repository, its commands may reach the network and install packages, and the web tools stay
+    available to it. `sandbox_profile` names the profile.
     """
 
     kind: Literal["llm"]
@@ -166,7 +171,7 @@ class LLMSpec(AgentSpecBase):
     limits: LimitsSpec
     scoring: ScoringSpec | None = None
     guard: AgentRange | None = None
-    sandbox: bool = False
+    sandbox: bool | Literal["spike"] = False
 
     _input_class: type[BaseModel] | None = PrivateAttr(default=None)
     _output_class: type[BaseModel] | None = PrivateAttr(default=None)
@@ -177,6 +182,13 @@ class LLMSpec(AgentSpecBase):
         if value.is_absolute() or ".." in PurePosixPath(value.as_posix()).parts:
             raise ValueError("must be a relative path inside the agent directory")
         return value
+
+    @property
+    def sandbox_profile(self) -> Literal["offline", "spike"] | None:
+        """The sandbox profile: `offline` for `sandbox: true`, `spike`, or None for no sandbox."""
+        if self.sandbox == "spike":
+            return "spike"
+        return "offline" if self.sandbox is True else None
 
     @property
     def system_prompt_file(self) -> Path:

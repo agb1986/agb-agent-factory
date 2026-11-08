@@ -13,9 +13,16 @@ model's arguments, and has a keyword-only `max_bytes`; the runtime calls
 Every implementation acts only inside the root and raises a `ToolError` subclass on failure.
 
 The sets `READ_ONLY`, `SANDBOX_ONLY` and `SANDBOX_DENIED` come from the specs' flags. A tool with
-`writes=True` is in `SANDBOX_ONLY` and `tool_defs` refuses it unless the agent's manifest says
-`sandbox: true`; every other tool is in `READ_ONLY`. A tool with `reaches_out=True` is in
-`SANDBOX_DENIED` and `tool_defs` refuses it when the manifest says `sandbox: true`.
+`writes=True` is in `SANDBOX_ONLY` and `tool_defs` refuses it unless the agent's manifest sets
+`sandbox` (`true` or `spike`); every other tool is in `READ_ONLY`. A tool with `reaches_out=True` is
+in `SANDBOX_DENIED` and `tool_defs` refuses it to a sandboxed agent, with one exception: under
+`sandbox: spike`, whose container is networked anyway, the web tools (`NEEDS_WEB_DOMAINS`) stay
+available, still bound to the manifest's `tools.web.allow_domains`. The other tools that reach out,
+such as the memory and Sentry ones, are refused under both profiles.
+
+Under `sandbox: spike` a tool may also have a second implementation and description
+(`ToolSpec.spike_impl`, `spike_description`); `impl_for` and `tool_defs` pick them. `shell.run` is
+the one tool with them: its command runs in the networked profile of `tools.sandbox`.
 """
 
 import copy
@@ -75,10 +82,11 @@ TOOLS: dict[str, Tool] = {name: (spec.definition(), spec.impl) for name, spec in
 """Every tool's definition and implementation, keyed by dotted name. Prototypes may add to it."""
 
 SANDBOX_ONLY: frozenset[str] = frozenset(name for name, spec in SPECS.items() if spec.writes)
-"""The tools that change files or start programs; only an agent with `sandbox: true` gets them."""
+"""The tools that change files or start programs; only an agent with `sandbox` set gets them."""
 
 SANDBOX_DENIED: frozenset[str] = frozenset(name for name, spec in SPECS.items() if spec.reaches_out)
-"""The tools that reach the network or the host; an agent with `sandbox: true` never gets them."""
+"""The tools that reach the network or the host; a sandboxed agent never gets them, except the web
+tools under `sandbox: spike` (see the module docstring)."""
 
 NEEDS_WEB_DOMAINS: frozenset[str] = frozenset(
     name for name, spec in SPECS.items() if spec.needs_web_domains
@@ -114,11 +122,23 @@ def dotted_name(wire: str) -> str:
     return dotted
 
 
+def impl_for(dotted: str, sandbox: bool | str = False) -> Callable[..., str]:
+    """Return the implementation of the tool `dotted` for an agent with the manifest's `sandbox`.
+
+    Under `sandbox: spike` it is the spec's `spike_impl` when it has one; otherwise, and for a name
+    a prototype added to `TOOLS` without a spec, it is the implementation in `TOOLS`.
+    """
+    spec = SPECS.get(dotted)
+    if sandbox == "spike" and spec is not None and spec.spike_impl is not None:
+        return spec.spike_impl
+    return TOOLS[dotted][1]
+
+
 def tool_defs(
     allow: Iterable[str],
     deny: Iterable[str] = (),
     *,
-    sandbox: bool = False,
+    sandbox: bool | str = False,
     web_domains: Iterable[str] = (),
 ) -> list[ToolDef]:
     """Return the wire-format definitions for one agent's `tools.allow` and `tools.deny` lists.
@@ -127,9 +147,10 @@ def tool_defs(
     of dots. The definitions are copies, so a caller can change them freely. Raises
     `UnknownToolError` for a name in either list that is not in `TOOLS`, and `ToolListError` when
     a name is in both lists, when `allow` names a `SANDBOX_ONLY` tool and `sandbox` is false, a
-    `SANDBOX_DENIED` tool and `sandbox` is true, or a `NEEDS_WEB_DOMAINS` tool and `web_domains`
-    is empty. `sandbox` is the manifest's `sandbox` flag and `web_domains` its
-    `tools.web.allow_domains` list.
+    `SANDBOX_DENIED` tool and `sandbox` is set (except a web tool under `spike`), or a
+    `NEEDS_WEB_DOMAINS` tool and `web_domains` is empty. `sandbox` is the manifest's `sandbox`
+    value (`False`, `True` or `"spike"`) and `web_domains` its `tools.web.allow_domains` list.
+    Under `spike` a tool with a `spike_description` is described by it.
     """
     allowed = list(dict.fromkeys(allow))
     denied = list(dict.fromkeys(deny))
@@ -147,7 +168,12 @@ def tool_defs(
             f"sandbox-only tools need a sandboxed agent: {', '.join(refused)}",
             hint="set `sandbox: true` in the manifest or remove them from tools.allow",
         )
-    barred = [name for name in allowed if name in SANDBOX_DENIED]
+    spike = sandbox == "spike"
+    barred = [
+        name
+        for name in allowed
+        if name in SANDBOX_DENIED and not (spike and name in NEEDS_WEB_DOMAINS)
+    ]
     if barred and sandbox:
         raise ToolListError(
             f"tools not available inside the sandbox: {', '.join(barred)}",
@@ -161,7 +187,11 @@ def tool_defs(
         )
     defs: list[ToolDef] = []
     for name in allowed:
-        definition = copy.deepcopy(TOOLS[name][0])
+        spec = SPECS.get(name)
+        if spike and spec is not None:
+            definition = copy.deepcopy(spec.definition(spike=True))
+        else:
+            definition = copy.deepcopy(TOOLS[name][0])
         definition["name"] = wire_name(name)
         defs.append(definition)
     return defs
