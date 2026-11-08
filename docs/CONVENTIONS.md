@@ -17,6 +17,7 @@ Each section states one rule and gives a minimal example. A ticket that has to i
 | Fixture repositories | [Fixtures](#fixtures) | `fixtures/build.py`, `fixtures/schema.py` (#9) |
 | Gates and routing | [Gates](#gates) | `runtime/gates.py`, `pipelines/triage.py` (#18) |
 | Trace row | [Trace row](#trace-row) | `runtime/trace.py` (#6) |
+| Work items, states and the orchestrator | [Work items](#work-items) | `runtime/work_items.py` (#82) |
 | Secrets | [Secrets](#secrets) | `runtime/runner.py` (#5), `runtime/jev_runner.py` (#17) |
 | Deployment image | [Deployment](#deployment) | `Dockerfile`, `compose.yaml`, `scripts/scan_image.py` (#28) |
 | CLI shape | [CLI shape](#cli-shape) | `factory/cli.py` |
@@ -278,7 +279,7 @@ Allow and deny rules:
 - `tools.allow` is the complete set of tools an agent gets.
 - The runner gives the SDK only the allowed tools, so a call to a denied, unlisted or made-up tool gets the SDK's not-found error tool result and never runs.
 - A name that appears in both lists is an error at load time. An unknown name in either list is an error when a run starts.
-- Tools are read-only. A tool that writes may be allowed only for an agent that runs inside the sandbox (#24), behind the action guard (#23).
+- Tools are read-only. A tool that writes may be allowed only for an agent that runs inside the sandbox (#24), behind the action guard (#23). A tool that writes outside the sandbox is never given to a model; pipeline code calls it, under [Outside writes](#outside-writes).
 - A tool reads only inside the repository root it is given. A path that escapes the root, whether through `..`, an absolute path or a symlink, is rejected with a typed error. Subprocesses run from an argument list, never through a shell, and output is capped with a truncation marker.
 
 A tool implementation is a function `impl(repo_path, **arguments, max_bytes=MAX_OUTPUT_BYTES) -> str`. The definition in `TOOLS` lists only the arguments the model supplies; the runner passes `repo_path` itself and never forwards a model-supplied `max_bytes`. `repo_path` must be the top of a git work tree. A path is resolved against the real disk and must stay inside it, but an absolute or `..` path that ends up inside is accepted. Output beyond `MAX_OUTPUT_BYTES` (64 KiB) is cut on a character boundary and ends with one line, `[truncated: N bytes dropped, limit M bytes]`. Every failure is a `ToolError` subclass from `tools/_common.py`, so the runner can turn one clause into an error tool result, and its exit code follows the usual bases (`PathEscapeError` and `ToolInputError` 2, `ToolNotFoundError` and `UnknownToolError` 3, a missing `git` or `rg` 4). `tools.dotted_name(wire)` raises `UnknownToolError` for a name the model made up.
@@ -325,13 +326,55 @@ Every guard decision is one trace row, whether it allows or refuses. Its `kind` 
 
 The guard comes in two forms, chosen by the `kind` of the agent that `guard` names. `kind: llm` is the form that ships, `action-guard@0.1` on `claude-haiku-5-5` at effort `low`. `kind: jev` would be a noul answering "is this tool call safe inside the sandbox?" and applies once Jev is a go; it is not wired, and `build_guard_hook` raises `UsageError` for it, since turning a probability into allow or deny needs a threshold, and thresholds live in `runtime/gates.py`.
 
-The sandbox-only tools are `fs.write_file` and `shell.run`, declared in `tools/sandbox.py` with `writes=True`, which puts them in `SANDBOX_ONLY`; `tool_defs(allow, deny, sandbox=...)` raises `ToolListError` for either when the manifest does not say `sandbox: true`, and the runner passes the flag. The other way round, a tool declared with `reaches_out=True` (the Sentry, memory and web tools) is in `SANDBOX_DENIED` and `tool_defs` refuses it when the manifest says `sandbox: true`, and one with `needs_web_domains=True` (the web tools) is refused without a `tools.web.allow_domains` list. `fs.write_file(path, content)` replaces or creates one file inside the repository root, refuses anything under `.git` and content over 256 KiB. `shell.run(argv)` takes an argument list and starts only `pytest`, `python`, `uv` or a read-only `git` subcommand, as a bare name, inside a throwaway container with no network that sees only the work tree (option (a) of `docs/decisions/0001-fixer-runtime.md`). A non-zero exit is a normal result, reported as `exit code N` and the output; a command past 120 s is killed and reports 124. Under `sandbox: spike` (#106) the same two tools run in a second profile, `tools.sandbox.run_spike`: the runtime makes a fresh empty `factory-spike-*` directory for the run and removes it afterwards, `fs.*` read and write inside it, and `shell.run` mounts it at `/work` in a container on the default bridge network that may also start `pip`, with a 90 s limit and the offline profile's CPU, memory and process limits. No source repository is mounted. The spike profile also allows the web tools, which still need `tools.web.allow_domains`, and the action guard is told the profile (`action-guard@0.2`). Its network is not filtered at the container level; the guard is what refuses private and metadata addresses. The image is built once, with the network, by `docker build -t factory-sandbox:0.1 -f tools/sandbox.Dockerfile tools`; a missing Docker or image raises `ToolUnavailableError` and ends the run. `fs.list_files` and `fs.read_file` are read-only and read the work tree as it is on disk, edits included, so an agent that writes can read back what it wrote. Both are in `READ_ONLY`, so the action guard lets them through; every tool is in exactly one of `READ_ONLY` and `SANDBOX_ONLY`, decided by its `writes` flag.
+The sandbox-only tools are `fs.write_file` and `shell.run`, declared in `tools/sandbox.py` with `writes=True`, which puts them in `SANDBOX_ONLY`; `tool_defs(allow, deny, sandbox=...)` raises `ToolListError` for either when the manifest does not say `sandbox: true`, and the runner passes the flag. The other way round, a tool declared with `reaches_out=True` (the Sentry, memory and web tools) is in `SANDBOX_DENIED` and `tool_defs` refuses it when the manifest says `sandbox: true`, and one with `needs_web_domains=True` (the web tools) is refused without a `tools.web.allow_domains` list. `fs.write_file(path, content)` replaces or creates one file inside the repository root, refuses anything under `.git` and content over 256 KiB. `shell.run(argv)` takes an argument list and starts only `pytest`, `python`, `uv` or a read-only `git` subcommand, as a bare name, inside a throwaway container with no network that sees only the work tree (option (a) of `docs/decisions/0001-fixer-runtime.md`). A non-zero exit is a normal result, reported as `exit code N` and the output; a command past 120 s is killed and reports 124. Under `sandbox: spike` (#106) the same two tools run in a second profile, `tools.sandbox.run_spike`: the runtime makes a fresh empty `factory-spike-*` directory for the run and removes it afterwards, `fs.*` read and write inside it, and `shell.run` mounts it at `/work` in a container on the default bridge network that may also start `pip`, with a 90 s limit and the offline profile's CPU, memory and process limits. No source repository is mounted. The spike profile also allows the web tools, which still need `tools.web.allow_domains`, and the action guard is told the profile (`action-guard@0.2`). Its network is not filtered at the container level; the guard is what refuses private and metadata addresses. The image is built once, with the network, by `docker build -t factory-sandbox:0.1 -f tools/sandbox.Dockerfile tools`; a missing Docker or image raises `ToolUnavailableError` and ends the run. `fs.list_files` and `fs.read_file` are read-only and read the work tree as it is on disk, edits included, so an agent that writes can read back what it wrote. Both are in `READ_ONLY`, so the action guard lets them through; every tool is in exactly one of `READ_ONLY`, `SANDBOX_ONLY` and `OUTSIDE_WRITES`, decided by its `writes` and `outside_write` flags.
 
 The fix loop (`pipelines/fix_loop.py`, #24) adds a rule the tools do not enforce: only the test-writer changes tests. It lives in the pipeline, not in `fs.write_file`, because only the pipeline knows which agent is writing and what the test-writer changed. `TestFileGuard` is the fixer's `hook`, so it decides before the action guard: it refuses an `fs.write_file` to a path that `evals.graders.sandbox_tests.is_test_file` matches, that the test-writer changed (as its commit shows, not what it reports), that configures pytest at the root of the clone (`pyproject.toml`, `setup.cfg`, `pytest.ini` and the like), or that would shadow a module the runner imports (best effort; the panel is the real check), checking the path as written and again with symlinks resolved. After the fixer's run, a check on the host refuses the same paths when they changed by another route, such as a script started through `shell.run`. A refusal ends the run rather than going back to the model as a denial, because a fixer that wants to change a test either thinks the test is wrong or is working around it, and both need a person. It writes one trace row, `tag` `fix:test_write_refused` (`TEST_WRITE_REFUSED_TAG`), `kind` `llm`, `agent_ref` the fixer, `cost_usd` 0, `error` the message and `decision_json` `{"allow": false, "path", "reason", "check"}`, `check` being `hook` or `post-check`, and raises `TestFileWriteError`, a `FactoryError` (exit 1). The agents work in a clone (`git clone --no-hardlinks`, `pipelines/sandbox.py`), not a `git worktree`: a worktree's commits and admin entries land in the source repository's `.git`, which the fix loop never writes, and its `.git` file points outside the work tree, where the sandbox, which mounts only the work tree and its `.git` read-only, cannot follow. Before the suite the clone is reset to the fixer's commit with its untracked and ignored files deleted (`pipelines.sandbox.clean`), so the suite runs over the commits alone. The suite gets 600 s (`SUITE_TIMEOUT_S`) instead of a tool call's 120 s, and `FACTORY_SANDBOX_IMAGE` names another image than `factory-sandbox:0.1`, such as one holding a target repository's test dependencies.
 
 `deps.graph` and `deps.impact` (`tools/deps.py`, #88) are read-only and in `READ_ONLY`. `deps.graph` reads the Python, TypeScript and JavaScript files that `git ls-files` lists as tracked or new and not ignored, and returns the modules, named by their path from the root, and the import edges between them. Python is parsed with `ast`; TypeScript and JavaScript are matched with regular expressions after their comments are blanked out, so text that looks like an import inside a string can be misread. `deps.impact(paths)` returns every module that imports one of the paths, directly or transitively, with the depth of the shortest chain, 1 for a direct importer; the paths themselves are left out, and a cycle is walked once. The tools never guess. An import that names no single file is listed as unresolved with a reason: `dynamic` (`importlib.import_module`, `__import__`, `import()`, `require` of an expression), `alias` (a key of `compilerOptions.paths` in the root `tsconfig.json` or `jsconfig.json`, `@/`, `~`, `#`, or a bare specifier that starts with a top-level directory of the repository), `not_found`, `outside_root`, `absolute`, or `ambiguous` (a Python import that two source roots both satisfy). Imports of the standard library and installed packages are external and are not edges. An import of a barrel file (an `__init__.py` or an `index` file) is an edge to the barrel; which re-exported module a name comes from is not resolved, but the barrel's own re-exports are edges, so the impact set still reaches through it. Symlinks are skipped, and so are files over 1 MiB and Python files that do not parse. Because unresolved imports are not followed, `deps.impact` ends with a note when the repository has any: the set may then be incomplete.
 
 `sast.scan(base_ref, head_ref, path=None)` (`tools/sast.py`, #101) is read-only, sets no flag and is in `READ_ONLY`. It runs bandit 1.9.4, a core dependency pinned in `uv.lock`, with a fixed ruleset (`tools.sast.RULESET`, every check of that version except `B101`, the `assert` check) passed as `--tests`, so a plugin or a config file in the repository under review cannot add or remove a rule. It scans the files that `git diff --diff-filter=ACMT base head` lists, optionally under `path`, as their blobs at `head`, copied into a temporary directory under neutral names; the work tree is never read, `# nosec` comments are ignored, and symlinks, files over 1 MiB and files that are not `.py` are listed as `not scanned: path (reason)` rather than scanned, as are files bandit could not parse. The output is a header `bandit: N files scanned, M findings`, then one `path:line: RULE name: message (severity S, confidence C)` line per finding in path and line order with head-revision line numbers, then the `not scanned` lines, capped like any tool's. A missing `bandit` raises `ToolUnavailableError`, which ends the run; a scanner that exits non-zero or prints no JSON object raises `ToolExecutionError`. A scanner finding is a lead, not a review finding: an agent that holds `sast.scan` must verify each one against the code and write its own finding, or drop it. Bandit rather than semgrep because it is one small wheel with its rules built in and needs no network or rule registry at scan time, while semgrep is a large binary wheel whose useful rules come from a registry under their own licence; the cost is that bandit reads Python only.
+
+### Outside writes
+
+An outside write changes something a person reads outside the sandbox: a pull request, a review comment, an issue. The rules below are proposed in `docs/decisions/0003-outside-writes.md` (#83) and bind every tool that does one.
+
+- Every outside write is its own named tool, `<group>.<verb>`, in the `github` or `notify` group. There is no generic write tool.
+- It is denied by default. A pipeline may make the write only on behalf of an agent whose resolved manifest lists the tool in `tools.allow`; for any other agent the runtime refuses. A command-line flag may ask for a write the manifest already allows (`--comment`) or turn writes into a plan (`--dry-run`). No flag grants one.
+- No model is given an outside write. The `ToolSpec` is declared with `outside_write=True`, which requires `reaches_out=True` and forbids `writes=True`, so the tool is in `OUTSIDE_WRITES` and `SANDBOX_DENIED` and never in `READ_ONLY`. `tool_defs` checks the name like any other and leaves it out of the definitions sent to the model, so the rule that a model's tools are read-only outside the sandbox holds without an exception.
+- Pipeline code makes the write through one function, `runtime.outside.write(name, arguments, *, agent, context)`, where `agent` is the address of the agent the write is made for and `context` is an `OutsideContext`: the target, the `pipeline_run_id`, the `dry_run` flag, the trace store and the authorising agent's `run_id` in this pipeline, if it ran. The impl of an outside write takes the context in place of `repo_path`, and the runner never calls it.
+- Every call passes an outside-write guard before it runs. The guard is a `ToolHook` of the action guard's shape, so `before_tool(call)` returns `ToolDecision.allow()` or `ToolDecision.deny(reason)`, but its checks are code, not an LLM: the tool is in `OUTSIDE_WRITES`, the authorising agent lists it, the target is the pipeline's own, and no earlier call of the same tool on the same target was made in this pipeline run. A denial raises `OutsideWriteRefused`, a `FactoryError` (exit 1), and ends the stage.
+- The target is the repository the pipeline was given and nothing else. It is the `owner/name` on github.com of the `origin` remote of that repository, read once when the pipeline starts and compared without regard to case. There is no flag to name another. An `origin` that is not on github.com is a `UsageError` (exit 2). A tool handed another repository, a pull request or issue whose base repository is another, or a fork refuses with `OutsideWriteRefused`; the tool checks this itself as well as the guard, so a bug in one alone cannot write elsewhere.
+- `--dry-run` belongs to the pipeline command and reaches every outside write in it. The guard still runs, read-only tools such as `github.read_pr` still run, and the tool builds its complete request but does not send it. It returns what it would have done, and the trace row says `dry_run`.
+- Every body a write posts ends with the marker line `<!-- factory:<tool> <key> pipeline_run_id=<id> -->`, `key` being `pr-<N>`, `issue-<N>`, `ticket-<id>` or `branch-<name>`. A rerun finds its earlier post by the prefix `<!-- factory:<tool> <key> ` and edits it instead of posting again.
+- `github.create_pr` pushes one new branch, `factory/<pipeline_run_id>`, to the target and opens a pull request from it to the default branch. It never pushes to an existing branch, never force-pushes and never pushes to a fork. It may apply labels that already exist on the target; it never creates one.
+- Deployment is out of scope. No tool merges, closes, deletes, releases, tags or deploys, and no `deploy.` group exists, until a separate decision record says otherwise.
+
+The permitted outside writes:
+
+| Tool | What it writes | Listed by | Pipeline |
+| --- | --- | --- | --- |
+| `github.create_pr` | A `factory/` branch and a pull request from it, with existing labels (`hotfix` for #109) | `judge` | `factory build` (#87), `factory hotfix` (#109) |
+| `github.comment_pr` | One review on a pull request, inline comments by path and head-revision line or one summary comment; a rerun edits it | `judge` | `factory review --pr N --comment` (#100) |
+| `notify.issue` | An issue carrying an escalation and its summary, or a comment on the one already open for the ticket | `escalation-summary` | The escalation path (#93, #95) |
+
+`github.read_pr` and `github.read_issue` live in `tools/github.py` beside them but only read: they are declared with `reaches_out=True` alone, are in `READ_ONLY`, and a model may hold them. A tool that is not in this table does not write outside the sandbox.
+
+Every attempted outside write is one trace row, whatever its outcome, with no new column and no new `kind`:
+
+| Field | Value |
+| --- | --- |
+| `kind` | `llm` |
+| `agent_ref` | the authorising agent's address, such as `judge@2.1.0` |
+| `tag` | `outside:<tool>`, such as `outside:github.create_pr` |
+| `pipeline_run_id` | the pipeline's run id |
+| `parent_run_id` | the authorising agent's `run_id` in this pipeline, or null when it did not run |
+| `input_json` | the arguments the pipeline passed |
+| `decision_json` | `{"tool", "target": {"repository", "pr", "issue", "branch"}, "outcome", "allow", "reason", "dry_run", "url"}` |
+| `output_json` | `{"action": "create" \| "edit", "url", "body"}`, `url` null in a dry run; null when refused |
+| `error` | `<ErrorClass>: <message>` when the outcome is `refused` or `failed`, else null |
+| `cost_usd` | `0.0`, with the token fields null |
+
+`outcome` is one of `written`, `dry_run`, `refused` and `failed`. `target` keeps the keys that apply to the tool and sets the others to null. `tag LIKE 'outside:%'` selects every outside write in the trace store.
 
 ## Fixtures
 
@@ -454,6 +497,129 @@ A version becomes publishable by passing its evals. Migration 2 adds the `publis
 A `Trace` holds one DuckDB connection for its lifetime and opens it on first use, rather than opening per call. DuckDB allows one read-write process per file, so holding the connection keeps the single writer (#26) in charge of the file and saves a file open on every run; close it with `close()` or a `with` block. That one connection is shared by runs gathered on an event loop and by hooks and guard runs on worker threads, and a DuckDB connection must not be used from two threads at once, so every public `Trace` method holds the instance's reentrant lock (#26). It is a lock rather than a writer task and a queue: a row is one fast insert, and a queue would need a flush before every read and a loop that callers on worker threads do not have. Schema changes are numbered migrations in `runtime/trace.py`: append a `(version, sql)` pair, never edit a shipped one, and `ensure_schema()` applies the missing ones and records them in `schema_version`. `cost_usd` is null for a model with no entry in `runtime/pricing.py`, and aggregates treat null as zero.
 
 `web.fetch(url)` and `web.search(query)` (`tools/web.py`) give an agent read-only web access by running `agb web fetch <url> --markdown --json --yes` and `agb web search <query> -n 10 --json --yes`; the factory owns no HTTP client. Three rules apply to them. First, the allow-list: `tools.web.allow_domains` in the manifest names the hosts, and `tool_defs` raises `ToolListError` for an agent that allows a web tool without one. The runner also checks every call (`tools.web.check_web_call`): a `web.fetch` URL whose host is neither a listed domain nor a subdomain of one is refused with `WebDomainError` (a `ToolError`, exit 2), which goes back to the model as an error result and never runs. `web.search` names no host, so it needs only a non-empty list. Two callers may replace the manifest's list for one run, never merging with it and never giving web tools to an agent whose manifest lists no domain: an eval case that sets `citations_resolve.allow_domains`, and `factory run --allow-domain`. Redirects that `agb` follows after the check are not re-checked. Second, never in the sandbox: `SANDBOX_DENIED` in `tools/registry.py` holds both names, and `tool_defs` refuses them for `sandbox: true`, which keeps `--network none` meaningful. Third, fetched content is untrusted: both tools wrap their text in a block that begins with a line saying it is data and not instructions, between `<<<BEGIN FETCHED CONTENT>>>` and `<<<END FETCHED CONTENT>>>` (an end marker inside the page is removed), the registry descriptions say the same, and agent prompts that allow web tools must say so too. Output is capped at `MAX_OUTPUT_BYTES` with the usual truncation marker, and each `agb` call has the 30 s tool timeout. Fetched pages are cached for the life of the process, keyed by URL, in a module-level dict in `tools/web.py` that `tools.web.reset_cache()` empties, so a retried agent does not fetch twice; searches are not cached. Both are in `READ_ONLY`.
+
+## Work items
+
+A work item is one unit of work the factory can take from idea to pull request: a feature, a bug, a refactor, documentation, a research question or an incident. "Ticket" means the same thing; the command is `factory ticket` (#82). Agents stay stateless. The work item lives in the store, and an agent sees only the part of it a pipeline passes as payload. The reasons are in [ADR 0002](decisions/0002-work-items.md).
+
+The store is two tables in the trace store's DuckDB file (`FACTORY_TRACE_DB`, see [Trace row](#trace-row)), added as numbered migrations to `MIGRATIONS` in `runtime/trace.py`. `runtime/work_items.py` (#82) uses the `Trace` instance's connection and lock, so one process still holds one connection and one writer. `work_items` holds one row per item:
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `id` | VARCHAR | `wi-<n>`, `n` counting up from 1 in the store. Never reused, never a GitHub issue number |
+| `kind` | VARCHAR | `feature`, `bug`, `refactor`, `docs`, `research` or `incident` |
+| `title` | VARCHAR | One line, at most 120 characters |
+| `body` | VARCHAR | Markdown: what to do and why |
+| `acceptance` | JSON | A list of strings, at least one. Each is a criterion a test or a reader can check. A research item's criterion is the question answered |
+| `repo` | VARCHAR | The repository: `owner/name` on GitHub, or an absolute path to a local checkout with no remote, such as a fixture |
+| `ref` | VARCHAR | The ref work starts from. The pipeline resolves it to a commit when it starts and records that commit in the event |
+| `parent` | VARCHAR, null | `wi-<n>` for another item, or `prd:<pipeline_run_id>` for the PRD a plan loop stored under `data/plans/<run-id>.md` (#92) |
+| `depends_on` | JSON | A list of item ids. Each must exist, and the graph stays acyclic; both are checked on every write |
+| `impacted_paths` | JSON | A list of paths relative to the repository root, empty when unknown. Written by story-breakdown from `deps.impact` (#91) |
+| `size` | VARCHAR, null | `S`, `M` or `L` when story-breakdown set it |
+| `status` | VARCHAR | One of the states below. A copy of the last event's `to_status`, written in the same transaction |
+| `pipeline_run_ids` | JSON | Every pipeline run that worked on the item, in order, appended by `link_run` |
+| `created_at`, `updated_at` | TIMESTAMPTZ | In UTC |
+
+The cost so far is not a column. It is the sum of `cost_usd` over the trace rows whose `pipeline_run_id` is in `pipeline_run_ids`, computed on read as `Trace.cost_by_pipeline_run` does, so it can never drift from the trace.
+
+`work_item_events` holds one row per change of status, the creation included:
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `work_item_id` | VARCHAR | The item |
+| `at` | TIMESTAMPTZ | When, in UTC |
+| `from_status` | VARCHAR, null | Null for the creation event |
+| `to_status` | VARCHAR | The new state |
+| `actor` | VARCHAR | `human` for a command a person runs, `pipeline:<module>` for a pipeline (`pipeline:build_loop`), `store` for a promotion `ready()` makes |
+| `pipeline_run_id` | VARCHAR, null | The run that made the move; null for `human` and `store` |
+| `reason` | VARCHAR | Why. Never empty |
+
+An agent gets an item as the `Ticket` model in `registry/common_schemas.py`: `kind`, `title`, `body`, `acceptance`, `repo`, `ref` and `impacted_paths`. It never sees `status`, the cost, the run ids or the events, and no tool lets an agent read or write the store. story-breakdown returns tickets in the same shape without ids, with dependencies given as indexes into its own list; the plan loop turns them into ids.
+
+```json
+{"id": "wi-7", "kind": "feature", "title": "Add --since to factory ticket list",
+ "body": "List only items created after a date.", "acceptance": ["`--since 2026-11-01` omits older items"],
+ "repo": "agb1986/agb-agent-factory", "ref": "main", "parent": "wi-3", "depends_on": ["wi-6"],
+ "impacted_paths": ["factory/cli.py"], "size": "S", "status": "todo", "pipeline_run_ids": []}
+```
+
+### States
+
+| State | Meaning |
+| --- | --- |
+| `todo` | Written, with dependencies not all `done` or not yet promoted |
+| `ready` | Every dependency is `done`; a pipeline may take it |
+| `in_progress` | One pipeline run is working on it |
+| `in_review` | A pull request is open; a person decides |
+| `blocked` | Stopped for a reason no human question settles: a dropped dependency, or a run that failed for a cause outside the item (sandbox, API, a killed process) |
+| `escalated` | Stopped on a question for a human, held in an escalation record (#93) |
+| `done` | Finished: its pull request merged, or its research answer accepted |
+| `dropped` | Abandoned on purpose |
+
+`done` and `dropped` are final. A regression in finished work is a new item with the old one as `parent`.
+
+### Transitions
+
+`move(id, to, reason)` checks the pair against one table in `runtime/work_items.py` and refuses every other pair with `IllegalTransitionError`, a `UsageError` (exit 2). An unknown id raises `WorkItemNotFound`, a `NotFoundError` (exit 3). The "moved by" column names the code that normally makes each move. `factory ticket move` lets a person make any legal move, with actor `human`, so work the pipelines do not cover yet, such as a research item, moves by hand along the same path.
+
+| From | To | Moved by | When |
+| --- | --- | --- | --- |
+| (none) | `todo` | `factory ticket add` (#82), the plan loop (#92), the hotfix pipeline (#109) | The item is written |
+| `todo` | `ready` | `ready()` and `factory ticket ready` (#82), actor `store` | Every dependency is `done` |
+| `todo` | `blocked` | `ready()`, actor `store` | A dependency was dropped |
+| `todo`, `ready`, `in_review`, `blocked`, `escalated` | `dropped` | A person | The work is abandoned |
+| `ready` | `in_progress` | The build loop (#87), the hotfix pipeline (#109) | The run starts, before the clone |
+| `in_progress` | `in_review` | The build loop (#87) | The panel said `ship` and the pull request is open |
+| `in_progress` | `blocked` | The build loop (#87) | Until #93: a second `request_changes`, a `blocked` output, a failed suite or a budget stop. After #93: only a failure outside the item |
+| `in_progress` | `escalated` | The pipeline that stopped, through #93 | A `blocked` output, a budget stop, a second `request_changes`, or the item contradicting the code |
+| `in_progress` | `ready` | A person | A run was killed before it could move the item |
+| `in_review` | `done` | A person | The pull request merged |
+| `in_review` | `ready` | A person | The pull request was closed or needs changes; the reason says which |
+| `blocked` | `todo`, `ready` | A person | The cause is cleared |
+| `blocked` | `escalated` | The escalation code of #93 | A question for a human is written about it |
+| `escalated` | `ready` | `factory escalations answer` (#93) | The answer is stored and goes to the next run as payload |
+
+A pipeline moves its item out of `in_progress` in a `finally` block, as the runner writes its trace row: to `blocked` with `<ErrorClass>: <message>` as the reason when nothing more specific applies. Before it moves an item to `in_progress` it links its pipeline run id with `link_run`.
+
+These moves are illegal for everyone, people included:
+
+- Any move out of `done` or `dropped`.
+- Any move into `in_progress` from a state other than `ready`.
+- Any move into `done` from a state other than `in_review`. Nothing skips review.
+- Any move into `ready` while a dependency is not `done`.
+- `escalated` to `in_progress`: an answered item goes through `ready`, so the run that takes it gets the answer.
+- `in_review` to `in_progress`, and `in_progress` to `dropped`: stop the run or close the pull request first.
+- A move to the state the item is already in.
+- Any move an agent makes. Only pipelines and `factory` commands call `move`.
+
+### The orchestrator
+
+Prioritisation and assignment are code over the store, and no model decides them. This extends [Gates](#gates): no LLM assigns work, picks the next item or sets its priority. The `ready` items are ordered by this key, first difference wins:
+
+1. `incident` before every other kind.
+2. More items that depend on it, directly or through others, first.
+3. The `value` of a Jev `score` question, higher first, when a ranking agent ran and its `confidence` reached the threshold in its manifest. A missing, failed or unsure answer leaves this key out; it never stops the order.
+4. Older `created_at` first, then the lower id.
+
+A Jev ranking is a trace row of its own, `kind` `jev`, tagged `rank:decision`, with the probabilities and no cost of its own, as the triage decision row is. No issue builds a ranking agent yet, and until one exists the third key is absent.
+
+The kind decides the pipeline, by a fixed table in code. `feature` and `bug` go to the build loop with `feature-coder` (#87). `refactor` and `docs` go to the build loop with `refactorer` (#98) and `documentation-agent` (#97) once they exist, and with `feature-coder` until then. `incident` goes to the hotfix pipeline (#109). `research` has no pipeline; a person runs the research agent with `factory run` and moves the item. Two items run at the same time only when code has checked that their `impacted_paths` are disjoint and both non-empty. In phase 7 there is no scheduler: a person names the item with `factory build <id>`.
+
+### Teams
+
+A team is a label, not a unit the registry knows. An agent's manifest may declare it with an optional `team` field, one of `planning`, `dev`, `qa`, `sre`, `research`, `decomp`, `hitl` and `analytics` (the eight teams of [ADR 0002](decisions/0002-work-items.md#the-eight-teams-of-spmd-and-the-phases)). An unknown value fails the manifest like any other bad field.
+
+```yaml
+name: feature-coder
+version: 0.1.0
+kind: llm
+team: dev
+```
+
+The resolver, the runner and the publish gate never read `team`. It never reaches a model, and setting or changing it bumps no version, as moving a model into `registry/common_schemas.py` bumps none. `factory list` and the factory metrics report (#96) may read it to group agents.
+
+Composition lives in `pipelines/`, one module per loop, named after what the loop does: `pipelines/build_loop.py` (#87), `pipelines/plan_loop.py` (#92). A loop may compose agents of several teams; the build loop runs `dev` and `qa` agents. The module's docstring names the teams it composes. There is no team object, no team manifest and no team version.
 
 ## Secrets
 
