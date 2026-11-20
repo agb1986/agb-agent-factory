@@ -15,6 +15,7 @@ _LIVE_KEYS = {
     "live": "ANTHROPIC_API_KEY",
     "live_jev": "TYPESAFE_API_KEY",
     "live_sentry": "SENTRY_AUTH_TOKEN",
+    "live_github": "GH_TOKEN",
 }
 
 # Live tests spend real money, so a key in the environment is not enough: this must be "1" too.

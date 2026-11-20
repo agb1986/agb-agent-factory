@@ -224,7 +224,7 @@ def test_the_panel_resolves_the_pinned_versions(panel: Panel) -> None:
         "security-reviewer@1.1.0",
         "perf-reviewer@0.3.0",
     ]
-    assert panel.judge.address == "judge@2.0.0"
+    assert panel.judge.address == "judge@2.1.0"
 
 
 def test_reviewers_selects_a_subset_in_panel_order() -> None:

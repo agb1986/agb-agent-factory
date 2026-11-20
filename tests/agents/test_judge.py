@@ -17,6 +17,7 @@ from runtime.runner import build_request
 from runtime.scoring import DIMENSIONS
 from tools import MAX_OUTPUT_BYTES, TOOLS, tool_defs
 from tools._common import truncate
+from tools.registry import OUTSIDE_WRITES
 
 AGENT_DIR = AGENTS_DIR / "judge"
 SEVERITIES = ["info", "minor", "major", "blocker"]
@@ -84,7 +85,7 @@ def _output(**overrides: Any) -> dict[str, Any]:
 
 
 def test_manifest_resolves_to_the_documented_version(spec: LLMSpec) -> None:
-    assert spec.address == "judge@2.0.0"
+    assert spec.address == "judge@2.1.0"
     assert spec.model == "claude-opus-5-5"
     assert spec.effort == "high"
     assert spec.evals.min_pass_rate == 0.75
@@ -103,11 +104,14 @@ def test_scoring_weighs_every_dimension_and_sums_to_one(spec: LLMSpec) -> None:
     assert spec.scoring.ship_threshold == 0.7
 
 
-def test_the_only_tool_is_read_file(spec: LLMSpec) -> None:
-    assert list(spec.tools.allow) == ["git.read_file"]
+def test_the_model_s_only_tool_is_read_file(spec: LLMSpec) -> None:
+    # The two outside writes are listed for the pipeline to make on the judge's behalf
+    # (docs/decisions/0003-outside-writes.md); tool_defs never hands them to the model.
+    assert list(spec.tools.allow) == ["git.read_file", "github.create_pr", "github.comment_pr"]
     assert not spec.tools.deny
     assert set(spec.tools.allow) <= set(TOOLS)
-    assert len(tool_defs(spec.tools.allow)) == 1
+    assert set(spec.tools.allow) - {"git.read_file"} <= OUTSIDE_WRITES
+    assert [d["name"] for d in tool_defs(spec.tools.allow)] == ["git__read_file"]
 
 
 def test_models_are_the_ones_the_manifest_names(spec: LLMSpec) -> None:
@@ -251,7 +255,11 @@ def test_prompt_keeps_the_judging_rules(spec: LLMSpec) -> None:
 def test_prompt_names_every_tool_it_talks_about(spec: LLMSpec) -> None:
     text = spec.system_prompt_file.read_text(encoding="utf-8")
     for tool in spec.tools.allow:
-        assert f"`{tool}`" in text
+        if tool in OUTSIDE_WRITES:
+            # The model never holds an outside write, so its prompt does not talk about one.
+            assert tool not in text
+        else:
+            assert f"`{tool}`" in text
 
 
 def test_prompt_holds_no_gate_thresholds_or_weights(spec: LLMSpec) -> None:

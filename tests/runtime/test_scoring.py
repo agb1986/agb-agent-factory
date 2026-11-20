@@ -120,7 +120,7 @@ def test_assess_reads_an_output_already_dumped_to_json(judge: LLMSpec) -> None:
 
 def test_assess_needs_a_scoring_block(judge: LLMSpec) -> None:
     unscored = judge.model_copy(update={"scoring": None})
-    with pytest.raises(ManifestError, match="judge@2.0.0 has no scoring block"):
+    with pytest.raises(ManifestError, match="judge@2.1.0 has no scoring block"):
         assess(unscored, _judgement(**_scores()))
 
 

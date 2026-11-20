@@ -23,6 +23,12 @@ such as the memory and Sentry ones, are refused under both profiles.
 Under `sandbox: spike` a tool may also have a second implementation and description
 (`ToolSpec.spike_impl`, `spike_description`); `impl_for` and `tool_defs` pick them. `shell.run` is
 the one tool with them: its command runs in the networked profile of `tools.sandbox`.
+
+A tool with `outside_write=True`, such as `github.create_pr`, is in `OUTSIDE_WRITES` (and, since it
+reaches out, in `SANDBOX_DENIED`) and never in `READ_ONLY`. Its implementation takes a
+`runtime.outside.OutsideContext` in place of the repository root and only `runtime.outside.write`
+calls it. `tool_defs` checks its name like any other, so a manifest may list it, but leaves it out
+of the definitions it returns: no model is ever given one (`docs/decisions/0003-outside-writes.md`).
 """
 
 import copy
@@ -93,11 +99,20 @@ NEEDS_WEB_DOMAINS: frozenset[str] = frozenset(
 )
 """The tools that only work with a `tools.web.allow_domains` list in the manifest."""
 
-READ_ONLY: frozenset[str] = frozenset(name for name, spec in SPECS.items() if not spec.writes)
+OUTSIDE_WRITES: frozenset[str] = frozenset(
+    name for name, spec in SPECS.items() if spec.outside_write
+)
+"""The tools that write outside the sandbox (a pull request, a review comment). Pipeline code calls
+them through `runtime.outside.write` on behalf of an agent that lists them; no model gets one."""
+
+READ_ONLY: frozenset[str] = frozenset(
+    name for name, spec in SPECS.items() if not spec.writes and not spec.outside_write
+)
 """Names of the tools in `TOOLS` that change nothing. The action guard (`runtime.guard`) skips them.
 
 A tool that is not listed here, and a name that is not in `TOOLS` at all, counts as one that writes.
-A tool that writes is declared with `writes=True` and so left out of this set.
+A tool that writes is declared with `writes=True` or `outside_write=True` and so left out of this
+set; every tool in `SPECS` is in exactly one of `READ_ONLY`, `SANDBOX_ONLY` and `OUTSIDE_WRITES`.
 """
 
 
@@ -150,7 +165,9 @@ def tool_defs(
     `SANDBOX_DENIED` tool and `sandbox` is set (except a web tool under `spike`), or a
     `NEEDS_WEB_DOMAINS` tool and `web_domains` is empty. `sandbox` is the manifest's `sandbox`
     value (`False`, `True` or `"spike"`) and `web_domains` its `tools.web.allow_domains` list.
-    Under `spike` a tool with a `spike_description` is described by it.
+    Under `spike` a tool with a `spike_description` is described by it. A tool in `OUTSIDE_WRITES`
+    is checked like any other but left out of the result, since no model may call one; pipeline
+    code makes the write through `runtime.outside.write`.
     """
     allowed = list(dict.fromkeys(allow))
     denied = list(dict.fromkeys(deny))
@@ -187,6 +204,8 @@ def tool_defs(
         )
     defs: list[ToolDef] = []
     for name in allowed:
+        if name in OUTSIDE_WRITES:
+            continue
         spec = SPECS.get(name)
         if spike and spec is not None:
             definition = copy.deepcopy(spec.definition(spike=True))

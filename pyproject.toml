@@ -59,6 +59,7 @@ markers = [
     "live: needs FACTORY_LIVE=1 and a live ANTHROPIC_API_KEY; deselected without the opt-in, skipped without the key",
     "live_jev: needs FACTORY_LIVE=1 and a live TYPESAFE_API_KEY; deselected without the opt-in, skipped without the key",
     "live_sentry: needs FACTORY_LIVE=1 and a live SENTRY_AUTH_TOKEN; deselected without the opt-in, skipped without the token",
+    "live_github: needs FACTORY_LIVE=1 and a GH_TOKEN that can read github.com; deselected without the opt-in, skipped without the token",
 ]
 
 [tool.coverage.run]

@@ -123,10 +123,11 @@ def run(
     `spec` is a resolved spec with its models attached (`registry.resolver.resolve`). `payload` is
     a dict or a model instance; it is validated against the input model, and a mismatch raises
     `UsageError` before anything is sent or traced. `repo_path` is the repository root the tools
-    read; it is required when the agent allows any tool, and leaving it out is a `UsageError`
-    that is not traced either. `hook` sees every tool call (default `AllowAll`); pass a new one
-    per run. When the spec has a `guard`, the action guard (`runtime.guard`) wraps `hook`: `hook`
-    decides first, and a call it allows then goes to the guard. `client` defaults to one built
+    read; it is required when the agent allows any tool the model is sent (outside writes are not
+    sent), and leaving it out is a `UsageError` that is not traced either. `hook` sees every tool
+    call (default `AllowAll`); pass a new one per run. When the spec has a `guard`, the action
+    guard (`runtime.guard`) wraps `hook`: `hook` decides first, and a call it allows then goes to
+    the guard. `client` defaults to one built
     from `ANTHROPIC_API_KEY`, and a missing key raises `AuthOrConfigError`. `pipeline_run_id`,
     `parent_run_id` (the run this one follows, for the pipeline's tree), `run_id` (a UUID chosen by
     the caller so a later stage can name this run as its parent) and `tag` (for example

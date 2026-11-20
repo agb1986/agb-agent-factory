@@ -71,6 +71,7 @@ from runtime.runner import (
 )
 from runtime.trace import Trace, TraceRow
 from tools import tool_defs
+from tools.registry import OUTSIDE_WRITES
 from tools.sandbox import spike_root
 
 _LOOP: ContextVar[asyncio.AbstractEventLoop | None] = ContextVar("_LOOP", default=None)
@@ -192,7 +193,7 @@ async def _arun_at(
 ) -> BaseModel:
     """The body of `_arun`, with `repo_path` already chosen."""
     payload_json = _validate_payload(spec, payload)
-    if spec.tools.allow and repo_path is None:
+    if any(name not in OUTSIDE_WRITES for name in spec.tools.allow) and repo_path is None:
         raise UsageError(
             f"{spec.address} allows tools, so it needs a repository root",
             hint="pass repo_path, the top of the git work tree the tools read",
