@@ -27,7 +27,9 @@ Their outputs have a right answer, and a case that does not check it measures no
 Some agents write prose with no single right answer: a plan, a ticket, documentation, a research
 report. For those, and only those, a case may use `grader: rubric`. Planning, documentation and
 research agents are the only agents allowed to. The first is the planning agent `product-architect`,
-which turns an idea or raw feedback into a PRD.
+which turns an idea or raw feedback into a PRD. The planning agent `story-breakdown` turns a PRD into
+ordered tickets; its cases check the tickets' impacted paths with a `*` in `paths_exist` and score
+the dependencies and the parallel-safety of the cut by rubric (#91).
 The research agent `benchmark` compares candidate libraries for one need, and every number in its
 table is a `Claim` that `citations_resolve` checks against the cited page (#105).
 The research agent `spike` runs throwaway code in the networked spike sandbox to learn an API's
@@ -69,7 +71,10 @@ Grading runs in this order:
      contradicts itself; a field cannot be in both lists;
    - no string anywhere in the output may contain one of `forbidden` (case-sensitive);
    - each of `paths_exist`, a dotted path whose value is a path or a list of paths, must name
-     files or directories that exist inside the fixture repository.
+     files or directories that exist inside the fixture repository. A `*` part walks every item
+     of a list, so `tickets.*.impacted_paths` checks the paths of every ticket; the path fails
+     when the list is missing, a part is absent from any item, or a `*` meets something that is
+     not a list.
 
    A failure fails the case with the failures as the reason, and the grader model is not called.
 3. The grader model, Haiku (`claude-haiku-5-5`), scores each criterion from 0 to 1 with a reason,

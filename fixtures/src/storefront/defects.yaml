@@ -1,0 +1,6 @@
+fixture: storefront
+summary: >-
+  A small layered store for story-breakdown cases. money.py is imported by catalog, cart and
+  orders; cart by orders and api; api by cli. The head commit only adds a README line, so the
+  tree is the same code at both refs.
+defects: []
