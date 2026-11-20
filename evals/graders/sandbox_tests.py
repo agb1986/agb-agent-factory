@@ -4,8 +4,10 @@ An agent that writes tests or fixes code is graded on the work tree it left behi
 says. `check_run` runs pytest in the offline sandbox (`tools.sandbox.run_in_sandbox`) over that
 tree and compares the outcome with a case's `expected.run`: the new tests fail or pass, they pass
 once the fixture is put back to its `base` state, the whole suite passes, production code and
-test files changed or did not, and the tests add line coverage (`evals.coverage`). It returns the failures as strings and never calls a model; the
-caller (`evals.graders.grade`) merges them with the other deterministic checks.
+test files changed or did not, the tests add line coverage (`evals.coverage`), and the public names
+and signatures of chosen files are the same as at HEAD (`evals.public_api`). It returns the
+failures as strings and never calls a model; the caller (`evals.graders.grade`) merges them with
+the other deterministic checks.
 
 The checks run commands, so they need Docker and the image `tools.sandbox.SANDBOX_IMAGE`; without
 them `tools._common.ToolUnavailableError` propagates and ends the eval. They read the repository
@@ -20,6 +22,7 @@ from typing import Any
 
 from evals.cases import ExpectedCoverage, ExpectedRun
 from evals.coverage import CoverageError, coverage_delta, measure_coverage, restore_head
+from evals.public_api import check_public_api
 from fixtures.build import BASE_REF
 from tools._common import (
     ToolError,
@@ -96,6 +99,8 @@ def check_run(expected: ExpectedRun, actual: Mapping[str, Any], repo_path: str |
     root = resolve_root(repo_path)
     failures: list[str] = []
     failures.extend(_check_changes(expected, root))
+    if expected.public_api is not None:
+        failures.extend(check_public_api(root, expected.public_api))
     if expected.new_tests is not None:
         try:
             files = _test_files(root, actual.get("test_files"))

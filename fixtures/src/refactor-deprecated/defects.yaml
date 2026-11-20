@@ -1,0 +1,15 @@
+fixture: refactor-deprecated
+summary: >-
+  Adds an invoice module whose totals call to_cents, deprecated in favour of parse_amount.
+defects:
+  - id: deprecated-to-cents
+    file: prices/invoice.py
+    line_start: 3
+    line_end: 15
+    severity: minor
+    category: deprecation
+    title: New code calls the deprecated to_cents
+    snippet: "from prices.money import to_cents"
+    description: >-
+      to_cents is deprecated and warns on every call; parse_amount returns the same cents and
+      raises the same ValueError. line_total and invoice_total should call parse_amount.

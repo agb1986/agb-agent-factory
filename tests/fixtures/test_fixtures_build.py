@@ -40,6 +40,9 @@ REQUIRED = {
     "crash-missing-config-key",
     "crash-loader-caller",
     "crash-first-of-empty",
+    "refactor-duplicate",
+    "refactor-deprecated",
+    "refactor-magic-numbers",
 }
 CLEAN = {
     "clean-refactor",

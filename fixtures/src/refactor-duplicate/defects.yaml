@@ -1,0 +1,18 @@
+fixture: refactor-duplicate
+summary: >-
+  Adds refund_line and credit_line, each a copy of invoice_line's check and euro formatting with
+  only the sign changed.
+defects:
+  - id: copied-amount-formatting
+    file: report/lines.py
+    line_start: 12
+    line_end: 25
+    severity: minor
+    category: maintainability
+    title: Amount check and formatting copied into two new functions
+    snippet: "euros, rest = divmod(cents, 100)"
+    description: >-
+      refund_line and credit_line repeat invoice_line's negative-amount check and its euro
+      formatting line for line, so a change to the format or the message has to be made three
+      times. One private helper that checks and formats the amount, called by all three with
+      their sign, keeps the output and the errors the same.

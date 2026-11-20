@@ -64,6 +64,9 @@ fixture**; add a new one instead.
 | `crash-missing-config-key` | `timeout_seconds` reads `config["timeout"]` and drops the default, so a config without it raises `KeyError` (a triage-diagnostics eval) | 1 (major, logic) |
 | `crash-loader-caller` | The feed loader stops skipping lines with no price, so `line_total` in `pricing.py` raises `ValueError`; the fault is in the loader, one frame up (a triage-diagnostics eval) | 1 (major, logic) |
 | `crash-first-of-empty` | `next_job` takes the first of a sorted list and drops the empty-queue check, so an idle worker raises `IndexError` (a triage-diagnostics eval) | 1 (major, logic) |
+| `refactor-duplicate` | Adds `refund_line` and `credit_line`, each a copy of `invoice_line`'s amount check and formatting with another sign (a refactorer eval) | 1 (minor, maintainability) |
+| `refactor-deprecated` | Adds an invoice module that calls the deprecated `to_cents` instead of `parse_amount` (a refactorer eval) | 1 (minor, deprecation) |
+| `refactor-magic-numbers` | Adds `shipping_cents`, whose rates and thresholds are bare numbers, one of them twice (a refactorer eval) | 1 (info, maintainability) |
 
 ## `defects.yaml`
 
