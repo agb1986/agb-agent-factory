@@ -67,6 +67,10 @@ fixture**; add a new one instead.
 | `refactor-duplicate` | Adds `refund_line` and `credit_line`, each a copy of `invoice_line`'s amount check and formatting with another sign (a refactorer eval) | 1 (minor, maintainability) |
 | `refactor-deprecated` | Adds an invoice module that calls the deprecated `to_cents` instead of `parse_amount` (a refactorer eval) | 1 (minor, deprecation) |
 | `refactor-magic-numbers` | Adds `shipping_cents`, whose rates and thresholds are bare numbers, one of them twice (a refactorer eval) | 1 (info, maintainability) |
+| `docs-new-function` | Adds the public `slugify` with no docstring and no README entry (a documentation-agent eval) | 1 (minor, documentation) |
+| `docs-new-class` | Adds the public `Shelf` class, whose class and methods have no docstrings, and leaves `docs/api.md` without it (a documentation-agent eval) | 1 (minor, documentation) |
+| `docs-renamed-function` | Renames `load` to `read_config` and its tests, and leaves `README.md` and `docs/format.md` naming `load` (a documentation-agent eval) | 2 (minor, documentation) |
+| `docs-new-module` | Adds `units/mass.py` with two conversions and a constant, none documented, and no README section (a documentation-agent eval) | 1 (minor, documentation) |
 
 ## `defects.yaml`
 

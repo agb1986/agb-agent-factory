@@ -228,7 +228,8 @@
     "branch": "factory/pipeline-run-1",
     "commit": "<commit>",
     "title": "Widgets report their size",
-    "body": "Add `size()` to widgets.py.\n\n## Acceptance\n\n- size() returns 3\n\n## What the coder did\n\nAdded size(), round 1.\n\n- modified `widgets.py`: Size.\n- modified `tests/test_widgets.py`: Size.\n\nWork item `wi-1`.\n\nPipeline run `pipeline-run-1`.\n\n\ud83e\udd16 Written by agb-agent-factory.\n\n<!-- factory:github.create_pr branch-factory/pipeline-run-1 pipeline_run_id=pipeline-run-1 -->"
+    "body": "Add `size()` to widgets.py.\n\n## Acceptance\n\n- size() returns 3\n\n## What the coder did\n\nAdded size(), round 1.\n\n- modified `widgets.py`: Size.\n- modified `tests/test_widgets.py`: Size.\n\nWork item `wi-1`.\n\nPipeline run `pipeline-run-1`.\n\n\ud83e\udd16 Written by agb-agent-factory.\n\n<!-- factory:github.create_pr branch-factory/pipeline-run-1 pipeline_run_id=pipeline-run-1 -->",
+    "patch": null
   },
   "board_error": null,
   "escalation": null,

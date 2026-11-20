@@ -14,7 +14,7 @@ factory build wi-4 --repo ./widgets --json
 | --- | --- |
 | `<id>` | The work item, `wi-<n>`. It must be `ready` |
 | `--repo PATH` | The git repository to build in. Default: the ticket's `repo` when it is an absolute path, else the working directory |
-| `--dry-run` | Run every agent, the suite and the panel, but open no pull request and move no work item |
+| `--dry-run` | Run every agent, the suite and the panel, but open no pull request and move no work item; write the change as a patch instead |
 | `--out-dir DIR` | Where the report goes, default `data/builds` |
 | `--work-dir DIR` | Where the clone is made, default the system temporary directory |
 | `--budget-usd N` | Cap the spend of the whole run, default `DEFAULT_BUDGET_USD` |
@@ -23,7 +23,7 @@ factory build wi-4 --repo ./widgets --json
 
 `ANTHROPIC_API_KEY` and `GH_TOKEN` must be set, a dry run included, since a dry run still reads the target repository. Docker must be reachable and the sandbox image present, as for `factory fix`. `TYPESAFE_API_KEY` is used by triage and the judge gate of the panel. Without it both report `jev_error`, and the reviewers and the judge run anyway.
 
-The ticket's kind picks the coder from the fixed table `CODERS`. `feature` and `bug` use `feature-coder@^0.1`. `refactor` uses `refactorer@^0.1` and goes through [the behaviour check](#the-behaviour-check-refactor). `docs` uses `feature-coder@^0.1` until the documentation agent (#97) exists. `incident` is refused with a pointer to the hotfix pipeline (#109), and `research` is refused with a pointer to `factory run`.
+The ticket's kind picks the coder from the fixed table `CODERS`. `feature` and `bug` use `feature-coder@^0.1`. `refactor` uses `refactorer@^0.1` and goes through [the behaviour check](#the-behaviour-check-refactor). `docs` uses `documentation-agent@^0.1` and goes through [the docs check](#the-docs-check-docs). `incident` is refused with a pointer to the hotfix pipeline (#109), and `research` is refused with a pointer to `factory run`.
 
 ## Flow
 
@@ -39,7 +39,7 @@ Every agent call, every move of the item and the outside write carry the same `p
    - The sandbox must be available.
 2. **Start.** The run is linked to the item with `link_run`. Unless it is a dry run, the item then moves to `in_progress`, before the clone is made.
 3. **Build.** The commit at `ref` is cloned under `--work-dir`, as the fix loop clones (`pipelines.sandbox.checkout`). For a `refactor` ticket the suite is probed here, before the coder's first round ([the behaviour check](#the-behaviour-check-refactor)). The coder gets the ticket and, for each dependency, a line `wi-<n>: <title>`. It runs behind `FilePolicyGuard` over its manifest's `files` policy and then its action guard. After the run, `check_changed` checks every changed path on the host. A coder answer with `blocked` set ends the run with `CoderBlockedError`.
-4. **Commit and test.** The coder's work is committed in the clone. If it changed nothing, the run ends with `BuildError`. The clone is cleaned, and `python -m pytest -q` runs over it in the sandbox, with the fix loop's 600 s limit. A non-zero exit ends the run with `SuiteFailedError`. For a `refactor` ticket a commit that changed a test file is refused before the suite runs, and the suite is probed again after it passes.
+4. **Commit and test.** The coder's work is committed in the clone. If it changed nothing, the run ends with `BuildError`. The clone is cleaned, and `python -m pytest -q` runs over it in the sandbox, with the fix loop's 600 s limit. A non-zero exit ends the run with `SuiteFailedError`. For a `refactor` ticket a commit that changed a test file is refused before the suite runs, and the suite is probed again after it passes. For a `docs` ticket a commit that changed code is refused before the suite runs.
 5. **Review.** The panel reviews the diff from the `ref` commit to the coder's commit: triage, the reviewers, the judge gate and the judge, as `factory review` runs them.
    - When the panel asks for changes, the coder runs once more in the same clone. Its ticket has the panel's findings appended to the body, and one acceptance criterion is added saying they are addressed. That run's parent is the judge's row. Steps 3 to 5 then repeat.
    - When the panel asks for changes a second time, the run ends with `ChangesRequestedError` (`MAX_ROUNDS` is 2).
@@ -59,7 +59,11 @@ ADR 0003 requires an outside write to target the pipeline's own repository, whic
 
 A dry run does everything a real run does except write: the agents, the suite, the panel and the reads of `create_pr`, which checks the target repository and the branch. It opens no pull request and moves no work item. ADR 0003 left the question of moving the item to this issue. The item stays `ready` because a dry run is a rehearsal, and a `ready` item that a dry run had moved to `in_review` or `blocked` would need a person to move it back. The run is still linked to the item, so `factory ticket show` counts what the dry run cost. The report's `pull_request` carries the planned branch, title and body, with `url` null and `outcome` `dry_run`.
 
+A dry run also writes the change it would have opened as a pull request, the diff from the `ref` commit to the coder's last commit, to `<pipeline_run_id>.patch` in `--out-dir`. `pull_request.patch` holds its path, and the text output prints it on a `patch` line. The patch is made by `pipelines.sandbox.diff_patch`, so `git apply` takes it at `ref` in the source repository whatever the user's git config. A run that is not dry writes no patch, and its `pull_request.patch` is null.
+
 ## The file policy
+
+The documentation agent's manifest allows only Markdown files, `docs/**` and source files in the languages the docs check reads (`.py` and the extensions of `COMMENT_SYNTAX`), and denies the same test, CI and pytest configuration paths as the refactorer's, so `pyproject.toml`, `setup.cfg` and `tox.ini` stay out of its reach although they match its allow list. Writing to a source file is allowed so that it can change a docstring or a comment; the docs check then holds it to that.
 
 The refactorer's manifest also denies every test path (`**/tests/**`, `**/test_*.py`, `**/*_test.py`, `**/conftest.py`), so it may write production code only. The feature-coder may write tests and code. Its manifest's `files.deny` keeps version control, CI, pytest's root configuration (`pyproject.toml`, `setup.cfg`, `pytest.ini` and the like) and modules that would shadow pytest out of its reach. The build loop is the first pipeline to enforce it, with the same two checks as the fix loop ([CONVENTIONS.md](CONVENTIONS.md#file-policy)):
 
@@ -79,7 +83,7 @@ A refusal ends the run with `FileWriteRefusedError` (exit 1). It writes one trac
 
 ## The behaviour check (refactor)
 
-A refactor must not change behaviour. The refactorer's prompt says so, and `pipelines/behaviour.py` checks it, since the prompt alone proves nothing. `KIND_CHECKS` in `pipelines/build_loop.py` maps a ticket kind to a check with three steps, and only `refactor` has one, `BehaviourCheck`. The `feature`, `bug` and `docs` paths are unchanged.
+A refactor must not change behaviour. The refactorer's prompt says so, and `pipelines/behaviour.py` checks it, since the prompt alone proves nothing. `KIND_CHECKS` in `pipelines/build_loop.py` maps a ticket kind to a check with three steps, `refactor` has `BehaviourCheck` and `docs` has `DocsCheck` ([the docs check](#the-docs-check-docs)). The `feature` and `bug` paths have none.
 
 A **probe** is one sandbox command that runs the whole suite and measures coverage in the same run. It is `python -c` with `evals.coverage.MEASURE_SCRIPT`, which runs pytest in process under the standard library's line tracer, so the sandbox image is unchanged and needs no plugin. Pytest runs with `-q -rpfE --tb=no -p no:cacheprovider`, so its short summary lists every passed, failed and erroring test by node id. The per-test states are read from the lines after the last summary header. Before each probe the clone is cleaned, as before the suite.
 
@@ -112,6 +116,18 @@ The coverage rule is a coarse guard, and these changes pass it:
 
 The test states are the main guard. The eval's deterministic check of the public names and signatures (`evals/public_api.py`) is not run by the loop, which leaves a signature change to the panel.
 
+## The docs check (docs)
+
+A docs change must change no code. The documentation agent's prompt says so, and `pipelines/docs_check.py` checks it. `DocsCheck` runs no probe: `before` records the `ref` commit, and `after_commit` reads each path the round committed at that commit and at the round's commit. `after_suite` does nothing. A round is refused, before its suite runs, when a path changed in a way a docs change may not:
+
+- A docs path (`*.md` anywhere, or anything under `docs/`) may be created or modified.
+- A deleted path is refused with `SourceFileActionError`, docs included. A rename shows as a delete and a create, so it is refused too.
+- A Python file may only be modified, and its tree, parsed with `ast` with every docstring taken out, must be the same before and after. A docstring is a string constant that is the first statement of a module, class or function; a string anywhere else is code. A change elsewhere is a `CodeChangedError`. A file the round leaves unparsable is an `UnparsableSourceError`, and one that already did not parse at the `ref` commit is a `BaseUnparsableError`. Comments are not in the tree, so they may change.
+- A file in one of `COMMENT_SYNTAX`'s languages (shell, TOML, YAML, INI and `cfg` with `#`; JavaScript, TypeScript, Go, Rust, Java and C with `//`) may only be modified, and only in its whole-line comments and blank lines. A trailing comment after code counts as code, and block comments are not read as comments.
+- A created file that is not a docs path is a `SourceFileActionError`, and a modified path of any other type is an `UncheckedFileError`, so the check fails closed on a language it does not know.
+
+Every refusal is a `DocsCheckError` and a stop like the others: exit 1, the error class and message in the reason, and the report written with the round as far as it ran. `BaseUnparsableError` moves the item to `blocked`, because the file is broken at the ticket's `ref` and no answer about the docs round fixes it, as with `BaselineNotGreenError`; the other four are about the round's change and move it to `escalated` with trigger `check_failed`. The eval's drift check (`evals/doc_drift.py`) applies the same rules and also checks that every public name has a docstring and is named in a docs file. The loop does not run that part, which leaves missing or stale docs to the panel.
+
 ## Outputs
 
 The report is `<pipeline_run_id>.json` in `--out-dir`, the same document `--json` prints. It is written on every end after preflight. Its keys are:
@@ -127,7 +143,7 @@ The report is `<pipeline_run_id>.json` in `--out-dir`, the same document `--json
 | `rounds` | One entry per round: `number`, `coder` (`run_id` and `output`), `commit`, `files_changed` (`path`, `action`), `suite` (`argv`, `exit_code`, `passed`, `seconds`, `output_tail`) and `panel` (the `factory review` document). A `refactor` round also has `behaviour`: `before` and `after` (each `exit_code`, `tests` counts of `passed`, `failed` and `error`, `statements`, `uncovered`, `unmeasured` and `seconds`) and `tests_changed` (`test`, `after`). Other kinds have no `behaviour` key. A round that stopped early keeps what ran and nulls the rest |
 | `outcome` | `shipped`, `dry_run` or `stopped` |
 | `stopped` | Null, or the stop's `type`, `message`, `hint` and `exit_code` |
-| `pull_request` | Null, or `outcome` (`written` or `dry_run`), `action`, `url` (null in a dry run), `branch`, `commit`, `title` and `body` |
+| `pull_request` | Null, or `outcome` (`written` or `dry_run`), `action`, `url` (null in a dry run), `branch`, `commit`, `title`, `body` and `patch` (the path of the dry run's patch, null otherwise) |
 | `board_error` | Null, or the error when the final move of the item failed |
 | `report_path` | Where the report was written |
 | `total_cost_usd` | `Trace.cost_by_pipeline_run` |
@@ -140,7 +156,7 @@ The report is `<pipeline_run_id>.json` in `--out-dir`, the same document `--json
 | Code | When |
 | --- | --- |
 | 0 | The pull request was opened, or in a dry run would have been |
-| 1 | The run stopped: `ChangesRequestedError`, `CoderBlockedError`, `SuiteFailedError`, `FileWriteRefusedError`, a `BehaviourError` of a `refactor` run (`BaselineNotGreenError`, `TestFileChangedError`, `BehaviourChangedError`, `CoverageDroppedError`, `CoverageUnmeasuredError`), `NoChangeError` (nothing changed), `BuildError` (the fetch failed), `BudgetExceeded`, or an outside write that was refused or failed |
+| 1 | The run stopped: `ChangesRequestedError`, `CoderBlockedError`, `SuiteFailedError`, `FileWriteRefusedError`, a `BehaviourError` of a `refactor` run (`BaselineNotGreenError`, `TestFileChangedError`, `BehaviourChangedError`, `CoverageDroppedError`, `CoverageUnmeasuredError`), a `DocsCheckError` of a `docs` run (`CodeChangedError`, `UnparsableSourceError`, `BaseUnparsableError`, `SourceFileActionError`, `UncheckedFileError`), `NoChangeError` (nothing changed), `BuildError` (the fetch failed), `BudgetExceeded`, or an outside write that was refused or failed |
 | 2 | Usage: a bad option, an item that is not `ready`, a kind the loop does not take, uncommitted changes, an `origin` that is missing, not on github.com or not the ticket's repository, a `--repo` that is not the ticket's path, a `--work-dir` that is not a directory or has a `:` in its path, an `--out-dir` that cannot be made |
 | 3 | An unknown work item, agent, version or ref, or a `--repo` that does not exist |
 | 4 | `ANTHROPIC_API_KEY` or `GH_TOKEN` not set, Docker missing or unreachable, or the sandbox image absent |
@@ -149,7 +165,7 @@ Codes 2, 3 and 4 come from preflight, so the item is untouched and no report is 
 
 ## Tests
 
-`tests/pipelines/test_build_loop.py` runs the loop with a fake coder, a fake panel, a fake sandbox and the fake `gh` of `tests/gh_fake.py`, and covers every stop, the dry run, preflight and the exit codes of `factory build`. `tests/pipelines/test_behaviour.py` covers the behaviour check: the parsing and the rules on their own, one real probe of a built fixture run on the host, and `refactor` runs of the loop whose sandbox answers each probe with scripted output.
+`tests/pipelines/test_build_loop.py` runs the loop with a fake coder, a fake panel, a fake sandbox and the fake `gh` of `tests/gh_fake.py`, and covers every stop, the dry run, preflight and the exit codes of `factory build`. `tests/pipelines/test_behaviour.py` covers the behaviour check: the parsing and the rules on their own, one real probe of a built fixture run on the host, and `refactor` runs of the loop whose sandbox answers each probe with scripted output. `tests/pipelines/test_docs_check.py` covers the docs check: each rule on its own, the check over commits in a repository under `tmp_path`, and `docs` runs of the loop with a coder that answers as the documentation agent.
 
 `tests/live/test_build_loop_live.py` is a live dry run against the real Messages API, the Jev API and github.com, with Docker and the sandbox image. It needs `FACTORY_LIVE=1`, `ANTHROPIC_API_KEY`, `TYPESAFE_API_KEY` and `GH_TOKEN`:
 
@@ -165,4 +181,5 @@ FACTORY_LIVE=1 uv run pytest tests/live/test_build_loop_live.py -m "live and liv
 - The coder's tests are not checked to fail before its change. The suite and the panel are the checks.
 - A `refactor` run probes the whole suite twice more than the other kinds do, under a line tracer, which is slower than the plain suite. Each probe has the sandbox's 600 s limit.
 - The behaviour check has the coverage gap described above, and the loop does not compare public signatures.
+- The docs check refuses a code change, not a wrong or missing doc. `docs/**` is allowed whole, so a file such as `docs/conf.py` under it may change freely.
 - The same limits as the fix loop apply to the clone, the sandbox and the user's own git filters ([fix-loop.md](fix-loop.md#known-limits)).
