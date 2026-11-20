@@ -1,6 +1,7 @@
 name: product-architect
 version: 0.1.0
 kind: llm
+team: planning
 description: Turns an idea or raw feedback into a product requirements document, with the unknowns as open questions.
 model: claude-sonnet-5-5 # verified by tests/live/test_product_architect_live.py
 effort: high

@@ -1,6 +1,7 @@
 name: fixer
 version: 0.1.1
 kind: llm
+team: dev
 description: Fixes a reported defect in production code until its failing tests and the full suite pass.
 model: claude-sonnet-5-5 # verified by tests/live/test_fixer_live.py
 effort: xhigh
@@ -13,6 +14,58 @@ guard: action-guard@^0.1
 tools:
   allow: [fs.list_files, fs.read_file, fs.write_file, shell.run]
   deny: []
+files:
+  # Tests are the test-writer's. The fix loop also refuses every path the test-writer changed.
+  deny:
+    # the test layout, as evals.graders.sandbox_tests.is_test_file defines it
+    - "**/tests/**"
+    - "**/conftest.py"
+    - "**/test_*.py"
+    - "**/*_test.py"
+    # pytest's configuration at the root of the repository
+    - pytest.ini
+    - .pytest.ini
+    - pytest.toml
+    - .pytest.toml
+    - pyproject.toml
+    - setup.cfg
+    - tox.ini
+    # root modules and packages named like one `python -m pytest` imports, which would replace it
+    - "pytest/**"
+    - pytest.py
+    - "pytest.*.py"
+    - pytest.pyc
+    - "pytest.*.pyc"
+    - pytest.so
+    - "pytest.*.so"
+    - "_pytest/**"
+    - _pytest.py
+    - "_pytest.*.py"
+    - _pytest.pyc
+    - "_pytest.*.pyc"
+    - _pytest.so
+    - "_pytest.*.so"
+    - "pluggy/**"
+    - pluggy.py
+    - "pluggy.*.py"
+    - pluggy.pyc
+    - "pluggy.*.pyc"
+    - pluggy.so
+    - "pluggy.*.so"
+    - "iniconfig/**"
+    - iniconfig.py
+    - "iniconfig.*.py"
+    - iniconfig.pyc
+    - "iniconfig.*.pyc"
+    - iniconfig.so
+    - "iniconfig.*.so"
+    - "packaging/**"
+    - packaging.py
+    - "packaging.*.py"
+    - packaging.pyc
+    - "packaging.*.pyc"
+    - packaging.so
+    - "packaging.*.so"
 limits:
   max_tool_turns: 25
   timeout_s: 600

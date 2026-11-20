@@ -95,6 +95,22 @@ such as "the plan is good" scores whatever the model feels; "the plan says how t
 scores what the plan says. Mark a criterion `required` when an answer without it is wrong however
 well it does on the rest.
 
+## A rubric on a `sandbox_tests` case
+
+An agent graded on the work tree it leaves may still owe a reader some prose. A `sandbox_tests`
+case may then add an `expected.rubric` block, of the same shape, as an extra check on the answer
+(#86). The work tree stays the ground truth: the case is graded first by its `expected.run` checks
+(the suite, the new tests, what changed), then by the rubric's deterministic checks against the
+case's work tree, then by the rubric's model, and the first failure stops it. `grader` stays
+`sandbox_tests`; this does not let a coder or a fixer use `grader: rubric`.
+
+The `feature-coder` (#86) is the first agent to do so. Its four cases each give it a ticket on a
+fixture. Three must leave a passing suite, passing tests in the files the answer lists, and changed
+code and tests, and the rubric checks that every acceptance criterion maps to a test and that the
+summary says what was built and where. The fourth is a ticket whose criteria contradict the code:
+nothing may change, and the rubric checks that the answer is blocked and names the contradiction.
+The rubric model never sees the ticket, so each criterion restates what it needs from it.
+
 ## The `citations_resolve` check
 
 `rubric` scores how well a research agent reasons; it cannot tell whether the facts are true.

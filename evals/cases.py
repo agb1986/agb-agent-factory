@@ -25,6 +25,10 @@ type Severity = Literal["info", "minor", "major", "blocker"]
 type GraderName = Literal["llm_judge", "sandbox_tests", "jev", "rubric"]
 type DecisionName = Literal["skip", "review", "escalate"]
 
+RUBRIC_GRADERS = ("rubric", "sandbox_tests")
+"""The graders that read `expected.rubric`. On a `sandbox_tests` case the rubric is an extra check
+on the prose of an answer whose code the tests already judge, such as a coder's summary."""
+
 FIXTURE_REF = "$fixture"
 """The key of a payload value the runner replaces with content of the case's fixture."""
 
@@ -197,7 +201,9 @@ class Expected(_Strict):
     `review` for neither. `risky` marks a case whose diff carries a major or blocker defect, which
     the runner's `recall_risky` counts; it needs `decision`, and the graders never see it.
 
-    `rubric` is what the `rubric` grader scores, and is required for that grader.
+    `rubric` is what the `rubric` grader scores, and is required for that grader. A
+    `sandbox_tests` case may set it too: its checks and criteria then run after the checks of
+    `run`, and the rubric grader takes the place of the LLM judge.
     `citations_resolve` turns on the check of that name, which only a `rubric` case may use.
     """
 
@@ -259,8 +265,8 @@ class Case(_Strict):
             raise ValueError("expected.run: only the sandbox_tests grader reads it")
         if self.grader == "rubric" and self.expected.rubric is None:
             raise ValueError("expected.rubric: required by the rubric grader")
-        if self.grader != "rubric" and self.expected.rubric is not None:
-            raise ValueError("expected.rubric: only the rubric grader reads it")
+        if self.grader not in RUBRIC_GRADERS and self.expected.rubric is not None:
+            raise ValueError("expected.rubric: only the rubric and sandbox_tests graders read it")
         if self.grader != "rubric" and self.expected.citations_resolve is not None:
             raise ValueError("expected.citations_resolve: only a rubric case may use it")
         return self

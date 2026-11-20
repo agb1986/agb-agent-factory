@@ -5,12 +5,13 @@ run id and `command` is what `factory fix` calls. The flow, all of it in a throw
 repository (`pipelines.sandbox.checkout`):
 
 1. `test-writer` writes tests that pin the finding down; its work is committed in the clone.
-2. `fixer` changes the code until the suite passes. It may not touch a test: `TestFileGuard`
-   refuses a write to a path the test-writer changed, one in the test layout
-   (`evals.graders.sandbox_tests.is_test_file`), pytest's configuration at the root of the
-   clone, or a root module named like one the runner imports, and a check on the host refuses
-   the same paths when they changed by another route, such as a script run through `shell.run`.
-   Either refusal writes a trace row tagged `TEST_WRITE_REFUSED_TAG` and ends the run with
+2. `fixer` changes the code until the suite passes. It may not touch a test. Its manifest's
+   `files` policy denies the test layout, pytest's configuration at the root of the clone and a
+   root module named like one the runner imports, and the fix loop protects every path the
+   test-writer changed on top of it. `pipelines.file_policy.FilePolicyGuard` refuses a write to
+   any of those paths, and `pipelines.file_policy.check_changed` refuses the same paths on the
+   host when they changed by another route, such as a script run through `shell.run`. Either
+   refusal writes a trace row tagged `TEST_WRITE_REFUSED_TAG` and ends the run with
    `TestFileWriteError`.
 3. The clone is put back to the fixer's commit, untracked and ignored files gone, and the whole
    suite runs in the sandbox; a failure ends the run with `SuiteFailedError`.
@@ -25,7 +26,6 @@ out of turns, ends the loop with that error.
 
 import json
 import os
-import posixpath
 import sys
 import tempfile
 import time
@@ -33,13 +33,14 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from evals.graders.sandbox_tests import PYTEST, changed_files, is_test_file
+from evals.graders.sandbox_tests import PYTEST
 from factory.exit import AuthOrConfigError, ExitCode, FactoryError, UsageError
+from pipelines.file_policy import GUARDED_TOOL, FilePolicy, FilePolicyGuard, check_changed
 from pipelines.ids import new_pipeline_run_id
 from pipelines.review_panel import JevRunner, Panel, PanelResult, Runner, resolve_panel, run_panel
 from pipelines.sandbox import (
@@ -54,14 +55,13 @@ from pipelines.sandbox import (
 )
 from registry.common_schemas import Finding
 from registry.resolver import resolve
-from registry.spec import LLMSpec
+from registry.spec import FilesSpec, LLMSpec
 from registry.work_schemas import FileAction
 from runtime.budget import DEFAULT_BUDGET_USD, Budget
-from runtime.hooks import ToolCall, ToolDecision, ToolResult
 from runtime.jev_runner import run_jev
 from runtime.runner import API_KEY_ENV, run
 from runtime.trace import Trace, TraceRow
-from tools._common import ToolError, resolve_commit, resolve_inside
+from tools._common import resolve_commit
 from tools.sandbox import SandboxResult
 
 TEST_WRITER: tuple[str, str] = ("test-writer", "^0.2")
@@ -79,30 +79,8 @@ DEFAULT_OUT_DIR = Path("data/fixes")
 SUITE_TAIL_CHARS = 2000
 """How much of the end of the suite's output the report keeps."""
 
-_GUARDED_TOOL = "fs.write_file"
-
-_RUN_CONFIG = frozenset(
-    {
-        "pytest.ini",
-        ".pytest.ini",
-        "pytest.toml",
-        ".pytest.toml",
-        "pyproject.toml",
-        "setup.cfg",
-        "tox.ini",
-    }
-)
-"""The files at the root of the clone that pytest takes its configuration from."""
-
-_RUNNER_MODULES = frozenset({"pytest", "_pytest", "pluggy", "iniconfig", "packaging"})
-"""Modules `python -m pytest` imports from the image, which a module or package of the same name at
-the root of the clone would replace, since the working directory comes first on `sys.path`.
-
-Best effort, not a complete list: `py` and `pygments`, which pytest also imports, are left out
-because a repository may well have a root package of either name, and the panel, which reads the
-whole diff, is the real check."""
-
-_MODULE_SUFFIXES = (".py", ".pyc", ".so")
+PROTECTED_REASON = "the test-writer changed this path"
+"""Why the fixer may not write a path the test-writer changed, on top of its manifest's policy."""
 
 
 class FixError(FactoryError):
@@ -134,8 +112,8 @@ def resolve_fix_agents(
     """Resolve the test-writer, the fixer and the full review panel with triage and judge gate.
 
     Unless `allow_unpublished` is set, only published versions resolve. Raises `UsageError` when
-    the test-writer or the fixer is not a sandboxed LLM agent or the fixer has no action guard,
-    and the resolver's `NotFoundError` subclasses (exit 3) when an agent or version is missing.
+    the test-writer or the fixer is not a sandboxed LLM agent or the fixer has no action guard or
+    no `files` policy, and the resolver's `NotFoundError` subclasses (exit 3) when an agent or version is missing.
     """
     test_writer = _resolve_worker(*TEST_WRITER, allow_unpublished, trace_path)
     fixer = _resolve_worker(*FIXER, allow_unpublished, trace_path)
@@ -144,8 +122,19 @@ def resolve_fix_agents(
             f"{fixer.address} has no action guard, so the fix loop will not run it",
             hint="set `guard` in its manifest",
         )
+    _fixer_files(fixer)
     panel = resolve_panel(allow_unpublished=allow_unpublished, trace_path=trace_path)
     return FixAgents(test_writer=test_writer, fixer=fixer, panel=panel)
+
+
+def _fixer_files(fixer: LLMSpec) -> FilesSpec:
+    """Return the fixer's `files` policy, or raise `UsageError` when its manifest has none."""
+    if fixer.files is None:
+        raise UsageError(
+            f"{fixer.address} has no files policy, so the fix loop will not run it",
+            hint="set `files.deny` in its manifest to the paths the fixer may not change",
+        )
+    return fixer.files
 
 
 def _resolve_worker(
@@ -212,95 +201,8 @@ def _panel_finding(document: Mapping[str, Any], index: int) -> Any:
     return finding
 
 
-class TestFileGuard:
-    """The fixer's hook: refuse every `fs.write_file` to a test, before the action guard sees it.
-
-    A path is a test when `evals.graders.sandbox_tests.is_test_file` says so or it is in
-    `protected`, the paths the test-writer changed. Files that control the test run count too:
-    pytest's configuration files at the root of the clone, and a root module or package named
-    like one `python -m pytest` imports, which would replace it. The path is checked as written,
-    after `.` and `..` are folded, and again after symlinks are resolved inside `clone`; either
-    match refuses it. A path that does not resolve is let through, and `fs.write_file` refuses it
-    itself. A refusal writes a row tagged `TEST_WRITE_REFUSED_TAG` and raises `TestFileWriteError`,
-    which ends the fixer's run. Every other tool is allowed and left to the action guard.
-    """
-
-    __test__ = False  # not a pytest test class, despite the name
-
-    def __init__(
-        self, clone: Path, protected: frozenset[str], trace: Trace, pipeline_run_id: str
-    ) -> None:
-        self.clone = clone
-        self.protected = protected
-        self.trace = trace
-        self.pipeline_run_id = pipeline_run_id
-
-    def before_tool(self, call: ToolCall) -> ToolDecision:
-        """Raise `TestFileWriteError` for a write to a test; allow everything else."""
-        if call.name != _GUARDED_TOOL:
-            return ToolDecision.allow()
-        path = call.arguments.get("path")
-        if not isinstance(path, str):
-            return ToolDecision.allow()
-        for candidate in _candidates(self.clone, path):
-            reason = _test_reason(candidate, self.protected)
-            if reason is not None:
-                raise _refuse(
-                    self.trace,
-                    call.agent,
-                    self.pipeline_run_id,
-                    path=candidate,
-                    reason=reason,
-                    check="hook",
-                )
-        return ToolDecision.allow()
-
-    def after_tool(self, call: ToolCall, result: ToolResult) -> None:
-        """Do nothing: the host check after the run catches what a hook cannot see."""
-
-
-def _candidates(clone: Path, path: str) -> list[str]:
-    """Return `path` relative to `clone` as written and as resolved, without repeats."""
-    found: list[str] = []
-    lexical = PurePosixPath(posixpath.normpath(path))
-    if lexical.is_absolute():
-        lexical = (
-            lexical.relative_to(clone.as_posix())
-            if lexical.is_relative_to(clone.as_posix())
-            else PurePosixPath(".")
-        )
-    if lexical.parts and lexical.parts[0] != "..":
-        found.append(lexical.as_posix())
-    try:
-        resolved = resolve_inside(clone, path).as_posix()
-    except ToolError:
-        resolved = None
-    if resolved is not None and resolved not in found:
-        found.append(resolved)
-    return [candidate for candidate in found if candidate != "."]
-
-
-def _test_reason(path: str, protected: frozenset[str]) -> str | None:
-    if path in protected:
-        return "the test-writer changed this path"
-    if is_test_file(path):
-        return "the path is in the test layout"
-    parts = PurePosixPath(path).parts
-    if len(parts) == 1 and parts[0] in _RUN_CONFIG:
-        return "the file configures the test run"
-    if parts and parts[0] in _RUNNER_MODULES and len(parts) > 1:
-        return "the path shadows the test runner"
-    if (
-        len(parts) == 1
-        and parts[0].split(".", 1)[0] in _RUNNER_MODULES
-        and parts[0].endswith(_MODULE_SUFFIXES)
-    ):
-        return "the path shadows the test runner"
-    return None
-
-
 def _refuse(
-    trace: Trace, agent: str, pipeline_run_id: str, *, path: str, reason: str, check: str
+    trace: Trace, pipeline_run_id: str, agent: str, path: str, reason: str, check: str
 ) -> TestFileWriteError:
     """Write the refusal row for the fixer's change to `path` and return the error to raise."""
     message = f"the fixer may not change the test file {path}: {reason}"
@@ -311,7 +213,7 @@ def _refuse(
             kind="llm",
             started_at=datetime.now(UTC),
             duration_ms=0,
-            input_json={"tool": _GUARDED_TOOL, "path": path},
+            input_json={"tool": GUARDED_TOOL, "path": path},
             pipeline_run_id=pipeline_run_id,
             cost_usd=0.0,
             decision_json={"allow": False, "path": path, "reason": reason, "check": check},
@@ -476,7 +378,12 @@ def run_fix(
             tests_sha = commit_all(clone, f"test-writer: {finding.title}")
             by_tests = changed_between(clone, head_sha, tests_sha)
             written = tests_output.model_dump(mode="json")
-            protected = frozenset(by_tests)
+            policy = FilePolicy(
+                _fixer_files(agents.fixer), dict.fromkeys(by_tests, PROTECTED_REASON)
+            )
+
+            def refuse(agent: str, path: str, reason: str, check: str) -> TestFileWriteError:
+                return _refuse(trace, run_id, agent, path, reason, check)
 
             fixer_run_id = str(uuid.uuid4())
             fixer_output = runner(
@@ -493,22 +400,11 @@ def run_fix(
                 pipeline_run_id=run_id,
                 parent_run_id=tests_run_id,
                 run_id=fixer_run_id,
-                hook=TestFileGuard(clone, protected, trace, run_id),
+                hook=FilePolicyGuard(clone, policy, refuse),
                 budget=budget,
             )
-            # `changed_files` leaves out bytecode and `__pycache__`. Nothing is lost by that: the
-            # commits carry no bytecode either, and `clean` deletes it before the suite runs.
-            for path in changed_files(clone):
-                reason = _test_reason(path, protected)
-                if reason is not None:
-                    raise _refuse(
-                        trace,
-                        agents.fixer.address,
-                        run_id,
-                        path=path,
-                        reason=reason,
-                        check="post-check",
-                    )
+            # The commits carry no bytecode, and `clean` deletes it before the suite runs.
+            check_changed(clone, policy, agents.fixer.address, refuse)
             fix_sha = commit_all(clone, f"fixer: {finding.title}")
             by_fixer = changed_between(clone, tests_sha, fix_sha)
             total = changed_between(clone, head_sha, fix_sha)

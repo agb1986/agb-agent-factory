@@ -108,6 +108,19 @@ def test_a_change_outside_the_guarded_content_needs_no_bump(repo: Path) -> None:
     assert _violations(repo) == {}
 
 
+@pytest.mark.parametrize(
+    "addition",
+    ["team: dev\n", "files:\n  deny: ['tests/**']\n", "team: qa\nfiles:\n  allow: ['src/**']\n"],
+)
+def test_a_team_or_files_change_needs_no_bump(repo: Path, addition: str) -> None:
+    # The team is a label and the files policy is enforced by the pipeline around the agent;
+    # neither changes what the model is asked or how its answer is read (docs/CONVENTIONS.md).
+    manifest = repo / "agents/alpha/agent.yaml"
+    manifest.write_text(manifest.read_text() + addition)
+    _commit(repo)
+    assert _violations(repo) == {}
+
+
 def test_every_offending_change_is_listed(repo: Path) -> None:
     _write(repo, "beta", "1.0.0")
     _commit(repo, "add beta")

@@ -1,6 +1,7 @@
 name: story-breakdown
 version: 0.1.0
 kind: llm
+team: planning
 description: Breaks a product requirements document into ordered tickets with acceptance criteria, sizes, dependencies and impacted paths.
 model: claude-sonnet-5-5 # verified by tests/live/test_story_breakdown_live.py
 effort: high

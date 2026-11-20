@@ -132,6 +132,52 @@ def test_grade_goes_on_to_the_judge_when_the_work_tree_is_right(tmp_path: Path) 
     assert judge.calls == 1
 
 
+# --- a rubric on a sandbox_tests case
+
+RUBRIC = {
+    "criteria": [{"id": "says-what", "text": "The summary says what changed."}],
+    "threshold": 0.5,
+    "required_fields": ["summary"],
+}
+
+
+def _rubric_case(run: dict[str, Any]) -> Case:
+    case = _case(run)
+    case["expected"]["rubric"] = RUBRIC
+    return Case.model_validate(case)
+
+
+def test_a_sandbox_case_may_carry_a_rubric() -> None:
+    case = _rubric_case({"suite": "pass"})
+    assert case.expected.rubric is not None
+
+
+def test_a_sandbox_rubric_case_needs_a_rubric_judge(tmp_path: Path) -> None:
+    case = _rubric_case({"production": "unchanged"})
+    with pytest.raises(UsageError, match="rubric_judge"):
+        grade(case, {"summary": "x"}, _Judge(), tmp_path)
+
+
+def test_the_rubric_judge_grades_a_sandbox_rubric_case_not_the_judge(tmp_path: Path) -> None:
+    repo = _build(tmp_path, "off-by-one")
+    case = _rubric_case({"production": "unchanged", "tests": "unchanged"})
+    judge, rubric_judge = _Judge(), _Judge()
+    graded = grade(case, {"summary": "Nothing changed."}, judge, repo, rubric_judge=rubric_judge)
+    assert graded.passed
+    assert (judge.calls, rubric_judge.calls) == (0, 1)
+
+
+def test_the_rubric_checks_add_to_the_run_checks(tmp_path: Path) -> None:
+    repo = _build(tmp_path, "off-by-one")
+    case = _rubric_case({"production": "changed"})
+    rubric_judge = _Judge()
+    graded = grade(case, {"summary": ""}, _Judge(), repo, rubric_judge=rubric_judge)
+    assert not graded.passed
+    assert "production code unchanged" in graded.reason
+    assert "summary" in graded.reason
+    assert rubric_judge.calls == 0
+
+
 # --- changed_files
 
 

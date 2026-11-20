@@ -304,7 +304,7 @@ def evaluate(
     `budget` (default: a new `Budget(DEFAULT_BUDGET_USD)`), and so are the calls of the default
     `LLMJudge` and `JevJudge`; a `judge` or `jev_judge` passed in is charged only if it was built
     with the budget. A case that runs out of budget is not a failed case: the evaluation ends with
-    `BudgetExceeded`. Cases with `grader: rubric` are graded by `rubric_judge`, which defaults to a
+    `BudgetExceeded`. Cases with an `expected.rubric` are graded by `rubric_judge`, which defaults to a
     `RubricGrader` on `trace` with the same tag, run id and budget, built only when a case needs it.
     A case with `expected.citations_resolve` has the pages it cites read through `fetcher`, which
     defaults to `web.fetch`; one that cannot be read is a case error.
@@ -325,7 +325,7 @@ def evaluate(
     llm_judge = (
         LLMJudge(shared, tag=tag, pipeline_run_id=eval_run_id, budget=budget) if own_judge else None
     )
-    own_rubric = rubric_judge is None and any(case.grader == "rubric" for case in cases)
+    own_rubric = rubric_judge is None and any(case.expected.rubric is not None for case in cases)
     rubric_grader = (
         RubricGrader(shared, tag=tag, pipeline_run_id=eval_run_id, budget=budget)
         if own_rubric

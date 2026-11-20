@@ -1,6 +1,7 @@
 name: technical-feasibility
 version: 0.1.0
 kind: llm
+team: research
 description: >-
   Judges whether an idea is technically viable in a repository and its ecosystem: a verdict of
   viable, viable_with_constraints, not_viable or unknown, the reasons as cited claims, the

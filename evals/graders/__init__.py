@@ -11,7 +11,9 @@ needs the repository the agent worked on, so `grade` takes its path. The `jev` g
 noul question, `evals.graders.jev`; `grade` takes the judge for it apart from the LLM judge.
 The `rubric` grader, `evals.graders.rubric`, adds the rubric's own deterministic checks (required
 fields, forbidden strings, paths that must exist in the fixture repository) and then scores the
-answer against its criteria; `grade` takes its judge apart too. A rubric case may also set
+answer against its criteria; `grade` takes its judge apart too. A `sandbox_tests` case may also
+carry `expected.rubric`, for an agent that writes code and prose about it: the rubric's checks run
+after the commands, and its judge scores the prose instead of the LLM judge. A rubric case may also set
 `expected.citations_resolve`: `evals.graders.citations` then fetches the pages the answer cites,
 through the fetcher `grade` is given, and fails the case when a quote is not in its page.
 """
@@ -122,10 +124,11 @@ def grade(
     A failed check returns a failed grade with score 0.0 and the failures as the reason, without
     calling a judge. The `sandbox_tests` grader adds the checks of `expected.run`, which run
     commands in the work tree at `repo_path` and so need it. A case with the `jev` grader goes to
-    `jev_judge`, a case with the `rubric` grader to `rubric_judge` after the checks of
-    `expected.rubric`, and every other case to `judge`. Raises `UsageError` for `sandbox_tests`
-    without a `repo_path`, for `jev` without a `jev_judge`, for `rubric` without a `rubric_judge`,
-    and for a rubric with `paths_exist` without a `repo_path`.
+    `jev_judge`, a case with an `expected.rubric` (the `rubric` grader, or `sandbox_tests` with a
+    rubric) to `rubric_judge` after the checks of the rubric, and every other case to `judge`.
+    Raises `UsageError` for `sandbox_tests` without a `repo_path`, for `jev` without a `jev_judge`,
+    for a rubric without a `rubric_judge`, and for a rubric with `paths_exist` without a
+    `repo_path`.
 
     A case with `expected.citations_resolve` has it checked once the other checks have passed and
     before a judge is called; the pages come from `fetcher`, which defaults to `web.fetch`. A page
@@ -135,15 +138,15 @@ def grade(
     """
     if case.grader == "jev" and jev_judge is None:
         raise UsageError("the jev grader needs a jev_judge to grade with")
-    if case.grader == "rubric" and rubric_judge is None:
-        raise UsageError("the rubric grader needs a rubric_judge to grade with")
+    if case.expected.rubric is not None and rubric_judge is None:
+        raise UsageError("a case with a rubric needs a rubric_judge to grade with")
     checks = check_deterministic(case.expected, actual)
     if case.grader == "sandbox_tests" and case.expected.run is not None:
         if repo_path is None:
             raise UsageError("the sandbox_tests grader needs the repository path to run tests in")
         ran = check_run(case.expected.run, actual, repo_path)
         checks = Deterministic(checks.passed and not ran, (*checks.failures, *ran))
-    if case.grader == "rubric" and case.expected.rubric is not None:
+    if case.expected.rubric is not None:
         found = check_output(case.expected.rubric, actual, repo_path)
         checks = Deterministic(checks.passed and not found, (*checks.failures, *found))
     if checks.passed and case.expected.citations_resolve is not None:
@@ -157,7 +160,7 @@ def grade(
     chosen = judge
     if case.grader == "jev" and jev_judge is not None:
         chosen = jev_judge
-    elif case.grader == "rubric" and rubric_judge is not None:
+    elif case.expected.rubric is not None and rubric_judge is not None:
         chosen = rubric_judge
     verdict = chosen(case.expected, actual)
     return Grade(verdict.passed, verdict.score, verdict.reason, checks, verdict)
