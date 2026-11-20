@@ -5,9 +5,12 @@ import json
 import sys
 from collections.abc import Sequence
 from importlib.metadata import version
+from typing import get_args
 
 from factory.exit import ExitCode, error_envelope, exit_code
 from registry import list_agents
+from registry.common_schemas import TicketKind
+from runtime.work_items import SIZES, STATUSES
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -216,7 +219,89 @@ def build_parser() -> argparse.ArgumentParser:
     deps_parser.add_argument(
         "--json", action="store_true", help="print one JSON document instead of text"
     )
+    _add_ticket_parser(sub)
     return parser
+
+
+def _add_ticket_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add `factory ticket` and its six subcommands to `sub`."""
+    ticket_parser = sub.add_parser(
+        "ticket",
+        help="add, list, show, move and link work items, and promote the ready ones",
+        epilog="example: factory ticket list --status ready --json",
+    )
+    tsub = ticket_parser.add_subparsers(dest="ticket_command")
+
+    def child(name: str, help: str, example: str) -> argparse.ArgumentParser:
+        child_parser = tsub.add_parser(name, help=help, epilog=f"example: {example}")
+        child_parser.add_argument(
+            "--json", action="store_true", help="print one JSON document instead of text"
+        )
+        return child_parser
+
+    add = child(
+        "add",
+        "write a new work item in todo",
+        'factory ticket add --kind bug --title "Fix the parser" --acceptance "parses x" '
+        "--repo agb1986/agb-agent-factory --ref main --json",
+    )
+    add.add_argument("--kind", required=True, choices=get_args(TicketKind))
+    add.add_argument("--title", required=True, help="one line, at most 120 characters")
+    add.add_argument("--body", default="", help="the problem and the context (default: empty)")
+    add.add_argument(
+        "--acceptance",
+        required=True,
+        action="append",
+        metavar="CRITERION",
+        help="one acceptance criterion; repeat for each",
+    )
+    add.add_argument("--repo", required=True, help="`owner/name` or an absolute path")
+    add.add_argument("--ref", required=True, help="the branch or commit the work starts from")
+    add.add_argument("--parent", help="`wi-<n>` or `prd:<pipeline_run_id>`")
+    add.add_argument(
+        "--depends-on",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="a work item that must be done first; repeat for each",
+    )
+    add.add_argument(
+        "--impacted-path",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="a repository-relative path the work touches; repeat for each",
+    )
+    add.add_argument("--size", choices=SIZES)
+    add.add_argument("--reason", default="created", help="the creation event's reason")
+    list_parser = child(
+        "list", "list work items in id order", "factory ticket list --status ready --json"
+    )
+    list_parser.add_argument("--status", choices=STATUSES, help="only items in this state")
+    show = child(
+        "show", "print one work item with its cost and events", "factory ticket show wi-3 --json"
+    )
+    show.add_argument("id", help="the work item id, `wi-<n>`")
+    move = child(
+        "move",
+        "move a work item to another state, as a human",
+        'factory ticket move wi-3 dropped --reason "duplicate of wi-2"',
+    )
+    move.add_argument("id", help="the work item id, `wi-<n>`")
+    move.add_argument("to", choices=STATUSES, help="the state to move to")
+    move.add_argument("--reason", required=True, help="why; written to the event log")
+    link = child(
+        "link",
+        "link a pipeline run to a work item, so its cost counts",
+        "factory ticket link wi-3 3f2a9c --json",
+    )
+    link.add_argument("id", help="the work item id, `wi-<n>`")
+    link.add_argument("pipeline_run_id", help="the pipeline run to link")
+    child(
+        "ready",
+        "promote todo items whose dependencies are done, then list the ready ones in order",
+        "factory ticket ready --json",
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -252,6 +337,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _trace(args)
         if args.command == "deps":
             return _deps(args)
+        if args.command == "ticket" and args.ticket_command:
+            return _ticket(args)
     except Exception as exc:  # noqa: BLE001 - the root handler maps every failure to a code
         return _fail(exc, as_json=getattr(args, "json", False))
     parser.print_usage(sys.stderr)
@@ -364,6 +451,36 @@ def _deps(args: argparse.Namespace) -> int:
     from tools.deps import command
 
     return command(args.repo_path, impact_paths=args.impact, as_json=args.json)
+
+
+def _ticket(args: argparse.Namespace) -> int:
+    """Run one `factory ticket` subcommand against the trace store's work items."""
+    from runtime import ticket
+
+    if args.ticket_command == "add":
+        return ticket.add(
+            kind=args.kind,
+            title=args.title,
+            body=args.body,
+            acceptance=args.acceptance,
+            repo=args.repo,
+            ref=args.ref,
+            parent=args.parent,
+            depends_on=args.depends_on,
+            impacted_paths=args.impacted_path,
+            size=args.size,
+            reason=args.reason,
+            as_json=args.json,
+        )
+    if args.ticket_command == "list":
+        return ticket.list_items(args.status, as_json=args.json)
+    if args.ticket_command == "show":
+        return ticket.show(args.id, as_json=args.json)
+    if args.ticket_command == "move":
+        return ticket.move(args.id, args.to, args.reason, as_json=args.json)
+    if args.ticket_command == "link":
+        return ticket.link(args.id, args.pipeline_run_id, as_json=args.json)
+    return ticket.ready(as_json=args.json)
 
 
 def _fail(exc: Exception, *, as_json: bool) -> int:

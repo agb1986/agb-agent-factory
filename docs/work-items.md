@@ -1,0 +1,99 @@
+# Work items and `factory ticket`
+
+A work item, or ticket, is one unit of work the factory can take from idea to pull request. This
+page is how to use them. The rules (the fields, the eight states, the legal moves and the order
+of the `ready` items) are in [CONVENTIONS.md](CONVENTIONS.md#work-items), and the reasons are in
+[ADR 0002](decisions/0002-work-items.md).
+
+## Where items live
+
+Items are two tables in the trace store, `work_items` and `work_item_events`, added by migrations
+4 and 5 of `runtime/trace.py`. A store written before them is upgraded the first time any command
+opens it, and its trace rows are kept. `factory ticket` uses the same file as every other command:
+`FACTORY_TRACE_DB`, or `data/traces.duckdb` when it is unset. DuckDB lets one process write a file
+at a time, so do not run `factory ticket` against a store a pipeline is writing.
+
+Code uses `runtime.work_items.WorkItems`, built on an open `Trace`:
+
+```python
+from runtime.trace import Trace
+from runtime.work_items import WorkItems
+
+with Trace() as trace:
+    store = WorkItems(trace)
+    item = store.add(ticket, depends_on=["wi-3"])
+    store.move(
+        item.id,
+        "blocked",
+        "the sandbox image is missing",
+        actor="pipeline:build_loop",
+        pipeline_run_id=run_id,
+    )
+```
+
+## The commands
+
+Every subcommand takes `--json`, which prints one JSON object on stdout. `add`, `show`, `move` and
+`link` all print the item as `show` does.
+
+| Command | What it does |
+| --- | --- |
+| `factory ticket add --kind K --title T --acceptance A [--acceptance A ...] --repo R --ref REF` | Writes a new item in `todo`. Optional: `--body`, `--parent`, `--depends-on` (repeatable), `--impacted-path` (repeatable), `--size S\|M\|L` and `--reason` (default `created`) |
+| `factory ticket list [--status S]` | Every item, or those in one state, in id order |
+| `factory ticket show <id>` | One item with its cost so far and every event |
+| `factory ticket move <id> <state> --reason R` | Makes one legal move, as actor `human` |
+| `factory ticket link <id> <pipeline_run_id>` | Adds a pipeline run to the item, so its cost counts. Linking a run twice changes nothing |
+| `factory ticket ready` | Promotes and blocks `todo` items, then lists the `ready` ones in the order a pipeline should take them |
+
+```console
+$ factory ticket add --kind docs --title "Write the ADR" --acceptance "the ADR is merged" \
+    --repo agb1986/agb-agent-factory --ref main
+wi-1  todo  docs  Write the ADR
+...
+$ factory ticket add --kind feature --title "Build the store" --acceptance "tests pass" \
+    --repo agb1986/agb-agent-factory --ref main --depends-on wi-1 --size M
+$ factory ticket ready
+promoted wi-1
+1 ready:
+  wi-1	docs	Write the ADR
+$ factory ticket move wi-2 ready --reason "skip the queue"
+wi-2 cannot be ready: wi-1 not done
+```
+
+`--parent` takes another item's id or `prd:<pipeline_run_id>`. Each `--depends-on` must name an
+existing item. A title is one line of at most 120 characters, `--repo` is `owner/name` or an
+absolute path, and each `--impacted-path` is relative to the repository root.
+
+## What `ready` does
+
+`factory ticket ready` calls `WorkItems.ready()`, which walks the `todo` items in id order:
+
+- An item with a `dropped` dependency moves to `blocked`, with the reason
+  `dependency wi-<n> was dropped`. A person decides what happens to it next.
+- An item whose dependencies are all `done`, or that has none, moves to `ready`.
+- Any other item stays in `todo`.
+
+These moves are logged with actor `store`, and `store` may make no other move. The `ready` items
+come back ordered: incidents first, then the items more others are waiting on (dependents that
+are `dropped` do not count), then the older, then the lower id. The Jev ranking key of
+CONVENTIONS is left out until a ranking agent exists. Running `ready` again with nothing changed
+promotes nothing.
+
+## Exit codes
+
+| Code | When |
+| --- | --- |
+| 0 | The command did what it said |
+| 2 | A bad argument or field, an empty reason, an illegal move, a move to the state the item is in, or a dependency cycle. The hint of an illegal move lists the legal ones, such as `from todo: blocked, dropped, ready` |
+| 3 | An unknown item id, as the item, a parent or a dependency |
+
+Under `--json` an error leaves stdout empty and prints the error envelope on stderr, as every
+command does ([CONVENTIONS.md](CONVENTIONS.md#errors)).
+
+## Changing dependencies
+
+`WorkItems.set_depends_on(id, depends_on, reason)` replaces an item's dependencies while it is
+`todo` or `blocked`, and refuses it in any other state. It is the one write that could close a
+cycle, because a new item cannot be a dependency of anything yet, so the acyclic check runs there
+and refuses a cycle with its path, such as `dependency cycle: wi-1 -> wi-3 -> wi-2 -> wi-1`.
+There is no command for it yet; the plan loop (#92) is its first caller.

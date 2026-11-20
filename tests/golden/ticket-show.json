@@ -1,0 +1,53 @@
+{
+  "id": "wi-2",
+  "kind": "feature",
+  "title": "Add the work-item store",
+  "body": "Keep work items in the trace store.",
+  "acceptance": [
+    "factory ticket show prints the item",
+    "an illegal move exits 2"
+  ],
+  "repo": "agb1986/agb-agent-factory",
+  "ref": "main",
+  "parent": "wi-1",
+  "depends_on": [
+    "wi-1"
+  ],
+  "impacted_paths": [
+    "runtime/work_items.py"
+  ],
+  "size": "M",
+  "status": "in_progress",
+  "pipeline_run_ids": [
+    "pipe-1"
+  ],
+  "created_at": "2026-10-20T09:02:00Z",
+  "updated_at": "2026-10-20T09:09:00Z",
+  "cost_usd": 0.039445,
+  "events": [
+    {
+      "at": "2026-10-20T09:02:00Z",
+      "from_status": null,
+      "to_status": "todo",
+      "actor": "human",
+      "pipeline_run_id": "pipeline-run-1",
+      "reason": "created"
+    },
+    {
+      "at": "2026-10-20T09:07:00Z",
+      "from_status": "todo",
+      "to_status": "ready",
+      "actor": "store",
+      "pipeline_run_id": "pipeline-run-1",
+      "reason": "every dependency is done"
+    },
+    {
+      "at": "2026-10-20T09:08:00Z",
+      "from_status": "ready",
+      "to_status": "in_progress",
+      "actor": "pipeline:feature_loop",
+      "pipeline_run_id": "pipeline-run-1",
+      "reason": "picked"
+    }
+  ]
+}

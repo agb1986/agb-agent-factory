@@ -502,7 +502,7 @@ A `Trace` holds one DuckDB connection for its lifetime and opens it on first use
 
 A work item is one unit of work the factory can take from idea to pull request: a feature, a bug, a refactor, documentation, a research question or an incident. "Ticket" means the same thing; the command is `factory ticket` (#82). Agents stay stateless. The work item lives in the store, and an agent sees only the part of it a pipeline passes as payload. The reasons are in [ADR 0002](decisions/0002-work-items.md).
 
-The store is two tables in the trace store's DuckDB file (`FACTORY_TRACE_DB`, see [Trace row](#trace-row)), added as numbered migrations to `MIGRATIONS` in `runtime/trace.py`. `runtime/work_items.py` (#82) uses the `Trace` instance's connection and lock, so one process still holds one connection and one writer. `work_items` holds one row per item:
+The store is two tables in the trace store's DuckDB file (`FACTORY_TRACE_DB`, see [Trace row](#trace-row)), added as migrations 4 and 5 of `MIGRATIONS` in `runtime/trace.py`. `runtime/work_items.py` (#82) uses the `Trace` instance's connection and lock through `Trace.connection()`, so one process still holds one connection and one writer. [work-items.md](work-items.md) is the user guide. `work_items` holds one row per item:
 
 | Column | Type | Meaning |
 | --- | --- | --- |
@@ -534,6 +534,8 @@ The cost so far is not a column. It is the sum of `cost_usd` over the trace rows
 | `actor` | VARCHAR | `human` for a command a person runs, `pipeline:<module>` for a pipeline (`pipeline:build_loop`), `store` for a promotion `ready()` makes |
 | `pipeline_run_id` | VARCHAR, null | The run that made the move; null for `human` and `store` |
 | `reason` | VARCHAR | Why. Never empty |
+
+Actor `store` makes only the two moves `ready()` makes, `todo` to `ready` and `todo` to `blocked`; any other move is a `human` or a `pipeline:<module>` one, and a pipeline actor must give its run id. A new item can depend only on items that already exist, so it cannot close a cycle. `WorkItems.set_depends_on` replaces the dependencies of an item in `todo` or `blocked`, refuses any other state, and is where the acyclic check runs.
 
 An agent gets an item as the `Ticket` model in `registry/common_schemas.py`: `kind`, `title`, `body`, `acceptance`, `repo`, `ref` and `impacted_paths`. It never sees `status`, the cost, the run ids or the events, and no tool lets an agent read or write the store. story-breakdown returns tickets in the same shape without ids, with dependencies given as indexes into its own list; the plan loop turns them into ids.
 
@@ -598,7 +600,7 @@ These moves are illegal for everyone, people included:
 Prioritisation and assignment are code over the store, and no model decides them. This extends [Gates](#gates): no LLM assigns work, picks the next item or sets its priority. The `ready` items are ordered by this key, first difference wins:
 
 1. `incident` before every other kind.
-2. More items that depend on it, directly or through others, first.
+2. More items that depend on it, directly or through others, first. Dependents that are `dropped` are not counted.
 3. The `value` of a Jev `score` question, higher first, when a ranking agent ran and its `confidence` reached the threshold in its manifest. A missing, failed or unsure answer leaves this key out; it never stops the order.
 4. Older `created_at` first, then the lower id.
 
@@ -695,7 +697,9 @@ $ factory run product-architect --input idea.json --repo . --json
 
 `factory deps <repo> [--impact PATH ...] [--json]` prints the import graph of the work tree at `<repo>`, the text that `deps.graph` returns, or with `--impact` the modules that import the given files and their depth, as `deps.impact` returns. A path that is not a module of the graph exits 3, one outside the root exits 2. Under `--json`, stdout carries `modules` (`{path, language}`), `edges` (`{source, target, line}`), `unresolved` (`{source, line, specifier, reason}`), `external` (`{source, line, specifier}`), `skipped` (`{path, reason}`) and `impact`, which is null without `--impact` and otherwise `{paths, impacted: [{path, depth}]}`. `tests/golden/deps.json` pins it.
 
-`tests/test_golden_cli.py` pins the `--json` document of `list`, `eval`, `publish-check`, `review`, `triage`, `fix`, `cost`, `deps` and `run` against files in `tests/golden/`, with the per-run fields (`duration_ms`, `git_sha`, `pipeline_run_id`, `eval_run_id`, `run_id`) replaced by fixed values. `pytest --update-golden` rewrites those files instead of comparing; read the diff before committing it. A new command gets one test and one file, as `tests/golden/README.md` describes. CI (`.github/workflows/ci.yml`) runs `pytest -m "not live and not live_jev" --cov --cov-fail-under=85`; the floor lives in the workflow command, not in `addopts`, so a local `pytest --cov` never fails on it. `.github/workflows/live.yml` runs the `live` and `live_jev` tests, by hand only (`gh workflow run live.yml`), with the keys from the repository secrets `ANTHROPIC_API_KEY` and `TYPESAFE_API_KEY`.
+`factory ticket add|list|show|move|link|ready` reads and writes the work items in the trace store ([Work items](#work-items), [work-items.md](work-items.md)). Each takes `--json`. `add`, `show`, `move` and `link` print one item with `cost_usd` and its `events`; `list [--status S]` prints `{"work_items": [...]}`; `ready` prints `{"promoted", "blocked", "ready"}`, `ready` in the orchestrator's order. A person's `move` is logged with actor `human` and needs `--reason`. A bad field, an empty reason, an illegal move or a cycle exits 2, with the legal moves as the hint of an illegal one, and an unknown id exits 3. `tests/golden/ticket-show.json` pins `ticket show --json`.
+
+`tests/test_golden_cli.py` pins the `--json` document of `list`, `eval`, `publish-check`, `review`, `triage`, `fix`, `cost`, `deps`, `run` and `ticket show` against files in `tests/golden/`, with the per-run fields (`duration_ms`, `git_sha`, `pipeline_run_id`, `eval_run_id`, `run_id`) replaced by fixed values. `pytest --update-golden` rewrites those files instead of comparing; read the diff before committing it. A new command gets one test and one file, as `tests/golden/README.md` describes. CI (`.github/workflows/ci.yml`) runs `pytest -m "not live and not live_jev" --cov --cov-fail-under=85`; the floor lives in the workflow command, not in `addopts`, so a local `pytest --cov` never fails on it. `.github/workflows/live.yml` runs the `live` and `live_jev` tests, by hand only (`gh workflow run live.yml`), with the keys from the repository secrets `ANTHROPIC_API_KEY` and `TYPESAFE_API_KEY`.
 
 ## Exit codes
 
