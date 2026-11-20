@@ -1,6 +1,6 @@
 # ADR 0002: Work items
 
-Status: proposed, awaiting the owner's decision. Issue: #81.
+Status: accepted, 2026-11-20. Issue: #81.
 
 This record fixes the vocabulary the factory needs before it builds features from tickets: what a work item is, the states it moves through, who may move it, how the next item is chosen, and what a "team" is. The rules themselves are in [CONVENTIONS.md](../CONVENTIONS.md#work-items). This record gives the reasons and what each later issue must build. Where the issue left a choice open, the choice below is a proposal, and the owner's review decides it.
 
@@ -24,23 +24,23 @@ The rules this decision has to fit:
 
 ### Where the work item lives
 
-- **(a) Two tables in the trace store's DuckDB file.** Proposed. Migrations go into the existing `MIGRATIONS`, the store uses the `Trace` connection and lock, and the cost of an item is a read over rows that already exist.
+- **(a) Two tables in the trace store's DuckDB file.** Chosen. Migrations go into the existing `MIGRATIONS`, the store uses the `Trace` connection and lock, and the cost of an item is a read over rows that already exist.
 - **(b) A separate DuckDB file.** Rejected. DuckDB allows one writer process per file, so a second file means a second connection, a second migration list and a second lock in every pipeline that touches both, and the item's cost would join across files.
 - **(c) GitHub Issues or Projects.** Rejected for the store. The factory must run against a local repository with no remote, such as a fixture, and offline tests cannot depend on the GitHub API. The state machine would also be enforced by labels any person or tool can change. A work item may name the GitHub issue it came from in its `body`; #84 may add a sync later, from the store outwards.
 
 ### Where the state lives
 
-- **(a) In the store, moved by code.** Proposed. Pipelines and `factory ticket` call `move`, which checks one table of legal pairs and writes an event with a reason.
+- **(a) In the store, moved by code.** Chosen. Pipelines and `factory ticket` call `move`, which checks one table of legal pairs and writes an event with a reason.
 - **(b) Inside agents.** Rejected. An agent that remembers its backlog between runs breaks the rule that no agent holds state, cannot be versioned or evaluated on fixed cases, and leaves no trace of why an item moved. An Engineering Lead agent that holds the backlog in its context, as `sp.md` describes, is this option.
 
 ### Who chooses the next item
 
-- **(a) Code over the store, with an optional Jev ranking as one sort key.** Proposed. The order is deterministic and testable, and a Jev score can refine it only when it is confident, as the triage gate already works.
+- **(a) Code over the store, with an optional Jev ranking as one sort key.** Chosen. The order is deterministic and testable, and a Jev score can refine it only when it is confident, as the triage gate already works.
 - **(b) An LLM orchestrator that assigns work.** Rejected. It would put routing in a model, which [Gates](../CONVENTIONS.md#gates) forbids, add cost to every step, and make the order impossible to reproduce. An agent may still be asked a question whose answer code uses; it never makes the assignment.
 
 ### What a team is
 
-- **(a) A metadata label in `agent.yaml`, with composition in pipelines.** Proposed. The registry and the publish gate stay as they are, and a pipeline already pins the agents it composes.
+- **(a) A metadata label in `agent.yaml`, with composition in pipelines.** Chosen. The registry and the publish gate stay as they are, and a pipeline already pins the agents it composes.
 - **(b) A team abstraction in the registry.** Rejected. Team manifests that are resolved, versioned and published would add a second unit next to the agent, with its own semver, its own eval gate and its own address syntax, for no behaviour that an agent address and a pipeline do not already give. A team's membership changes when an agent is added, so every new agent would bump a team version, and a pipeline that composes agents of two teams, as the build loop does, would pin two team ranges as well as its agents.
 
 ## Decision
@@ -53,7 +53,7 @@ Adopt option (a) in each choice above, with the rules in [CONVENTIONS.md](../CON
 - **Ordering is code.** Incidents first, then the items that unblock the most others, then a confident Jev score when a ranking agent exists, then age. A ranking agent is optional, and its failure only drops one key.
 - **Teams are labels.** They group agents for people and reports, and they never change what runs.
 
-### Proposals the owner should check
+### Points decided beyond the issue text
 
 These are choices the issue left open, made here so the rules contain no gap:
 

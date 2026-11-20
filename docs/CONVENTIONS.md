@@ -336,7 +336,7 @@ The fix loop (`pipelines/fix_loop.py`, #24) adds a rule the tools do not enforce
 
 ### Outside writes
 
-An outside write changes something a person reads outside the sandbox: a pull request, a review comment, an issue. The rules below are proposed in `docs/decisions/0003-outside-writes.md` (#83) and bind every tool that does one.
+An outside write changes something a person reads outside the sandbox: a pull request, a review comment, an issue. The rules below are decided in `docs/decisions/0003-outside-writes.md` (#83, accepted 2026-11-20) and bind every tool that does one.
 
 - Every outside write is its own named tool, `<group>.<verb>`, in the `github` or `notify` group. There is no generic write tool.
 - It is denied by default. A pipeline may make the write only on behalf of an agent whose resolved manifest lists the tool in `tools.allow`; for any other agent the runtime refuses. A command-line flag may ask for a write the manifest already allows (`--comment`) or turn writes into a plan (`--dry-run`). No flag grants one.
