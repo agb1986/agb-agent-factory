@@ -47,7 +47,7 @@ Every agent call, every move of the item and the outside write carry the same `p
    1. The coder's last commit is fetched from the clone into the source repository's object store. No ref, branch or config is made.
    2. `runtime.outside.write("github.create_pr", ...)` runs for the judge's manifest, with the judge's row as the parent. It pushes `factory/<pipeline_run_id>` from the source repository and opens the pull request.
    3. The item moves to `in_review`, with the pull request's URL in the reason.
-7. **End.** Every end after preflight other than a shipped change moves the item to `blocked`, in a `finally` block. This covers a stop, a budget stop and a crash. The reason is `<ErrorClass>: <message>; report <path>`. The container and the clone are removed however the run ends, and the report is written last.
+7. **End.** Every end after preflight other than a shipped change moves the item out of `in_progress`, in a `finally` block. A stop a person can answer (a `blocked` coder, a budget stop, a second request for changes, a coder that changed nothing, or a failed check) writes an escalation record and moves the item to `escalated` in one step, through `runtime.escalations.escalate`. Every other stop, and a crash, moves it to `blocked`, and so does a stop whose record cannot be written, with the report's `board_error` saying why. The reason is `<ErrorClass>: <message>; report <path>` either way. [CONVENTIONS.md](CONVENTIONS.md#escalations) has the table of every stop and where it goes. The report's `escalation` is the record's id, or null. The container and the clone are removed however the run ends, and the report is written last.
 
 The pull request's body holds the ticket's body, its acceptance criteria, the coder's summary and the line ``Work item `wi-<n>`.``. `github.create_pr` adds the pipeline run id and its marker below that.
 
@@ -93,7 +93,7 @@ The check's steps run at these points of the loop:
    - More uncovered production statements than before ends with `CoverageDroppedError`. The message gives both counts and both percentages.
    - Coverage measured before but not after ends with `CoverageUnmeasuredError`.
 
-Every refusal is a `BehaviourError` and a stop like the others: exit 1, the item `blocked` with the error class and message in the reason, and the report written with the round as far as it ran.
+Every refusal is a `BehaviourError` and a stop like the others: exit 1, the error class and message in the reason, and the report written with the round as far as it ran. `BaselineNotGreenError` moves the item to `blocked`, because the repository needs fixing before any coder runs; the other four are about the coder's change and move it to `escalated` with trigger `check_failed`.
 
 ### How coverage is measured
 
@@ -140,12 +140,12 @@ The report is `<pipeline_run_id>.json` in `--out-dir`, the same document `--json
 | Code | When |
 | --- | --- |
 | 0 | The pull request was opened, or in a dry run would have been |
-| 1 | The run stopped: `ChangesRequestedError`, `CoderBlockedError`, `SuiteFailedError`, `FileWriteRefusedError`, a `BehaviourError` of a `refactor` run (`BaselineNotGreenError`, `TestFileChangedError`, `BehaviourChangedError`, `CoverageDroppedError`, `CoverageUnmeasuredError`), `BuildError` (nothing changed, or the fetch failed), `BudgetExceeded`, or an outside write that was refused or failed |
+| 1 | The run stopped: `ChangesRequestedError`, `CoderBlockedError`, `SuiteFailedError`, `FileWriteRefusedError`, a `BehaviourError` of a `refactor` run (`BaselineNotGreenError`, `TestFileChangedError`, `BehaviourChangedError`, `CoverageDroppedError`, `CoverageUnmeasuredError`), `NoChangeError` (nothing changed), `BuildError` (the fetch failed), `BudgetExceeded`, or an outside write that was refused or failed |
 | 2 | Usage: a bad option, an item that is not `ready`, a kind the loop does not take, uncommitted changes, an `origin` that is missing, not on github.com or not the ticket's repository, a `--repo` that is not the ticket's path, a `--work-dir` that is not a directory or has a `:` in its path, an `--out-dir` that cannot be made |
 | 3 | An unknown work item, agent, version or ref, or a `--repo` that does not exist |
 | 4 | `ANTHROPIC_API_KEY` or `GH_TOKEN` not set, Docker missing or unreachable, or the sandbox image absent |
 
-Codes 2, 3 and 4 come from preflight, so the item is untouched and no report is written. On code 1 the item is `blocked` (unless it was a dry run) and the report says why.
+Codes 2, 3 and 4 come from preflight, so the item is untouched and no report is written. On code 1 the item is `escalated` or `blocked` (unless it was a dry run) and the report says why.
 
 ## Tests
 
@@ -159,7 +159,7 @@ FACTORY_LIVE=1 uv run pytest tests/live/test_build_loop_live.py -m "live and liv
 
 ## Known limits
 
-- Every stop moves the item to `blocked`. Once escalations exist (#93), a stop that a person's answer can settle, such as a `blocked` coder, a budget stop or a second request for changes, will go to `escalated` instead.
+- A contradiction between the ticket and the code is detected only when the coder changes nothing. A coder that changes the code against the ticket's intent is caught by the suite and the panel, not by an escalation.
 - A killed process leaves the item `in_progress`. A person moves it back to `ready`.
 - The second round starts from the first round's commit in the same clone and is reviewed as one diff from `ref`. Nothing checks that the coder addressed each finding beyond the panel's second review.
 - The coder's tests are not checked to fail before its change. The suite and the panel are the checks.
