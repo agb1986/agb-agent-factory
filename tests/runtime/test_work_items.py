@@ -387,7 +387,7 @@ def test_a_store_on_the_older_migrations_upgrades_and_keeps_its_rows(tmp_path: P
         store = WorkItems(new, now=Clock())
         item = store.add(TICKET)
         store.link_run(item.id, "p1")
-        assert new.schema_version() == len(MIGRATIONS) == 5
+        assert new.schema_version() == len(MIGRATIONS) == 8
         assert store.cost_usd(item.id) == 0.5
     with Trace(path) as reopened:
         assert WorkItems(reopened).get("wi-1").pipeline_run_ids == ("p1",)

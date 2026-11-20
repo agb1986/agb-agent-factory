@@ -23,17 +23,20 @@ from factory import cli
 from factory.cli import main
 from factory.exit import ExitCode
 from fixtures.build import build
-from pipelines import build_loop, fix_loop, incident, plan_loop, review_panel, triage
+from pipelines import build_loop, fix_loop, hotfix, incident, plan_loop, review_panel, triage
 from registry import AgentRef
 from registry.common_schemas import Ticket
 from registry.spec import LLMSpec
 from runtime import run_once
+from runtime.escalations import AgentOutput, escalate, store_summary
 from runtime.trace import Trace, TraceRow
 from runtime.work_items import WorkItems
 from tests.gh_fake import FakeGh, github_repo
 from tests.pipelines.test_build_loop import FULL, PULL_JSON, REPO_JSON, BuildRunner
 from tests.pipelines.test_build_loop import _ticket as build_ticket
 from tests.pipelines.test_fix_loop import FINDING, FakeSandbox, FixRunner
+from tests.pipelines.test_hotfix import SequencedSandbox, hotfix_repo, hotfix_ticket, route_gh
+from tests.pipelines.test_hotfix import _runner as hotfix_runner
 from tests.pipelines.test_incident import FakeSandbox as IncidentSandbox
 from tests.pipelines.test_incident import IncidentRunner
 from tests.pipelines.test_incident import _event as incident_event
@@ -368,6 +371,38 @@ def test_build_json(
     golden("build", _normalised(json.loads(text)))
 
 
+def test_hotfix_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    golden: Golden,
+) -> None:
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(tmp_path / "traces.duckdb"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(hotfix, "run", hotfix_runner())
+    monkeypatch.setattr(hotfix, "run_jev", FakeJev())
+    monkeypatch.setattr(hotfix, "DockerSandbox", SequencedSandbox)
+    route_gh(FakeGh(tmp_path, monkeypatch))
+    repo = hotfix_repo(tmp_path)
+    with Trace(tmp_path / "traces.duckdb") as trace:
+        items = WorkItems(trace)
+        item = items.add(hotfix_ticket())
+        items.ready()
+    out, work = tmp_path / "out", tmp_path / "work"
+    work.mkdir()
+    argv = ["hotfix", item.id, "--repo", str(repo.root), "--out-dir", str(out)]
+    assert main([*argv, "--work-dir", str(work), "--allow-unpublished", "--json"]) == ExitCode.OK
+    raw = json.loads(capsys.readouterr().out)
+    # The run id is in the branch and the body, the paths are under tmp_path, the commits are dated
+    # now and the pull request opens now, so the time from the event to it grows by the second.
+    raw["timing"] |= {"pr_opened_at": "<now>", "time_to_pr_seconds": 0}
+    text = json.dumps(raw).replace(raw["pipeline_run_id"], "pipeline-run-1")
+    for commit in (raw["reproduction"]["commit"], raw["fix"]["commit"]):
+        text = text.replace(commit, "<commit>")
+    text = text.replace(raw["head"], "<head>").replace(str(tmp_path), "<tmp>")
+    golden("hotfix", _normalised(json.loads(text)))
+
+
 # --- cost
 
 COST_T0 = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
@@ -452,6 +487,95 @@ def test_ticket_show_json(
                 )
             )  # fmt: skip
     golden("ticket-show", _run(["ticket", "show", "wi-2", "--json"], capsys))
+
+
+# --- escalations
+
+
+def _seed_escalation(path: Path, *, summary: bool = False) -> None:
+    """Escalate one item into the store at `path`, with a stored summary when `summary`."""
+    clock = iter(COST_T0 + timedelta(minutes=minute) for minute in range(1, 100))
+    ticket = build_ticket()
+    with Trace(path) as trace:
+        store = WorkItems(trace, now=lambda: next(clock))
+        item_id = store.add(ticket).id
+        store.move(item_id, "ready", "approved")
+        store.move(item_id, "in_progress", "picked", actor=build_loop.ACTOR,
+                   pipeline_run_id="pipe-1")  # fmt: skip
+        store.link_run(item_id, "pipe-1")
+        trace.record(
+            TraceRow(
+                run_id="run-a", pipeline_run_id="pipe-1", agent_ref="feature-coder@0.1.0",
+                kind="llm", started_at=COST_T0, duration_ms=900, input_json={}, cost_usd=0.25,
+            )
+        )  # fmt: skip
+        escalate(
+            trace,
+            item_id,
+            trigger="blocked_output",
+            question="The coder cannot build the ticket as written: Which module?.\n\n"
+            "What should it do?",
+            reason="CoderBlockedError: the coder is blocked on wi-1",
+            actor=build_loop.ACTOR,
+            pipeline_run_id="pipe-1",
+            diff="--- a/widgets.py\n+++ b/widgets.py\n@@ -1 +1 @@\n-LIMIT = 5\n+LIMIT = 10\n",
+            agent_outputs=[
+                AgentOutput("feature-coder@0.1.0", "run-a", '{"blocked": true}'),
+                AgentOutput("review panel", None, '{"ship": false}'),
+            ],
+            suite_tail="1 failed in 0.02s\n",
+            now=lambda: next(clock),
+        )
+        if summary:
+            store_summary(
+                trace,
+                "esc-1",
+                {
+                    "paragraph": "wi-1 stopped because the coder cannot tell which module the"
+                    " ticket means, and LIMIT is already changed in widgets.py.",
+                    "options": [
+                        {
+                            "label": "Name the module and run again",
+                            "takes": "another_run",
+                            "cost": "Another coder and panel run.",
+                            "evidence": "Which module?",
+                        },
+                        {
+                            "label": "Drop the change",
+                            "takes": "drop_work",
+                            "cost": "The LIMIT change is thrown away; $0.25 has been spent.",
+                            "evidence": "-LIMIT = 5\n+LIMIT = 10",
+                        },
+                    ],
+                },
+                run_id="run-summary",
+                agent_ref="escalation-summary@0.1.0",
+                now=lambda: next(clock),
+            )
+
+
+def test_escalation_show_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    golden: Golden,
+) -> None:
+    path = tmp_path / "traces.duckdb"
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(path))
+    _seed_escalation(path)
+    golden("escalation-show", _run(["escalations", "show", "esc-1", "--json"], capsys))
+
+
+def test_escalation_show_json_with_a_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    golden: Golden,
+) -> None:
+    path = tmp_path / "traces.duckdb"
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(path))
+    _seed_escalation(path, summary=True)
+    golden("escalation-show-summary", _run(["escalations", "show", "esc-1", "--json"], capsys))
 
 
 # --- deps

@@ -15,10 +15,13 @@ fixed values, and compares the result to `tests/golden/<name>.json`.
 | `fix.json` | `factory fix <repo> --finding <json> --json` |
 | `incident.json` | `factory incident <repo> --event <json> --json` |
 | `build.json` | `factory build wi-1 --repo <repo> --json`, on a ready item |
+| `hotfix.json` | `factory hotfix wi-1 --repo <repo> --json`, on a ready incident item |
 | `plan.json` | `factory plan <repo> --prd @file --approve --json`, after a first `--idea` run |
 | `cost.json` | `factory cost --since 2026-10-20 --json` |
 | `cost-by-kind.json` | `factory cost --since 2026-10-20 --by kind --json` |
 | `ticket-show.json` | `factory ticket show wi-2 --json`, on a seeded store |
+| `escalation-show.json` | `factory escalations show esc-1 --json`, on a seeded store |
+| `escalation-show-summary.json` | `factory escalations show esc-1 --json`, on a seeded store whose record has a stored summary |
 | `deps.json` | `factory deps <repo> --impact pkg/b.py --json` |
 | `run.json` | `factory run answerer@^0.1 --input payload.json --json`, on a test agent |
 
@@ -62,6 +65,13 @@ replaces the repository path, which appears twice, and the report path.
 `acme/widgets`, with the fake coder of `tests/pipelines/test_build_loop.py` (`BuildRunner`), the
 fake panel, `FakeSandbox` and the fake `gh`. Its test also replaces the pipeline run id inside the
 branch and the body, the commits and the paths under `tmp_path`.
+
+`hotfix.json` runs `factory hotfix` on the ticket of `incident.json`, pointed at a repository
+whose `origin` is the fake `acme/widgets` and which holds the `reviews` package the ticket names
+(`hotfix_repo` in `tests/pipelines/test_hotfix.py`). The fixer and the panel are fakes, the sandbox
+answers the reproduction run with the event's failure and then the suite with a pass, and the fake
+`gh` lists a `hotfix` label. Its test also replaces the pipeline run id, the commits, the paths
+under `tmp_path`, the time the pull request opened and the time from the event to it.
 
 `cost.json` is built from a seeded trace store, not from a fake model; `tests/runtime/golden/`
 holds the same report as text and grouped by pipeline.

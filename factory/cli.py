@@ -285,7 +285,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="print one JSON document instead of text"
     )
     _add_ticket_parser(sub)
+    _add_escalations_parser(sub)
     _add_build_parser(sub)
+    _add_hotfix_parser(sub)
     return parser
 
 
@@ -415,6 +417,49 @@ def _add_ticket_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     )
 
 
+def _add_escalations_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add `factory escalations` and its three subcommands to `sub`."""
+    parser = sub.add_parser(
+        "escalations",
+        help="list, show and answer the questions stopped pipelines asked",
+        epilog="example: factory escalations list --open --json",
+    )
+    esub = parser.add_subparsers(dest="escalations_command")
+
+    def child(name: str, help: str, example: str) -> argparse.ArgumentParser:
+        child_parser = esub.add_parser(name, help=help, epilog=f"example: {example}")
+        child_parser.add_argument(
+            "--json", action="store_true", help="print one JSON document instead of text"
+        )
+        return child_parser
+
+    list_parser = child(
+        "list", "list escalation records, oldest first", "factory escalations list --open --json"
+    )
+    list_parser.add_argument("--open", action="store_true", help="only records not yet answered")
+    show = child(
+        "show",
+        "print one record as Markdown: the question, the run, the diff and the last outputs",
+        "factory escalations show esc-1",
+    )
+    show.add_argument("id", help="the escalation id, `esc-<n>`")
+    answer = child(
+        "answer",
+        "answer a record; the last open answer moves the item to ready for the next run",
+        'factory escalations answer esc-1 --text "Put it in widgets.py." --json',
+    )
+    answer.add_argument("id", help="the escalation id, `esc-<n>`")
+    given = answer.add_mutually_exclusive_group(required=True)
+    given.add_argument(
+        "--text", metavar="TEXT|@FILE", help="the answer, or @ and a file holding it"
+    )
+    given.add_argument(
+        "--from-issue",
+        action="store_true",
+        help="take the latest reply by a collaborator on the ticket's GitHub issue",
+    )
+
+
 def _add_build_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """Add `factory build` to `sub`."""
     build_parser = sub.add_parser(
@@ -454,6 +499,47 @@ def _add_build_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     )
 
 
+def _add_hotfix_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add `factory hotfix` to `sub`."""
+    hotfix_parser = sub.add_parser(
+        "hotfix",
+        help="fix one reproduced incident ticket and open its `hotfix` pull request; "
+        "a person merges and deploys",
+        epilog="example: factory hotfix wi-4 --repo . --dry-run --json",
+    )
+    hotfix_parser.add_argument(
+        "id", help="the work item id, `wi-<n>`; a ready, reproduced incident ticket"
+    )
+    hotfix_parser.add_argument(
+        "--repo",
+        help="the git repository to fix; it gains objects but no branch or tag "
+        "(default: the ticket's repo when it is a path, else the working directory)",
+    )
+    hotfix_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="run every agent but open no pull request and move no work item",
+    )
+    hotfix_parser.add_argument("--out-dir", help="where the report goes (default: data/hotfixes)")
+    hotfix_parser.add_argument(
+        "--work-dir",
+        help="directory for the throwaway clone (default: the system temporary directory)",
+    )
+    hotfix_parser.add_argument(
+        "--budget-usd",
+        type=float,
+        help="stop the run once it has spent this many dollars (default: the pipeline default)",
+    )
+    hotfix_parser.add_argument(
+        "--json", action="store_true", help="print one JSON document on stdout instead of text"
+    )
+    hotfix_parser.add_argument(
+        "--allow-unpublished",
+        action="store_true",
+        help="also use agent versions that have not passed `factory publish-check`",
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the `factory` command and return its exit code.
 
@@ -483,6 +569,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _plan(args)
         if args.command == "build":
             return _build(args)
+        if args.command == "hotfix":
+            return _hotfix(args)
         if args.command == "incident":
             return _incident(args)
         if args.command == "run":
@@ -495,6 +583,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _deps(args)
         if args.command == "ticket" and args.ticket_command:
             return _ticket(args)
+        if args.command == "escalations" and args.escalations_command:
+            return _escalations(args)
     except Exception as exc:  # noqa: BLE001 - the root handler maps every failure to a code
         return _fail(exc, as_json=getattr(args, "json", False))
     parser.print_usage(sys.stderr)
@@ -626,6 +716,22 @@ def _build(args: argparse.Namespace) -> int:
     )
 
 
+def _hotfix(args: argparse.Namespace) -> int:
+    """Fix one reproduced incident and open its `hotfix` pull request; the report goes to stdout."""
+    from pipelines.hotfix import command  # imported here: it pulls in the Anthropic SDK
+
+    return command(
+        args.id,
+        repo=args.repo,
+        dry_run=args.dry_run,
+        out_dir=args.out_dir,
+        work_dir=args.work_dir,
+        budget_usd=args.budget_usd,
+        as_json=args.json,
+        allow_unpublished=args.allow_unpublished,
+    )
+
+
 def _incident(args: argparse.Namespace) -> int:
     """Diagnose one Sentry event at its release and file an incident ticket."""
     from pipelines.incident import command  # imported here: it pulls in the Anthropic SDK
@@ -692,6 +798,17 @@ def _ticket(args: argparse.Namespace) -> int:
     if args.ticket_command == "link":
         return ticket.link(args.id, args.pipeline_run_id, as_json=args.json)
     return ticket.ready(as_json=args.json)
+
+
+def _escalations(args: argparse.Namespace) -> int:
+    """Run one `factory escalations` subcommand against the trace store's records."""
+    from runtime import escalations_cli
+
+    if args.escalations_command == "list":
+        return escalations_cli.list_records(open_only=args.open, as_json=args.json)
+    if args.escalations_command == "show":
+        return escalations_cli.show(args.id, as_json=args.json)
+    return escalations_cli.answer(args.id, args.text, from_issue=args.from_issue, as_json=args.json)
 
 
 def _fail(exc: Exception, *, as_json: bool) -> int:

@@ -4,8 +4,9 @@ An agent that writes tests or fixes code is graded on the work tree it left behi
 says. `check_run` runs pytest in the offline sandbox (`tools.sandbox.run_in_sandbox`) over that
 tree and compares the outcome with a case's `expected.run`: the new tests fail or pass, they pass
 once the fixture is put back to its `base` state, the whole suite passes, production code and
-test files changed or did not, the tests add line coverage (`evals.coverage`), and the public names
-and signatures of chosen files are the same as at HEAD (`evals.public_api`). It returns the
+test files changed or did not, the tests add line coverage (`evals.coverage`), the public names
+and signatures of chosen files are the same as at HEAD (`evals.public_api`), and the docs and
+docstrings of chosen files have not drifted from their code (`evals.doc_drift`). It returns the
 failures as strings and never calls a model; the caller (`evals.graders.grade`) merges them with
 the other deterministic checks.
 
@@ -22,6 +23,7 @@ from typing import Any
 
 from evals.cases import ExpectedCoverage, ExpectedRun
 from evals.coverage import CoverageError, coverage_delta, measure_coverage, restore_head
+from evals.doc_drift import check_doc_drift
 from evals.public_api import check_public_api
 from fixtures.build import BASE_REF
 from tools._common import (
@@ -101,6 +103,8 @@ def check_run(expected: ExpectedRun, actual: Mapping[str, Any], repo_path: str |
     failures.extend(_check_changes(expected, root))
     if expected.public_api is not None:
         failures.extend(check_public_api(root, expected.public_api))
+    if expected.doc_drift is not None:
+        failures.extend(_check_doc_drift(expected, root))
     if expected.new_tests is not None:
         try:
             files = _test_files(root, actual.get("test_files"))
@@ -117,6 +121,17 @@ def check_run(expected: ExpectedRun, actual: Mapping[str, Any], repo_path: str |
     if expected.coverage is not None:
         failures.extend(_check_coverage(expected.coverage, root))
     return failures
+
+
+def _check_doc_drift(expected: ExpectedRun, root: Path) -> list[str]:
+    drift = expected.doc_drift
+    if drift is None:
+        return []
+    try:
+        changed = changed_files(root)
+    except ToolError as exc:
+        return [exc.message]
+    return check_doc_drift(root, drift.paths, drift.docs, changed)
 
 
 def _check_coverage(expected: ExpectedCoverage, root: Path) -> list[str]:

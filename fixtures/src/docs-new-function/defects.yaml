@@ -1,0 +1,17 @@
+fixture: docs-new-function
+summary: >-
+  Adds the public slugify to textkit/words.py with no docstring, and the README does not mention
+  it.
+defects:
+  - id: slugify-undocumented
+    file: textkit/words.py
+    line_start: 13
+    line_end: 17
+    severity: minor
+    category: documentation
+    title: New public function slugify has no docstring and no README entry
+    snippet: 'def slugify(text: str, sep: str = "-") -> str:'
+    description: >-
+      slugify is public and joins the words of a text with sep, raising ValueError when the text
+      has no words, but nothing says so: it has no docstring and the README describes only words.
+      A docstring and a README entry with the separator and the error close the gap.

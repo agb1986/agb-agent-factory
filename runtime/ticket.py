@@ -161,6 +161,8 @@ def _text(item: WorkItem, document: dict[str, Any]) -> str:
     lines.append(f"cost so far: ${document['cost_usd']:.4f}")
     if item.pipeline_run_ids:
         lines.append(f"pipeline runs: {', '.join(item.pipeline_run_ids)}")
+    if item.issue_number is not None:
+        lines.append(f"issue: #{item.issue_number} on {item.repo}")
     lines.append("acceptance:")
     lines.extend(f"  - {criterion}" for criterion in item.acceptance)
     if item.body:

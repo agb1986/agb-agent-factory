@@ -1,0 +1,17 @@
+fixture: docs-new-module
+summary: >-
+  Adds the module units/mass.py with POUNDS_PER_KILOGRAM, kg_to_lb and lb_to_kg, none with a
+  docstring, and the README covers only units.length.
+defects:
+  - id: mass-module-undocumented
+    file: units/mass.py
+    line_start: 1
+    line_end: 13
+    severity: minor
+    category: documentation
+    title: New module units/mass.py has no docstrings and no README section
+    snippet: "def kg_to_lb(kilograms: float) -> float:"
+    description: >-
+      The module, its constant and both conversions have no docstrings, and the README lists only
+      the length conversions, so nothing says that both functions refuse a negative mass with
+      ValueError.

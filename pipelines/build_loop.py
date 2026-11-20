@@ -19,7 +19,9 @@ work item. The flow (docs/build-loop.md has the options and outputs):
    sandbox; a failure ends the run with `SuiteFailedError`. A kind with a check in `KIND_CHECKS`
    adds its own: for `refactor`, `pipelines.behaviour.BehaviourCheck` probes the suite before the
    coder's first round and after each passing suite, and refuses a change to a test, to a test's
-   state or to coverage with its own `BehaviourError`.
+   state or to coverage with its own `BehaviourError`. For `docs`, `pipelines.docs_check.DocsCheck`
+   refuses a round that changed source code outside its comments and docstrings with its own
+   `DocsCheckError`.
 5. The review panel reviews the change from the ticket's `ref` to the coder's commit. When it asks
    for changes the coder runs once more, with the merged findings appended to the ticket, and steps
    3 to 5 repeat. A second request for changes ends the run with `ChangesRequestedError`.
@@ -30,11 +32,20 @@ work item. The flow (docs/build-loop.md has the options and outputs):
    and no tag, though git may record the remote-tracking ref
    `refs/remotes/origin/factory/<pipeline_run_id>` for the push, depending on the git version.
 
-Every other end, a stop or a crash, moves the item to `blocked` in a `finally` block, with
-`<ErrorClass>: <message>` and the report's path as the reason. A dry run (`dry_run=True`) runs
-every step, reads included, but makes no outside write and moves no item; it still links the run,
-so the item's cost counts it. The report carries the planned pull request with a null `url`. The report, `<pipeline run id>.json`, is written last, however the run ended
-after preflight.
+Every other end is settled in a `finally` block, with `<ErrorClass>: <message>` and the report's
+path as the reason. A stop a person can answer (`stop_trigger`, the table in docs/CONVENTIONS.md,
+Escalations) writes an escalation record and moves the item to `escalated` in one step
+(`runtime.escalations.escalate`); any other stop or crash moves it to `blocked`. Right after the
+record is written, `runtime.after_escalation.after_escalation` runs once: the escalation-summary
+agent summarises the record under the run's budget, and the summary is stored with the record when
+it passes its check. A summary that is skipped or fails changes nothing else. A run after an
+answer gets the answers in its ticket body (`runtime.escalations.ticket_for_run`).
+
+A dry run (`dry_run=True`) runs every step, reads included, but makes no outside write and moves no item; it still links the run,
+so the item's cost counts it. The report carries the planned pull request with a null `url`, and
+the change it would have opened is written as `<pipeline run id>.patch`, which `git apply` takes at
+the ticket's `ref`, next to the report; the pull request's `patch` names it. The report,
+`<pipeline run id>.json`, is written last, however the run ended after preflight.
 """
 
 import dataclasses
@@ -54,7 +65,21 @@ from pydantic import BaseModel
 
 from evals.graders.sandbox_tests import PYTEST
 from factory.exit import AuthOrConfigError, ExitCode, FactoryError, UsageError
-from pipelines.behaviour import BehaviourCheck, KindCheck
+from pipelines.behaviour import (
+    BehaviourChangedError,
+    BehaviourCheck,
+    CoverageDroppedError,
+    CoverageUnmeasuredError,
+    KindCheck,
+    TestFileChangedError,
+)
+from pipelines.docs_check import (
+    CodeChangedError,
+    DocsCheck,
+    SourceFileActionError,
+    UncheckedFileError,
+    UnparsableSourceError,
+)
 from pipelines.file_policy import GUARDED_TOOL, FilePolicy, FilePolicyGuard, check_changed
 from pipelines.ids import new_pipeline_run_id
 from pipelines.review_panel import JevRunner, Panel, PanelResult, Runner, resolve_panel, run_panel
@@ -65,12 +90,19 @@ from pipelines.sandbox import (
     checkout,
     clean,
     commit_all,
+    diff_patch,
     require_clean,
 )
 from registry.common_schemas import Ticket
 from registry.resolver import resolve
 from registry.spec import FilesSpec, LLMSpec
-from runtime.budget import DEFAULT_BUDGET_USD, Budget
+from runtime.after_escalation import (
+    AfterEscalation,
+    after_escalation,
+    resolve_summary_agent,
+)
+from runtime.budget import DEFAULT_BUDGET_USD, Budget, BudgetExceeded
+from runtime.escalations import AgentOutput, Trigger, escalate, ticket_for_run
 from runtime.jev_runner import run_jev
 from runtime.outside import OutsideContext, write
 from runtime.runner import API_KEY_ENV, run
@@ -87,15 +119,18 @@ CODERS: Mapping[str, tuple[str, str]] = {
     "feature": FEATURE_CODER,
     "bug": FEATURE_CODER,
     "refactor": ("refactorer", "^0.1"),
-    "docs": FEATURE_CODER,  # until the docs writer (#97) exists
+    "docs": ("documentation-agent", "^0.1"),
 }
 """The coder for each ticket kind the build loop takes (docs/CONVENTIONS.md, Work items)."""
 
-KIND_CHECKS: Mapping[str, Callable[[], KindCheck]] = {"refactor": BehaviourCheck}
+KIND_CHECKS: Mapping[str, Callable[[], KindCheck]] = {
+    "refactor": BehaviourCheck,
+    "docs": DocsCheck,
+}
 """The extra checks a ticket kind's rounds go through, made once per run (`pipelines.behaviour`)."""
 
 OTHER_KINDS: Mapping[str, str] = {
-    "incident": "an incident goes to `factory hotfix` (#109), not the build loop",
+    "incident": "an incident goes to `factory hotfix`, which fixes it against its reproduction test",
     "research": "research has no pipeline: run the research agent with `factory run`",
 }
 """Where each ticket kind the build loop refuses goes instead."""
@@ -139,12 +174,92 @@ class ChangesRequestedError(BuildError):
     """The panel asked for changes twice, so the change does not ship."""
 
 
+class NoChangeError(BuildError):
+    """The coder changed nothing: the code at the ticket's ref may already do what it asks."""
+
+
+ESCALATE_ON: tuple[tuple[type[FactoryError], Trigger], ...] = (
+    (CoderBlockedError, "blocked_output"),
+    (BudgetExceeded, "budget"),
+    (ChangesRequestedError, "changes_requested"),
+    (NoChangeError, "contradiction"),
+    (SuiteFailedError, "check_failed"),
+    (FileWriteRefusedError, "check_failed"),
+    (TestFileChangedError, "check_failed"),
+    (BehaviourChangedError, "check_failed"),
+    (CoverageDroppedError, "check_failed"),
+    (CoverageUnmeasuredError, "check_failed"),
+    (CodeChangedError, "check_failed"),
+    (UnparsableSourceError, "check_failed"),
+    (SourceFileActionError, "check_failed"),
+    (UncheckedFileError, "check_failed"),
+)
+"""The stops a person can answer and the escalation trigger of each; every other stop is `blocked`.
+
+docs/CONVENTIONS.md (Escalations) has the full table, with the reason for each row.
+"""
+
+
+def stop_trigger(
+    exc: BaseException,
+    table: Sequence[tuple[type[FactoryError], Trigger]] = ESCALATE_ON,
+) -> Trigger | None:
+    """Return the escalation trigger for a stop on `exc`, or None when the item goes to `blocked`.
+
+    The first row of `table` (default `ESCALATE_ON`) whose class `exc` is an instance of wins, so a
+    subclass of a listed error escalates the same way. The hotfix pipeline passes its own table.
+    """
+    for cls, trigger in table:
+        if isinstance(exc, cls):
+            return trigger
+    return None
+
+
+def escalation_question(
+    exc: FactoryError, trigger: Trigger, rounds: Sequence[Mapping[str, Any]]
+) -> str:
+    """Return the question an escalation for a stop on `exc` asks a person.
+
+    It names what stopped the run and what a person can decide. For `blocked_output` it adds the
+    coder's `blocked_reason` and `open_questions` from the last round.
+    """
+    coder = (rounds[-1].get("coder") or {}) if rounds else {}
+    output = coder.get("output") or {}
+    lines = [f"{exc.message}."]
+    if trigger == "blocked_output":
+        lines = [f"The coder cannot build the ticket as written: {exc.hint or 'no reason given'}."]
+        lines += [f"- {q}" for q in output.get("open_questions") or [] if str(q).strip()]
+        lines.append("What should it do?")
+    elif trigger == "budget":
+        lines.append("Should the next run get a bigger budget, or should the ticket be cut down?")
+    elif trigger == "changes_requested":
+        lines.append(
+            "The panel's findings are in the outputs below. Which of them should the next run "
+            "address, and how?"
+        )
+    elif trigger == "contradiction":
+        lines.append(
+            "The ticket asks for a change, but the coder made none, so the code at the ticket's "
+            "ref may already do what it asks. Is the ticket still needed, and what is missing?"
+        )
+    else:
+        if exc.hint:
+            lines.append(exc.hint)
+        lines.append("How should the next run get past this check?")
+    return "\n\n".join(lines)
+
+
 @dataclass(frozen=True, slots=True)
 class BuildAgents:
-    """The resolved agents of one build run: the coder for the ticket's kind and the panel."""
+    """The resolved agents of one build run: the coder for the ticket's kind and the panel.
+
+    `summary` is the escalation-summary agent, or None when no version of it resolves; a stop
+    then gets its escalation record without a summary.
+    """
 
     coder: LLMSpec
     panel: Panel
+    summary: LLMSpec | None = None
 
 
 def coder_for(kind: str) -> tuple[str, str]:
@@ -179,7 +294,9 @@ def resolve_build_agents(
     Unless `allow_unpublished` is set, only published versions resolve. Raises `UsageError` for a
     kind the build loop does not take, and when the coder is not an LLM agent sandboxed offline or
     has no action guard or no `files` policy; the resolver's `NotFoundError` subclasses (exit 3)
-    when an agent or version is missing.
+    when an agent or version is missing. The escalation-summary agent (`SUMMARY_AGENT`) is
+    optional: when it does not resolve, or is not an LLM agent, `summary` is None and the build
+    runs without summaries.
     """
     name, version_range = coder_for(kind)
     spec = resolve(name, version_range, published_only=not allow_unpublished, trace_path=trace_path)
@@ -197,7 +314,11 @@ def resolve_build_agents(
         )
     _coder_files(spec)
     panel = resolve_panel(allow_unpublished=allow_unpublished, trace_path=trace_path)
-    return BuildAgents(coder=spec, panel=panel)
+    return BuildAgents(
+        coder=spec,
+        panel=panel,
+        summary=resolve_summary_agent(allow_unpublished=allow_unpublished, trace_path=trace_path),
+    )
 
 
 def _coder_files(coder: LLMSpec) -> FilesSpec:
@@ -268,6 +389,8 @@ class BuildResult:
             lines.append(f"pull request {pull['url']}")
         elif pull is not None:
             lines.append(f"dry run: would open a pull request from {pull['branch']}")
+            if pull.get("patch") is not None:
+                lines.append(f"patch {pull['patch']}")
         if doc["stopped"] is not None:
             lines.append(f"stopped: {doc['stopped']['message']}")
             if doc["stopped"]["hint"]:
@@ -432,9 +555,15 @@ def run_build(
     the ticket's repository, a `repo_path` that is not the ticket's, or a bad `work_dir` or
     `out_dir`; the sandbox's `ToolUnavailableError` (exit 4) before any agent runs.
 
-    After that nothing is raised for a `FactoryError`: the run stops, the item moves to `blocked`
-    (not in a dry run) and the result carries the stop and its exit code. Any other exception is
-    recorded the same way and then raised. The report `<pipeline run id>.json` goes to `out_dir`
+    After that nothing is raised for a `FactoryError`: the run stops and the result carries the
+    stop and its exit code. Unless it is a dry run, a stop `stop_trigger` names writes an
+    escalation record and moves the item to `escalated`; any other end moves it to `blocked`, and
+    so does a stop whose escalation cannot be written. The report's `escalation` is the record's
+    id, or null. After the record is written, `after_escalation` runs once under `budget` and the
+    report's `after_escalation` says what it did (the summary's run id, or why there is none), or
+    is null when no record was written; it never changes the item's state or the result's code.
+    The coder gets the ticket with the answers to earlier escalations appended. Any
+    other exception is recorded the same way and then raised. The report `<pipeline run id>.json` goes to `out_dir`
     on every end after preflight. Every agent call and the outside write share `pipeline_run_id`
     and are charged to `budget` (default: `DEFAULT_BUDGET_USD`). The result's code is 0 when the
     pull request was opened, or would have been in a dry run.
@@ -478,6 +607,10 @@ def run_build(
     pull: dict[str, Any] | None = None
     stopped: dict[str, Any] | None = None
     board_error: dict[str, Any] | None = None
+    escalation: str | None = None
+    after: AfterEscalation | None = None
+    stop_exc: FactoryError | None = None
+    workspace: dict[str, str] = {}
     shipped = False
     try:
         items.link_run(item.id, run_id)
@@ -486,7 +619,7 @@ def run_build(
         pull = _build(
             agents,
             item,
-            ticket,
+            ticket_for_run(trace, item),
             depends_on,
             trace,
             root=root,
@@ -499,8 +632,13 @@ def run_build(
             run_id=run_id,
             budget=budget,
             rounds=rounds,
+            workspace=workspace,
         )
-        if not dry_run:
+        if dry_run:
+            patch_path = out / f"{run_id}.patch"
+            patch_path.write_bytes(diff_patch(root, head_sha, pull["commit"]))
+            pull["patch"] = str(patch_path)
+        else:
             items.move(
                 item.id,
                 "in_review",
@@ -513,6 +651,7 @@ def run_build(
         stopped = _stop_json(exc)
         if not isinstance(exc, FactoryError):
             raise
+        stop_exc = exc
     finally:
         if not dry_run and not shipped:
             cause = (
@@ -520,16 +659,42 @@ def run_build(
                 if stopped is not None
                 else "the build did not finish"
             )
-            try:
-                items.move(
-                    item.id,
-                    "blocked",
-                    f"{cause}; report {report_path}",
-                    actor=ACTOR,
-                    pipeline_run_id=run_id,
-                )
-            except FactoryError as exc:
-                board_error = _stop_json(exc)
+            reason = f"{cause}; report {report_path}"
+            trigger = stop_trigger(stop_exc) if stop_exc is not None else None
+            if stop_exc is not None and trigger is not None:
+                record = None
+                try:
+                    record = escalate(
+                        trace,
+                        item.id,
+                        trigger=trigger,
+                        question=escalation_question(stop_exc, trigger, rounds),
+                        reason=reason,
+                        actor=ACTOR,
+                        pipeline_run_id=run_id,
+                        diff=workspace.get("diff", ""),
+                        agent_outputs=_last_outputs(agents, rounds),
+                        suite_tail=_last_suite_tail(rounds),
+                    )
+                except FactoryError as exc:
+                    board_error = _stop_json(exc)
+                if record is not None:
+                    escalation = record.id
+                    after = after_escalation(
+                        trace,
+                        record,
+                        budget=budget,
+                        pipeline_run_id=run_id,
+                        dry_run=dry_run,
+                        summary_agent=agents.summary,
+                        outside=context,
+                        runner=runner,
+                    )
+            if escalation is None:
+                try:
+                    items.move(item.id, "blocked", reason, actor=ACTOR, pipeline_run_id=run_id)
+                except FactoryError as exc:
+                    board_error = board_error or _stop_json(exc)
         document = {
             "pipeline_run_id": run_id,
             "work_item": {
@@ -547,6 +712,8 @@ def run_build(
             "stopped": stopped,
             "pull_request": pull,
             "board_error": board_error,
+            "escalation": escalation,
+            "after_escalation": after.to_json() if after is not None else None,
             "report_path": str(report_path),
             "total_cost_usd": trace.cost_by_pipeline_run(run_id),
             "duration_ms": round((time.monotonic() - start) * 1000),
@@ -554,6 +721,40 @@ def run_build(
         report_path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     code = ExitCode.OK if stopped is None else ExitCode(stopped["exit_code"])
     return BuildResult(document=document, code=code)
+
+
+def _last_outputs(agents: BuildAgents, rounds: Sequence[Mapping[str, Any]]) -> list[AgentOutput]:
+    """Return the last round's coder answer and panel result, the outputs an escalation keeps."""
+    if not rounds:
+        return []
+    last = rounds[-1]
+    found = []
+    if last.get("coder") is not None:
+        coder = last["coder"]
+        found.append(AgentOutput.of(agents.coder.address, coder["run_id"], coder["output"]))
+    if last.get("panel") is not None:
+        found.append(AgentOutput.of("review panel", None, last["panel"]))
+    return found
+
+
+def _last_suite_tail(rounds: Sequence[Mapping[str, Any]]) -> str:
+    """Return the tail of the last suite run's output, or an empty string when none ran."""
+    for entry in reversed(rounds):
+        if entry.get("suite") is not None:
+            return str(entry["suite"]["output_tail"])
+    return ""
+
+
+def _capture_diff(clone: Path, head_sha: str) -> str:
+    """Return the clone's change from `head_sha`, uncommitted work included, or "" when git fails.
+
+    Called only on a stop, so it commits what is left in the throwaway clone and never raises.
+    """
+    try:
+        sha = commit_all(clone, "work left at the stop")
+        return diff_patch(clone, head_sha, sha).decode("utf-8", errors="replace")
+    except FactoryError:
+        return ""
 
 
 def _build(
@@ -573,10 +774,12 @@ def _build(
     run_id: str,
     budget: Budget,
     rounds: list[dict[str, Any]],
+    workspace: dict[str, str],
 ) -> dict[str, Any]:
     """Run the rounds in a clone and open the pull request; return the report's `pull_request`.
 
-    Appends each round to `rounds` as it goes, so a stop keeps what ran.
+    Appends each round to `rounds` as it goes, so a stop keeps what ran. On a `FactoryError` stop it
+    sets `workspace["diff"]` to the clone's change from `head_sha` before the clone goes.
     """
     coder = agents.coder
     policy = FilePolicy(_coder_files(coder))
@@ -635,7 +838,7 @@ def _build(
                     {"path": path, "action": action} for path, action in changed.items()
                 ]
                 if not changed:
-                    raise BuildError(
+                    raise NoChangeError(
                         f"the coder changed nothing in round {number}",
                         hint="check the ticket still asks for a change at its ref",
                     )
@@ -686,6 +889,9 @@ def _build(
                 agent=agents.panel.judge,
                 context=dataclasses.replace(context, parent_run_id=_judge_run_id(trace, panel)),
             )
+        except FactoryError:
+            workspace["diff"] = _capture_diff(clone, head_sha)
+            raise
         finally:
             sandbox.cleanup(clone)
     return {
@@ -696,6 +902,7 @@ def _build(
         "commit": previous,
         "title": ticket.title,
         "body": done["body"],
+        "patch": None,
     }
 
 

@@ -15,7 +15,10 @@ answer against its criteria; `grade` takes its judge apart too. A `sandbox_tests
 carry `expected.rubric`, for an agent that writes code and prose about it: the rubric's checks run
 after the commands, and its judge scores the prose instead of the LLM judge. A rubric case may also set
 `expected.citations_resolve`: `evals.graders.citations` then fetches the pages the answer cites,
-through the fetcher `grade` is given, and fails the case when a quote is not in its page.
+through the fetcher `grade` is given, and fails the case when a quote is not in its page. A rubric
+case may set `expected.options_in_record` for an escalation summary: every option's evidence must
+be found in the record the payload holds, by `runtime.escalation_summary.ungrounded`, the check
+that also runs before a summary is stored.
 The `incident` grader, `evals.graders.incident`, checks a triage-diagnostics answer: its suspected
 paths must name the planted fault and its reproduction test must fail at the fixture's `head` with
 the event's exception. It needs the repository path too, and calls no judge: an answer that
@@ -34,6 +37,7 @@ from evals.graders.llm_judge import Judge, JudgeVerdict
 from evals.graders.rubric import check_output
 from evals.graders.sandbox_tests import check_run
 from factory.exit import UsageError
+from runtime.escalation_summary import ungrounded
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,7 +144,8 @@ def grade(
     before a judge is called; the pages come from `fetcher`, which defaults to `web.fetch`. A page
     that cannot be fetched or is outside the case's domains raises `CitationCheckError`, not a
     failed grade. Raises `UsageError` when the check is set and `fetcher` and `repo_path` are both
-    None.
+    None. A case with `expected.options_in_record` fails when `ungrounded(actual, case.payload)`
+    finds an option whose evidence is not in the record, or a dollar figure the record lacks.
     """
     if case.grader == "jev" and jev_judge is None:
         raise UsageError("the jev grader needs a jev_judge to grade with")
@@ -159,6 +164,9 @@ def grade(
         checks = Deterministic(checks.passed and not found, (*checks.failures, *found))
     if case.expected.rubric is not None:
         found = check_output(case.expected.rubric, actual, repo_path)
+        checks = Deterministic(checks.passed and not found, (*checks.failures, *found))
+    if case.expected.options_in_record:
+        found = ungrounded(actual, case.payload)
         checks = Deterministic(checks.passed and not found, (*checks.failures, *found))
     if checks.passed and case.expected.citations_resolve is not None:
         if fetcher is None and repo_path is None:

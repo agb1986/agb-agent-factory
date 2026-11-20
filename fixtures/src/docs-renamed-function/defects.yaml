@@ -1,0 +1,27 @@
+fixture: docs-renamed-function
+summary: >-
+  Renames load to read_config in settings/loader.py and its tests, and leaves README.md and
+  docs/format.md naming load.
+defects:
+  - id: readme-names-load
+    file: README.md
+    line_start: 3
+    line_end: 3
+    severity: minor
+    category: documentation
+    title: README still tells the reader to call load
+    snippet: "Call `load` with the path of the file"
+    description: >-
+      load was renamed to read_config, so the README names a function that no longer exists and
+      the example fails with ImportError.
+  - id: format-doc-names-load
+    file: docs/format.md
+    line_start: 4
+    line_end: 4
+    severity: minor
+    category: documentation
+    title: docs/format.md still says load() raises ValueError
+    snippet: "makes `load()` raise `ValueError`"
+    description: >-
+      The format page names the old function; read_config is the one that raises ValueError with
+      the line number now.

@@ -548,7 +548,7 @@ def test_refactor_tickets_go_to_the_guarded_refactorer_with_the_behaviour_check(
     assert refactor_agents.coder.sandbox_profile == "offline"
     assert refactor_agents.coder.guard is not None and refactor_agents.coder.files is not None
     assert KIND_CHECKS["refactor"] is BehaviourCheck
-    assert set(KIND_CHECKS) == {"refactor"}
+    assert set(KIND_CHECKS) == {"refactor", "docs"}
 
 
 def test_a_refactor_that_keeps_behaviour_ships_with_both_probes_in_the_report(
@@ -595,7 +595,7 @@ def test_a_red_baseline_stops_the_run_before_the_refactorer_runs(
         refactor_agents, repo, trace, tmp_path, item_id, runner=runner, sandbox=sandbox
     )
 
-    doc = _stopped(result, trace, item_id, f"keep behaviour: {TESTS[1]}")
+    doc = _stopped(result, trace, item_id, f"keep behaviour: {TESTS[1]}", "blocked")
     assert doc["stopped"]["type"] == "BaselineNotGreenError"
     assert runner.calls == []
     assert len(sandbox.runs) == 1
@@ -684,7 +684,7 @@ def test_the_refactorers_own_policy_refuses_a_test_file_first(
     )
     doc = _stopped(result, trace, item_id, "the coder may not change tests/data.json")
     assert doc["stopped"]["type"] == "FileWriteRefusedError"
-    assert WorkItems(trace).get(item_id).status == "blocked"
+    assert WorkItems(trace).get(item_id).status == "escalated"
 
 
 def test_a_feature_ticket_runs_no_probe(repo: GithubRepo, trace: Trace, tmp_path: Path) -> None:

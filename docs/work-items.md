@@ -8,7 +8,7 @@ of the `ready` items) are in [CONVENTIONS.md](CONVENTIONS.md#work-items), and th
 ## Where items live
 
 Items are two tables in the trace store, `work_items` and `work_item_events`, added by migrations
-4 and 5 of `runtime/trace.py`. A store written before them is upgraded the first time any command
+4 and 5 of `runtime/trace.py`; migration 6 adds `escalations`, the questions stopped runs ask. A store written before them is upgraded the first time any command
 opens it, and its trace rows are kept. `factory ticket` uses the same file as every other command:
 `FACTORY_TRACE_DB`, or `data/traces.duckdb` when it is unset. DuckDB lets one process write a file
 at a time, so do not run `factory ticket` against a store a pipeline is writing.
@@ -116,5 +116,68 @@ with its creation event, or none is. `add` is the one-item case.
 ## Building an item
 
 `factory build <id>` takes one `ready` item to a reviewed pull request and moves it to
-`in_progress`, then to `in_review` or `blocked`, with actor `pipeline:build_loop`. A dry run links
+`in_progress`, then to `in_review`, `escalated` or `blocked`, with actor `pipeline:build_loop`. A dry run links
 its run to the item but moves nothing. [build-loop.md](build-loop.md) describes the loop (#87).
+
+## Escalations and `factory escalations`
+
+When a run stops on something a person can settle, such as a `blocked` coder, a budget stop or a
+second request for changes, it writes an escalation record and moves the item to `escalated`
+(#93). The record holds the question, the runs, the cost at the stop, the diff, the last agent
+outputs and the end of the suite output. The rules, and the table of which stop goes where, are in
+[CONVENTIONS.md](CONVENTIONS.md#escalations).
+
+| Command | What it does |
+| --- | --- |
+| `factory escalations list [--open]` | Every record, oldest first, or only the unanswered ones |
+| `factory escalations show <id>` | One record as Markdown, its summary first when it has one, then the diff, the outputs and the suite tail in `<details>` sections; `--json` adds `summary` (null when there is none) |
+| `factory escalations answer <id> --text TEXT\|@FILE` | Store the answer and, when no other record on the item is open, move the item to `ready` |
+| `factory escalations answer <id> --from-issue` | The same, taking the answer from the latest reply on the ticket's GitHub issue by an owner, member or collaborator |
+
+When a run writes a record, the escalation-summary agent (#94) also writes a summary of it: one
+paragraph on what is blocked and what the person must decide, and up to four options, each with
+what it costs and a quote from the record that backs it. A summary whose quotes are not in the
+record is not stored, and a budget stop gets none; `show` then prints the record alone. The rules
+are in [CONVENTIONS.md](CONVENTIONS.md#summaries).
+
+Each takes `--json`. A typical round:
+
+```sh
+factory escalations list --open
+factory escalations show esc-1
+factory escalations answer esc-1 --text "Put the parser in widgets/parse.py."
+factory build wi-4
+```
+
+The next `factory build` gives the coder the ticket with the answer appended to its body under
+`## Answers to earlier escalations`; the stored ticket is not changed. An answer is stored once
+and never replaced. An answer to an item a person has already moved on by hand is refused, and
+the record stays open. Exit codes are as above: 2 for a bad or refused answer or an unreadable
+file, 3 for an unknown id.
+
+A real run also posts each escalation to the ticket's GitHub issue with `notify.issue` (#95): the
+first escalation opens the issue, a later one comments on it, and a rerun edits its own post. The
+issue's number is stored on the item, and `factory ticket show` prints it. A person can then
+answer on GitHub and store that reply with `--from-issue`, which only reads the issue. Only a
+comment made after the post by the repository's owner, a member or a collaborator counts, and a
+factory post never does. The rules are in
+[CONVENTIONS.md](CONVENTIONS.md#posting-to-github).
+
+Code uses `runtime.escalations`:
+
+```python
+from runtime.escalations import answer, escalate, render_markdown
+
+with Trace() as trace:
+    record = escalate(
+        trace,
+        item_id,
+        trigger="blocked_output",
+        question="Which module owns the parser?",
+        reason="CoderBlockedError: the coder is blocked",
+        actor="pipeline:build_loop",
+        pipeline_run_id=run_id,
+    )
+    print(render_markdown(record))
+    answer(trace, record.id, "widgets/parse.py", "cli")
+```

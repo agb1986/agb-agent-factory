@@ -1,0 +1,21 @@
+name: escalation-summary
+version: 0.1.0
+kind: llm
+team: hitl
+description: Writes one paragraph on what a stopped pipeline is blocked on and why, and the options with what each one takes, from an escalation record.
+model: claude-haiku-5-5 # verified by tests/live/test_escalation_summary_live.py
+effort: low
+system_prompt: system.md
+schemas: schemas.py
+input_model: EscalationSummaryInput
+output_model: EscalationSummaryOutput
+tools:
+  allow: [notify.issue]
+  deny: []
+limits:
+  max_tool_turns: 1
+  timeout_s: 60
+  max_output_tokens: 2000
+  max_tokens_total: 40000
+evals:
+  min_pass_rate: 0.75
