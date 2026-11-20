@@ -13,6 +13,7 @@ fixed values, and compares the result to `tests/golden/<name>.json`.
 | `review.json` | `factory review <repo> --json` |
 | `triage.json` | `factory triage <repo> --json` |
 | `fix.json` | `factory fix <repo> --finding <json> --json` |
+| `build.json` | `factory build wi-1 --repo <repo> --json`, on a ready item |
 | `plan.json` | `factory plan <repo> --prd @file --approve --json`, after a first `--idea` run |
 | `cost.json` | `factory cost --since 2026-10-20 --json` |
 | `cost-by-kind.json` | `factory cost --since 2026-10-20 --by kind --json` |
@@ -50,6 +51,11 @@ If it adds a new per-run field, add its name and stand-in value to `VOLATILE`.
 `fix.json` runs `factory fix` on the `off-by-one-red` fixture with a fake test-writer, fixer and
 sandbox (`FixRunner` and `FakeSandbox` in `tests/pipelines/test_fix_loop.py`). Its test also
 replaces the repository path, the two output paths and the fix commit, which change per run.
+
+`build.json` runs `factory build` on a one-commit repository whose `origin` is the fake
+`acme/widgets`, with the fake coder of `tests/pipelines/test_build_loop.py` (`BuildRunner`), the
+fake panel, `FakeSandbox` and the fake `gh`. Its test also replaces the pipeline run id inside the
+branch and the body, the commits and the paths under `tmp_path`.
 
 `cost.json` is built from a seeded trace store, not from a fake model; `tests/runtime/golden/`
 holds the same report as text and grouped by pipeline.
