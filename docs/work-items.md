@@ -96,4 +96,13 @@ command does ([CONVENTIONS.md](CONVENTIONS.md#errors)).
 `todo` or `blocked`, and refuses it in any other state. It is the one write that could close a
 cycle, because a new item cannot be a dependency of anything yet, so the acyclic check runs there
 and refuses a cycle with its path, such as `dependency cycle: wi-1 -> wi-3 -> wi-2 -> wi-1`.
-There is no command for it yet; the plan loop (#92) is its first caller.
+There is no command for it yet.
+
+## Writing a batch
+
+`WorkItems.add_many(batch, parent=..., actor=..., pipeline_run_id=..., reason=...)` writes several
+items in one transaction, for a caller that has a whole plan (#92). Each `NewItem` holds a ticket, a
+size and `depends_on` as indexes into the batch, which an item may name only if it is earlier in the
+list; those become the new `wi-<n>` ids. The whole batch is checked before anything is written, the
+acyclic check runs over the full graph, and any error rolls back, so either every item is stored,
+with its creation event, or none is. `add` is the one-item case.
