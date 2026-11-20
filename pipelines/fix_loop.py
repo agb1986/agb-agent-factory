@@ -30,7 +30,7 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -308,6 +308,119 @@ def _tail(output: bytes) -> str:
     return text[-SUITE_TAIL_CHARS:]
 
 
+@dataclass(frozen=True, slots=True)
+class FixStage:
+    """What `fix_and_review` produced: the fixer's run and answer, its commit, the suite, the panel.
+
+    `by_fixer` maps each path the fixer changed to its action, from the tests' commit to
+    `fix_sha`; `total` does the same from the base commit, so it includes the tests.
+    """
+
+    fixer_run_id: str
+    fixer_output: BaseModel
+    fix_sha: str
+    by_fixer: dict[str, FileAction]
+    total: dict[str, FileAction]
+    suite: SandboxResult
+    panel: PanelResult
+
+
+def fix_and_review(
+    fixer: LLMSpec,
+    panel: Panel,
+    clone: Path,
+    finding: Finding,
+    trace: Trace,
+    *,
+    base_sha: str,
+    tests_sha: str,
+    test_files: Sequence[str],
+    protected: Mapping[str, str],
+    sandbox: Sandbox,
+    runner: Runner,
+    jev_runner: JevRunner,
+    pipeline_run_id: str,
+    budget: Budget,
+    parent_run_id: str | None = None,
+    fixer_must_change: bool = False,
+) -> FixStage:
+    """Run the fixer on `finding` in `clone`, commit its work, run the suite and review the change.
+
+    `clone` is a throwaway clone whose `HEAD` is `tests_sha`, the commit holding the failing tests
+    on top of `base_sha`. The fixer works behind its manifest's `files` policy plus `protected`
+    (path to reason), through `FilePolicyGuard` and `check_changed`; a refusal writes a row tagged
+    `TEST_WRITE_REFUSED_TAG` and raises `TestFileWriteError`. Its work is committed as
+    `fixer: <finding title>`, the clone is cleaned and the whole suite runs in `sandbox`; the panel
+    reviews `base_sha` to the fixer's commit. The fixer's run is a child of `parent_run_id`, and
+    the panel's of the fixer's. Every call carries `pipeline_run_id` and is charged to `budget`.
+
+    Raises `FixError` when nothing changed from `base_sha`, or, with `fixer_must_change`, when
+    the fixer changed nothing; `SuiteFailedError` when the suite fails; and whatever the fixer's
+    run or the panel raises. It neither cleans up the sandbox nor writes a report: the caller does.
+    This is the part of `run_fix` that `factory hotfix` (#109) shares.
+    """
+    policy = FilePolicy(_fixer_files(fixer), dict(protected))
+
+    def refuse(agent: str, path: str, reason: str, check: str) -> TestFileWriteError:
+        return _refuse(trace, pipeline_run_id, agent, path, reason, check)
+
+    fixer_run_id = str(uuid.uuid4())
+    fixer_output = runner(
+        fixer,
+        fixer.input_class.model_validate(
+            {
+                "repo_path": str(clone),
+                "finding": finding.model_dump(mode="json"),
+                "test_files": list(test_files),
+            }
+        ),
+        trace,
+        repo_path=clone,
+        pipeline_run_id=pipeline_run_id,
+        parent_run_id=parent_run_id,
+        run_id=fixer_run_id,
+        hook=FilePolicyGuard(clone, policy, refuse),
+        budget=budget,
+    )
+    # The commits carry no bytecode, and `clean` deletes it before the suite runs.
+    check_changed(clone, policy, fixer.address, refuse)
+    fix_sha = commit_all(clone, f"fixer: {finding.title}")
+    by_fixer = changed_between(clone, tests_sha, fix_sha)
+    total = changed_between(clone, base_sha, fix_sha)
+    if not total:
+        raise FixError(
+            "the test-writer and the fixer changed nothing",
+            hint="check the finding still applies at the head commit",
+        )
+    if fixer_must_change and not by_fixer:
+        raise FixError(
+            "the fixer changed nothing, so the failing test still fails",
+            hint="check the finding still applies at the head commit",
+        )
+
+    clean(clone)
+    suite = sandbox.run(clone, PYTEST)
+    if suite.exit_code != 0:
+        raise SuiteFailedError(
+            f"the test suite failed in the sandbox with exit code {suite.exit_code}",
+            hint=_tail(suite.output)[-400:].strip() or None,
+        )
+
+    result = run_panel(
+        panel,
+        clone,
+        base_sha,
+        fix_sha,
+        trace,
+        runner=runner,
+        jev_runner=jev_runner,
+        pipeline_run_id=pipeline_run_id,
+        budget=budget,
+        parent_run_id=fixer_run_id,
+    )
+    return FixStage(fixer_run_id, fixer_output, fix_sha, by_fixer, total, suite, result)
+
+
 def run_fix(
     agents: FixAgents,
     repo_path: str | Path,
@@ -378,62 +491,25 @@ def run_fix(
             tests_sha = commit_all(clone, f"test-writer: {finding.title}")
             by_tests = changed_between(clone, head_sha, tests_sha)
             written = tests_output.model_dump(mode="json")
-            policy = FilePolicy(
-                _fixer_files(agents.fixer), dict.fromkeys(by_tests, PROTECTED_REASON)
-            )
-
-            def refuse(agent: str, path: str, reason: str, check: str) -> TestFileWriteError:
-                return _refuse(trace, run_id, agent, path, reason, check)
-
-            fixer_run_id = str(uuid.uuid4())
-            fixer_output = runner(
+            stage = fix_and_review(
                 agents.fixer,
-                agents.fixer.input_class.model_validate(
-                    {
-                        "repo_path": str(clone),
-                        "finding": finding.model_dump(mode="json"),
-                        "test_files": written.get("test_files", []),
-                    }
-                ),
-                trace,
-                repo_path=clone,
-                pipeline_run_id=run_id,
-                parent_run_id=tests_run_id,
-                run_id=fixer_run_id,
-                hook=FilePolicyGuard(clone, policy, refuse),
-                budget=budget,
-            )
-            # The commits carry no bytecode, and `clean` deletes it before the suite runs.
-            check_changed(clone, policy, agents.fixer.address, refuse)
-            fix_sha = commit_all(clone, f"fixer: {finding.title}")
-            by_fixer = changed_between(clone, tests_sha, fix_sha)
-            total = changed_between(clone, head_sha, fix_sha)
-            if not total:
-                raise FixError(
-                    "the test-writer and the fixer changed nothing",
-                    hint="check the finding still applies at the head commit",
-                )
-
-            clean(clone)
-            suite = sandbox.run(clone, PYTEST)
-            if suite.exit_code != 0:
-                raise SuiteFailedError(
-                    f"the test suite failed in the sandbox with exit code {suite.exit_code}",
-                    hint=_tail(suite.output)[-400:].strip() or None,
-                )
-
-            panel = run_panel(
                 agents.panel,
                 clone,
-                head_sha,
-                fix_sha,
+                finding,
                 trace,
+                base_sha=head_sha,
+                tests_sha=tests_sha,
+                test_files=written.get("test_files", []),
+                protected=dict.fromkeys(by_tests, PROTECTED_REASON),
+                sandbox=sandbox,
                 runner=runner,
                 jev_runner=jev_runner,
                 pipeline_run_id=run_id,
                 budget=budget,
-                parent_run_id=fixer_run_id,
+                parent_run_id=tests_run_id,
             )
+            fixer_output, fix_sha, by_fixer = stage.fixer_output, stage.fix_sha, stage.by_fixer
+            total, suite, panel = stage.total, stage.suite, stage.panel
             patch_path = None
             if panel.ship:
                 patch_path = out / f"{run_id}.patch"
