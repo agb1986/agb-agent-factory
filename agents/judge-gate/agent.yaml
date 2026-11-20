@@ -1,6 +1,7 @@
 name: judge-gate
 version: 0.1.0
 kind: jev
+team: sre
 description: Decides whether a panel's reviews are clear-cut enough to ship or block without the judge.
 model: jev-1.14.0
 

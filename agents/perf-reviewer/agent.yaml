@@ -1,6 +1,7 @@
 name: perf-reviewer
 version: 0.3.0
 kind: llm
+team: qa
 description: Reviews a diff for algorithmic complexity, N+1 queries, unbounded memory and blocking calls on hot paths.
 model: claude-sonnet-5-5 # verified by tests/live/test_perf_reviewer_live.py
 effort: high

@@ -21,11 +21,14 @@ VERSION_PATTERN = r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
 TOOL_NAME_PATTERN = r"^[a-z][a-z0-9]*(_[a-z0-9]+)*\.[a-z][a-z0-9]*(_[a-z0-9]+)*$"
 DOMAIN_PATTERN = r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
 AGENT_RANGE_PATTERN = rf"{NAME_PATTERN[:-1]}@\^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
+TEAMS = ("planning", "dev", "qa", "sre", "research", "decomp", "hitl", "analytics")
+"""The eight `team` values, one per team of ADR 0002. A label only; see `AgentSpecBase.team`."""
 
 type Name = Annotated[str, Field(pattern=NAME_PATTERN)]
 type Version = Annotated[str, Field(pattern=VERSION_PATTERN)]
 type ToolName = Annotated[str, Field(pattern=TOOL_NAME_PATTERN)]
 type AgentRange = Annotated[str, Field(pattern=AGENT_RANGE_PATTERN)]
+type Team = Literal["planning", "dev", "qa", "sre", "research", "decomp", "hitl", "analytics"]
 
 
 class _Model(BaseModel):
@@ -76,6 +79,53 @@ class ToolsSpec(_Model):
         return self
 
 
+class FilesSpec(_Model):
+    """The `files` block: the paths in the repository the agent's writes may and may not touch.
+
+    Both lists hold glob patterns over paths relative to the repository root, matched with
+    `PurePosixPath.full_match`: `*` matches within one path segment and `**` any number of whole
+    segments, so `**/tests/**` is every path under a directory named `tests`. A path may be written
+    when `allow` is empty or one of its patterns matches, and no `deny` pattern matches; `deny`
+    wins. The pipeline that runs the agent enforces it on the host, in `pipelines.file_policy`,
+    on every `fs.write_file` and again on what changed after the run. A pattern that is absolute,
+    climbs out with `..` or is listed twice is an error.
+    """
+
+    allow: tuple[str, ...] = ()
+    deny: tuple[str, ...] = ()
+
+    @field_validator("allow", "deny")
+    @classmethod
+    def _relative_globs(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for pattern in value:
+            pure = PurePosixPath(pattern)
+            if not pattern or pattern != pattern.strip() or "\\" in pattern:
+                raise ValueError(f"file patterns are non-empty POSIX globs, got {pattern!r}")
+            if pure.is_absolute() or ".." in pure.parts or pure.as_posix() != pattern:
+                raise ValueError(f"file patterns are relative to the repository, got {pattern!r}")
+        repeated = sorted({pattern for pattern in value if value.count(pattern) > 1})
+        if repeated:
+            raise ValueError(f"file patterns listed twice: {', '.join(repeated)}")
+        return value
+
+    @model_validator(mode="after")
+    def _no_overlap(self) -> FilesSpec:
+        both = sorted(set(self.allow) & set(self.deny))
+        if both:
+            raise ValueError(f"file patterns in both allow and deny: {', '.join(both)}")
+        return self
+
+    def denial(self, path: str) -> str | None:
+        """Return why `path`, relative to the repository root, may not be written, or None."""
+        pure = PurePosixPath(path)
+        for pattern in self.deny:
+            if pure.full_match(pattern):
+                return f"the path matches the files.deny pattern {pattern}"
+        if self.allow and not any(pure.full_match(pattern) for pattern in self.allow):
+            return "the path matches no files.allow pattern"
+        return None
+
+
 class LimitsSpec(_Model):
     """The `limits` block: hard caps on one run.
 
@@ -122,7 +172,9 @@ class AgentSpecBase(_Model):
     """Fields shared by every agent kind.
 
     `path` is the manifest file the spec was loaded from. It is set by the loader and is not a
-    manifest key. `version` is a full `MAJOR.MINOR.PATCH`.
+    manifest key. `version` is a full `MAJOR.MINOR.PATCH`. `team` is an optional label, one of
+    `TEAMS`, that groups agents for reports; the resolver, the runner and the publish gate never
+    read it, and changing it bumps no version.
     """
 
     name: Name
@@ -130,6 +182,7 @@ class AgentSpecBase(_Model):
     kind: str
     description: str = Field(min_length=1)
     evals: EvalsSpec
+    team: Team | None = None
     path: Path
 
     @property
@@ -158,6 +211,9 @@ class LLMSpec(AgentSpecBase):
     networked profile of `tools.sandbox`: the agent gets a fresh empty directory instead of a
     repository, its commands may reach the network and install packages, and the web tools stay
     available to it. `sandbox_profile` names the profile.
+    `files` is optional and only a sandboxed agent that writes to a repository sets it: the paths
+    its writes may touch, which the pipeline running it enforces (`FilesSpec`). Absent, the
+    manifest sets no policy and a pipeline that needs one refuses the agent.
     """
 
     kind: Literal["llm"]
@@ -172,6 +228,7 @@ class LLMSpec(AgentSpecBase):
     scoring: ScoringSpec | None = None
     guard: AgentRange | None = None
     sandbox: bool | Literal["spike"] = False
+    files: FilesSpec | None = None
 
     _input_class: type[BaseModel] | None = PrivateAttr(default=None)
     _output_class: type[BaseModel] | None = PrivateAttr(default=None)
@@ -182,6 +239,12 @@ class LLMSpec(AgentSpecBase):
         if value.is_absolute() or ".." in PurePosixPath(value.as_posix()).parts:
             raise ValueError("must be a relative path inside the agent directory")
         return value
+
+    @model_validator(mode="after")
+    def _files_need_a_sandbox(self) -> LLMSpec:
+        if self.files is not None and not self.sandbox:
+            raise ValueError("files: only an agent with a sandbox writes files")
+        return self
 
     @property
     def sandbox_profile(self) -> Literal["offline", "spike"] | None:

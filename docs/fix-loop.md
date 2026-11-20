@@ -29,7 +29,7 @@ Every agent call carries the same `pipeline_run_id` and is charged to the same `
 1. The sandbox is checked (Docker and the image) before any money is spent. The repository must have nothing uncommitted, staged, unstaged or untracked, or the run stops with `DirtyRepositoryError`. Ignored files do not count.
 2. The head commit is cloned into a new directory under `--work-dir` with `--no-hardlinks`, checked out detached, and the clone's `origin` remote is removed. Git runs on the host with hooks and fsmonitor off, and its diffs use no external diff driver or text conversion. The source repository gets no commit, ref, hook or config.
 3. The test-writer runs over the clone, behind its action guard, and whatever it changed is committed in the clone.
-4. The fixer runs over the clone with two hooks in front of its tools: `TestFileGuard`, then the action guard. See [The test-file rule](#the-test-file-rule).
+4. The fixer runs over the clone with two hooks in front of its tools: `FilePolicyGuard` over the fixer's file policy, then the action guard. See [The test-file rule](#the-test-file-rule).
 5. On the host, every path changed in the clone is checked against the same rule, and then the fixer's work is committed.
 6. If the two commits together changed nothing, the run stops with `FixError`.
 7. The clone is reset to the fixer's commit and its untracked and ignored files are deleted (`pipelines.sandbox.clean`), so the suite sees the two commits and nothing an earlier command left behind; a clone that cannot be cleaned stops the run with `ToolExecutionError` (exit 1). Then the whole suite, `python -m pytest -q`, runs over the clone in the sandbox with a 600 s limit (`SUITE_TIMEOUT_S`), container start included. A non-zero exit, 124 for a timeout among them, stops the run with `SuiteFailedError`, whose hint carries the end of the output.
@@ -69,12 +69,12 @@ The fixer may change production code only. A path counts as a test, and the fixe
 - it configures the test run: `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `pyproject.toml`, `setup.cfg` or `tox.ini` at the root of the clone;
 - it would shadow the test runner: a package at the root named `pytest`, `_pytest`, `pluggy`, `iniconfig` or `packaging`, or a root module of one of those names ending in `.py`, `.pyc` or `.so`. `python -m pytest` puts the working directory first on `sys.path`, so such a module would replace the one in the image. This is best effort: pytest also imports `py` and `pygments`, which are left out because a repository may have a root package of either name. The panel, which reads the whole diff, is the real check.
 
-A refusal names which of these applies. The rule lives in the pipeline, not in `fs.write_file`, because only the pipeline knows what the test-writer wrote.
+A refusal names which of these applies. The fixed part of the rule is the `files.deny` block of the fixer's manifest; the fix loop adds the paths the test-writer changed for each run. It is enforced by the pipeline, not by `fs.write_file`, because only the pipeline knows which agent is writing and what the test-writer wrote. The convention is in [CONVENTIONS.md](CONVENTIONS.md#file-policy).
 
 It is checked twice:
 
-- `TestFileGuard` is the fixer's hook, so it decides before the action guard. It checks each `fs.write_file` path as written, with `.` and `..` folded, and again with symlinks resolved inside the clone; either match refuses the write.
-- After the fixer's run, the host checks every changed path in the clone, which catches a change made through `shell.run` in the sandbox, where no hook sees the file.
+- `FilePolicyGuard` (`pipelines/file_policy.py`) is the fixer's hook, so it decides before the action guard. It checks each `fs.write_file` path as written, with `.` and `..` folded, and again with symlinks resolved inside the clone; either match refuses the write.
+- After the fixer's run, `check_changed` on the host checks every changed path in the clone, which catches a change made through `shell.run` in the sandbox, where no hook sees the file.
 
 A refusal ends the run with `TestFileWriteError` (exit 1) rather than returning a denial to the fixer: a fixer that wants to change a test has either found a wrong test or is working around it, and both need a person. It also writes one trace row, tagged `fix:test_write_refused`, with `kind` `llm`, the fixer as `agent_ref`, cost 0, the message as `error`, and `decision_json` `{"allow": false, "path", "reason", "check"}`, where `check` is `hook` or `post-check`. The convention is in [CONVENTIONS.md](CONVENTIONS.md#tools).
 

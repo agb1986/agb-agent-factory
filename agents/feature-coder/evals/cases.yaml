@@ -1,0 +1,198 @@
+# Eval cases for feature-coder. Each one gives the agent a ticket for a fixture from fixtures/src/
+# and grades the work tree it leaves with the sandbox_tests grader: the whole suite must pass, and
+# the test files the answer lists must exist and pass (expected.run). An expected.rubric then
+# checks the answer itself: deterministic field and path checks first, then a small model scores
+# the summary and the mapping from acceptance criteria to tests. The rubric model sees only the
+# criteria below and the answer, never the ticket, so each criterion restates what it needs.
+# The last case is a ticket whose criteria contradict the code, which the agent must refuse to
+# build. `repo_path` is not in the payload: the eval runner fills it in with a private copy of the
+# built fixture repository.
+cases:
+  - id: reserve-per-order-limit
+    fixture: partly-covered
+    payload:
+      ticket:
+        kind: feature
+        title: Reserve refuses orders over a per-order limit
+        body: >-
+          Large orders are hand-checked by the warehouse, so reserve should refuse any single
+          reservation above a limit the caller passes. Callers that pass no limit keep today's
+          behaviour.
+        acceptance:
+          - reserve takes an optional limit argument; with no limit it behaves as it does today.
+          - reserve raises ValueError when quantity is above the limit, and leaves no stock taken.
+          - A quantity equal to the limit is reserved as usual.
+        repo: acme/inventory
+        ref: head
+        impacted_paths: [inventory/stock.py, tests/test_stock.py]
+      depends_on: []
+    expected:
+      verdict: null
+      run:
+        suite: pass
+        new_tests: pass
+        production: changed
+        tests: changed
+      rubric:
+        criteria:
+          - id: every-criterion-tested
+            text: >-
+              The answer's acceptance list has one entry for each of three criteria: reserve takes
+              an optional limit and behaves as before without one; a quantity above the limit
+              raises ValueError; a quantity equal to the limit is reserved. Each entry names at
+              least one test whose name fits what that criterion says, and none is marked
+              untestable.
+            required: true
+            floor: 0.6
+          - id: summary-says-what-and-where
+            text: >-
+              The summary says that reserve in inventory/stock.py gained a limit argument and that
+              a quantity over it is refused with ValueError, and says which tests check it.
+          - id: nothing-invented
+            text: >-
+              The answer claims no change beyond the limit and its tests, such as a rewrite of
+              restock or a new error type.
+        threshold: 0.7
+        required_fields: [summary, files_changed, test_files, acceptance]
+        empty_fields: [blocked_reason]
+        paths_exist: [test_files]
+    grader: sandbox_tests
+
+  - id: notes-can-be-removed
+    fixture: docs-only
+    payload:
+      ticket:
+        kind: feature
+        title: Notes can be removed from the store
+        body: >-
+          Users want to delete a note they no longer need. Add a remove method to NoteStore.
+        acceptance:
+          - NoteStore.remove(index) removes the note at that index and returns its text.
+          - The notes left keep their order in all().
+          - Removing an index that holds no note raises IndexError and changes nothing.
+        repo: acme/notes
+        ref: head
+        impacted_paths: [notes/store.py]
+      depends_on: []
+    expected:
+      verdict: null
+      run:
+        suite: pass
+        new_tests: pass
+        production: changed
+        tests: changed
+      rubric:
+        criteria:
+          - id: every-criterion-tested
+            text: >-
+              The answer's acceptance list has one entry for each of three criteria: remove(index)
+              removes the note and returns its text; the notes left keep their order; an index
+              with no note raises IndexError and changes nothing. Each entry names at least one
+              test whose name fits what that criterion says, and none is marked untestable.
+            required: true
+            floor: 0.6
+          - id: summary-says-what-and-where
+            text: >-
+              The summary says that NoteStore in notes/store.py gained a remove method, what it
+              returns and what it raises, and which tests check it.
+          - id: choices-are-stated
+            text: >-
+              If the answer made a choice the criteria leave open, such as whether a negative index
+              counts as holding no note, the summary or the open questions say so. An answer with
+              no such choice to make meets this criterion.
+        threshold: 0.7
+        required_fields: [summary, files_changed, test_files, acceptance]
+        empty_fields: [blocked_reason]
+        paths_exist: [test_files]
+    grader: sandbox_tests
+
+  - id: discount-capped-at-a-maximum
+    fixture: untested-change-covered
+    payload:
+      ticket:
+        kind: feature
+        title: A discount can be capped at a maximum amount
+        body: >-
+          Marketing wants "25% off, up to 10.00" offers. apply_discount should take an optional cap
+          in cents on the amount taken off.
+        acceptance:
+          - apply_discount takes an optional max_off argument, in cents; with none it behaves as it
+            does today.
+          - The amount taken off is never more than max_off.
+          - A negative max_off raises ValueError.
+        repo: acme/pricing
+        ref: head
+        impacted_paths: [pricing/discount.py, tests/test_discount.py]
+      depends_on:
+        - pricing/discount.py added apply_discount, with tests for its validation and rounding.
+    expected:
+      verdict: null
+      run:
+        suite: pass
+        new_tests: pass
+        production: changed
+        tests: changed
+      rubric:
+        criteria:
+          - id: every-criterion-tested
+            text: >-
+              The answer's acceptance list has one entry for each of three criteria: an optional
+              max_off in cents that changes nothing when absent; the amount taken off never
+              exceeds max_off; a negative max_off raises ValueError. Each entry names at least one
+              test whose name fits what that criterion says, and none is marked untestable.
+            required: true
+            floor: 0.6
+          - id: summary-says-what-and-where
+            text: >-
+              The summary says that apply_discount in pricing/discount.py gained a max_off cap,
+              how the cap applies to the amount taken off, and which tests check it.
+          - id: existing-rules-kept
+            text: >-
+              The answer does not claim to have changed the existing percentage check or the
+              rounding rule of apply_discount.
+        threshold: 0.7
+        required_fields: [summary, files_changed, test_files, acceptance]
+        empty_fields: [blocked_reason]
+        paths_exist: [test_files]
+    grader: sandbox_tests
+
+  - id: discount-order-contradicts-the-code
+    fixture: clean-refactor
+    payload:
+      ticket:
+        kind: feature
+        title: Invoices take a percentage discount
+        body: >-
+          Add a percentage discount to invoice_total next to the flat one, for loyalty offers.
+        acceptance:
+          - invoice_total takes an optional percent_off argument, from 0 to 100.
+          - The flat discount is still taken off before tax, as it is today.
+          - The percentage discount is taken off after the flat discount, before tax.
+        repo: acme/billing
+        ref: head
+        impacted_paths: [billing/invoice.py]
+      depends_on: []
+    expected:
+      verdict: null
+      run:
+        suite: pass
+        production: unchanged
+        tests: unchanged
+      rubric:
+        criteria:
+          - id: names-the-contradiction
+            text: >-
+              The answer is blocked, and its blocked_reason says that the ticket expects the flat
+              discount to be taken off before tax while invoice_total takes it off after tax,
+              pointing at the code in billing/invoice.py or at the test
+              test_discount_is_taken_off_after_tax.
+            required: true
+            floor: 0.6
+          - id: no-guess
+            text: >-
+              The answer does not pick one reading and build it: it reports no file written and
+              leaves the choice to the owner of the ticket.
+        threshold: 0.7
+        required_fields: [blocked_reason, summary]
+        empty_fields: [files_changed, test_files, acceptance]
+    grader: sandbox_tests

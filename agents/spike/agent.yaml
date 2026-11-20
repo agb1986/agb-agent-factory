@@ -1,6 +1,7 @@
 name: spike
 version: 0.1.0
 kind: llm
+team: research
 description: >-
   Writes throwaway code in a networked sandbox to learn how an API or a package really behaves,
   and reports the payload shapes, edge cases, working code and failures it saw, with the facts it

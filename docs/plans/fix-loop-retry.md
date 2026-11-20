@@ -34,7 +34,7 @@ draws the retries as a chain, and each panel as a branch off the attempt that pr
 
 ## What stays the same
 
-- `TestFileGuard` and the post-check protect the tests on every attempt. A refusal ends the run
+- `FilePolicyGuard` and the post-check (`check_changed`) protect the tests on every attempt. A refusal ends the run
   with `TestFileWriteError` and is never retried: it is a rule break, not a failure to fix.
 - `BudgetExceeded` ends the loop immediately and is never retried.
 - The source repository is still never written to.
