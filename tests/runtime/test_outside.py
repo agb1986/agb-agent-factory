@@ -112,6 +112,7 @@ def test_planned_target_names_the_branch_only_for_create_pr(
         "pr": None,
         "issue": None,
         "branch": f"factory/{RUN}",
+        "ticket": None,
     }
     assert planned_target("github.comment_pr", ctx, {"pr": 7})["branch"] is None
 
@@ -207,7 +208,13 @@ def test_write_records_one_row_for_a_dry_run(
     assert row["error"] is None
     assert row["decision_json"] == {
         "tool": "github.create_pr",
-        "target": {"repository": FULL, "pr": None, "issue": None, "branch": f"factory/{RUN}"},
+        "target": {
+            "repository": FULL,
+            "pr": None,
+            "issue": None,
+            "branch": f"factory/{RUN}",
+            "ticket": None,
+        },
         "outcome": "dry_run",
         "allow": True,
         "reason": None,

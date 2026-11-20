@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from gh_fake import FakeGh
 
 from factory.cli import main
 from factory.exit import ExitCode
@@ -18,6 +19,9 @@ from runtime.escalations import (
 )
 from runtime.trace import Trace
 from runtime.work_items import WorkItems
+from tools import notify
+from tools.github import marker_prefix
+from tools.notify import escalation_key
 
 ACTOR = "pipeline:build_loop"
 TICKET = Ticket(
@@ -220,7 +224,12 @@ def test_an_unknown_id_exits_3(capsys: pytest.CaptureFixture[str]) -> None:
 
 @pytest.mark.parametrize(
     "argv",
-    [["escalations", "answer", "esc-1"], ["escalations", "show"], ["escalations", "bogus"]],
+    [
+        ["escalations", "answer", "esc-1"],
+        ["escalations", "answer", "esc-1", "--text", "x", "--from-issue"],
+        ["escalations", "show"],
+        ["escalations", "bogus"],
+    ],
 )
 def test_bad_arguments_exit_2(capsys: pytest.CaptureFixture[str], argv: list[str]) -> None:
     assert main(argv) == ExitCode.USAGE
@@ -229,3 +238,43 @@ def test_bad_arguments_exit_2(capsys: pytest.CaptureFixture[str], argv: list[str
 def test_no_subcommand_prints_usage_and_exits_2(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["escalations"]) == ExitCode.USAGE
     assert "usage:" in capsys.readouterr().err
+
+
+def test_an_answer_from_the_issue_names_the_comment(
+    store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    item_id = seed(store)
+    with Trace(store) as trace:
+        WorkItems(trace).set_issue_number(item_id, 9)
+    full = TICKET.repo
+    marker = marker_prefix(notify.TOOL, escalation_key(item_id, "esc-1"))
+    fake = FakeGh(tmp_path, monkeypatch)
+    fake.route(
+        "GET",
+        f"repos/{full}/issues/9",
+        {"number": 9, "body": f"Body. {marker}p1 -->", "created_at": "2026-11-20T10:00:00Z"},
+    )
+    reply = {
+        "id": 5,
+        "body": "Use parser.py.",
+        "created_at": "2026-11-20T10:05:00Z",
+        "user": {"login": "alice", "type": "User"},
+        "author_association": "MEMBER",
+        "html_url": f"https://github.com/{full}/issues/9#issuecomment-5",
+    }
+    fake.route("GET", f"repos/{full}/issues/9/comments?per_page=100", [reply])
+    monkeypatch.chdir(tmp_path)
+    out = run_json(["escalations", "answer", "esc-1", "--from-issue"], capsys)
+    assert out["escalation"]["answer"] == "Use parser.py."
+    assert out["escalation"]["answer_source"] == f"github:{full}#9 comment 5"
+    assert out["comment"] == {"id": 5, "author": "alice", "url": reply["html_url"]}
+    assert out["work_item"] == {"id": item_id, "status": "ready"}
+    assert fake.writes() == []
+
+
+def test_an_answer_from_the_issue_without_an_issue_exits_2(
+    store: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seed(store)
+    error = run_json(["escalations", "answer", "esc-1", "--from-issue"], capsys, ExitCode.USAGE)
+    assert "no GitHub issue" in error["message"]

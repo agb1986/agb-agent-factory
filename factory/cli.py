@@ -449,8 +449,14 @@ def _add_escalations_parser(sub: argparse._SubParsersAction[argparse.ArgumentPar
         'factory escalations answer esc-1 --text "Put it in widgets.py." --json',
     )
     answer.add_argument("id", help="the escalation id, `esc-<n>`")
-    answer.add_argument(
-        "--text", required=True, metavar="TEXT|@FILE", help="the answer, or @ and a file holding it"
+    given = answer.add_mutually_exclusive_group(required=True)
+    given.add_argument(
+        "--text", metavar="TEXT|@FILE", help="the answer, or @ and a file holding it"
+    )
+    given.add_argument(
+        "--from-issue",
+        action="store_true",
+        help="take the latest reply by a collaborator on the ticket's GitHub issue",
     )
 
 
@@ -802,7 +808,7 @@ def _escalations(args: argparse.Namespace) -> int:
         return escalations_cli.list_records(open_only=args.open, as_json=args.json)
     if args.escalations_command == "show":
         return escalations_cli.show(args.id, as_json=args.json)
-    return escalations_cli.answer(args.id, args.text, as_json=args.json)
+    return escalations_cli.answer(args.id, args.text, from_issue=args.from_issue, as_json=args.json)
 
 
 def _fail(exc: Exception, *, as_json: bool) -> int:

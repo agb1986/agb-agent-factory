@@ -153,6 +153,7 @@ MIGRATIONS: tuple[Migration, ...] = (
         )
         """,
     ),
+    (8, "ALTER TABLE work_items ADD COLUMN issue_number INTEGER"),
 )
 
 

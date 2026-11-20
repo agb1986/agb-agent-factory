@@ -231,8 +231,8 @@ def test_every_tool_is_read_only_sandbox_only_or_an_outside_write() -> None:
     assert not SANDBOX_ONLY & OUTSIDE_WRITES
 
 
-def test_outside_writes_are_the_github_writes_and_reach_out() -> None:
-    assert OUTSIDE_WRITES == {"github.create_pr", "github.comment_pr"}
+def test_outside_writes_are_the_github_writes_and_notify_and_reach_out() -> None:
+    assert OUTSIDE_WRITES == {"github.create_pr", "github.comment_pr", "notify.issue"}
     assert OUTSIDE_WRITES <= SANDBOX_DENIED
     assert {"github.read_issue", "github.read_pr"} <= READ_ONLY
 
