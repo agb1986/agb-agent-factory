@@ -255,6 +255,11 @@ def _branches(bare: Path) -> str:
     return git(bare, "for-each-ref", "--format=%(refname)")
 
 
+def _branches_tags_and_head(root: Path) -> tuple[str, str]:
+    """The source repository's branches and tags, and its HEAD."""
+    return git(root, "for-each-ref", "refs/heads", "refs/tags"), git(root, "rev-parse", "HEAD")
+
+
 def _refusals(trace: Trace) -> list[tuple[Any, ...]]:
     trace.ensure_schema()
     return (
@@ -348,7 +353,7 @@ def test_a_shipped_build_opens_the_pull_request_and_moves_the_item_to_in_review(
 ) -> None:
     item_id = _ready(trace)
     runner, sandbox = BuildRunner(), FakeSandbox()
-    before = git(repo.root, "for-each-ref")
+    before = _branches_tags_and_head(repo.root)
     result = _build(agents, repo, trace, tmp_path, item_id, runner=runner, sandbox=sandbox)
 
     assert result.code == ExitCode.OK
@@ -375,8 +380,10 @@ def test_a_shipped_build_opens_the_pull_request_and_moves_the_item_to_in_review(
     assert "## Acceptance\n\n- size() returns 3" in post.data["body"]
     assert f"Work item `{item_id}`.\n\nPipeline run `{RUN_ID}`." in post.data["body"]
 
-    # The source repository gains no ref and no change; the clone is gone.
-    assert git(repo.root, "for-each-ref") == before
+    # The source repository gains no branch, no tag and no change, and HEAD stays; the clone is
+    # gone. The push may make git record refs/remotes/origin/factory/<run id>, depending on the
+    # git version, so remote-tracking refs are not compared.
+    assert _branches_tags_and_head(repo.root) == before
     assert git(repo.root, "status", "--porcelain") == ""
     assert list(_work_dir(tmp_path).iterdir()) == []
     assert sandbox.checked == 1 and len(sandbox.cleaned) == 1

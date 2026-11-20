@@ -76,7 +76,7 @@ def test_a_dry_run_builds_the_ticket_and_the_panel_reviews_it(tmp_path: Path) ->
     )
     agents = dataclasses.replace(agents, coder=_without_rg(agents.coder), panel=panel)
     root = _repo(tmp_path)
-    before = _git(root, "rev-parse", "HEAD"), _git(root, "for-each-ref")
+    before = _git(root, "rev-parse", "HEAD"), _git(root, "for-each-ref", "refs/heads", "refs/tags")
     work = tmp_path / "work"
     work.mkdir()
     ticket = Ticket(
@@ -119,7 +119,10 @@ def test_a_dry_run_builds_the_ticket_and_the_panel_reviews_it(tmp_path: Path) ->
 
     # The item did not move, the run is linked, and the source repository is as it was.
     assert after.status == "ready" and after.pipeline_run_ids == (RUN_ID,)
-    assert (_git(root, "rev-parse", "HEAD"), _git(root, "for-each-ref")) == before
+    assert (
+        _git(root, "rev-parse", "HEAD"),
+        _git(root, "for-each-ref", "refs/heads", "refs/tags"),
+    ) == before
     assert _git(root, "status", "--porcelain") == ""
     assert list(work.iterdir()) == []
 

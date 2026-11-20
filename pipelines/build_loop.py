@@ -23,7 +23,9 @@ work item. The flow (docs/build-loop.md has the options and outputs):
 6. When the panel ships, the commit is fetched into the source repository's object store (no ref is
    made) and `runtime.outside.write("github.create_pr", ...)` pushes the branch
    `factory/<pipeline_run_id>` and opens the pull request, for the judge manifest and with the
-   judge's row as the parent. The item moves to `in_review`.
+   judge's row as the parent. The item moves to `in_review`. The source repository gains no branch
+   and no tag, though git may record the remote-tracking ref
+   `refs/remotes/origin/factory/<pipeline_run_id>` for the push, depending on the git version.
 
 Every other end, a stop or a crash, moves the item to `blocked` in a `finally` block, with
 `<ErrorClass>: <message>` and the report's path as the reason. A dry run (`dry_run=True`) runs

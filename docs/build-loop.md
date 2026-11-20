@@ -53,7 +53,7 @@ The pull request's body holds the ticket's body, its acceptance criteria, the co
 
 ### Why the commit is fetched into the source repository
 
-ADR 0003 requires an outside write to target the pipeline's own repository, which `OutsideContext.for_repository` reads from the source repository's `origin`. The clone has no `origin` and is deleted at the end. So `create_pr` pushes from the source repository, which must hold the commit. `_fetch_into` fetches that one object with hooks and fsmonitor off and writes no ref, so the source repository's branches, tags and config stay as they were. The unreferenced objects are left for `git gc`.
+ADR 0003 requires an outside write to target the pipeline's own repository, which `OutsideContext.for_repository` reads from the source repository's `origin`. The clone has no `origin` and is deleted at the end. So `create_pr` pushes from the source repository, which must hold the commit. `_fetch_into` fetches that one object with hooks and fsmonitor off and writes no ref, so the source repository's branches, tags and config stay as they were. After the push the source repository still has no new branch and no new tag, but git may record the remote-tracking ref `refs/remotes/origin/factory/<pipeline_run_id>` for the pushed branch, depending on the git version. The unreferenced objects are left for `git gc`.
 
 ### Dry runs
 

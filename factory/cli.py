@@ -379,7 +379,8 @@ def _add_build_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     build_parser.add_argument("id", help="the work item id, `wi-<n>`; it must be ready")
     build_parser.add_argument(
         "--repo",
-        help="the git repository to build in; never changed but for objects fetched into it "
+        help="the git repository to build in; it gains objects but no branch or tag, and with "
+        "some git versions a remote-tracking ref for the pushed branch "
         "(default: the ticket's repo when it is a path, else the working directory)",
     )
     build_parser.add_argument(
