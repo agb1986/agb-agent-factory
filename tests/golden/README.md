@@ -13,6 +13,7 @@ fixed values, and compares the result to `tests/golden/<name>.json`.
 | `review.json` | `factory review <repo> --json` |
 | `triage.json` | `factory triage <repo> --json` |
 | `fix.json` | `factory fix <repo> --finding <json> --json` |
+| `plan.json` | `factory plan <repo> --prd @file --approve --json`, after a first `--idea` run |
 | `cost.json` | `factory cost --since 2026-10-20 --json` |
 | `cost-by-kind.json` | `factory cost --since 2026-10-20 --by kind --json` |
 | `ticket-show.json` | `factory ticket show wi-2 --json`, on a seeded store |

@@ -23,7 +23,7 @@ from factory import cli
 from factory.cli import main
 from factory.exit import ExitCode
 from fixtures.build import build
-from pipelines import fix_loop, review_panel, triage
+from pipelines import fix_loop, plan_loop, review_panel, triage
 from registry import AgentRef
 from registry.common_schemas import Ticket
 from registry.spec import LLMSpec
@@ -31,6 +31,10 @@ from runtime import run_once
 from runtime.trace import Trace, TraceRow
 from runtime.work_items import WorkItems
 from tests.pipelines.test_fix_loop import FINDING, FakeSandbox, FixRunner
+from tests.pipelines.test_plan_loop import QUESTIONS, SHARED, UNKNOWN
+from tests.pipelines.test_plan_loop import FakeRunner as PlanRunner
+from tests.pipelines.test_plan_loop import _prd as plan_prd
+from tests.pipelines.test_plan_loop import _story as plan_story
 from tests.pipelines.test_review_panel import FakeJev
 from tests.test_run_cli import PAYLOAD, FakeRunner, write_llm
 
@@ -260,6 +264,41 @@ def test_fix_json(
     document["report_path"] = "<out-dir>/<pipeline-run-id>.json"
     document["panel"]["head"] = "<fix-sha>"
     golden("fix", document)
+
+
+# --- plan
+
+
+def test_plan_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    golden: Golden,
+) -> None:
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(tmp_path / "traces.duckdb"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    story = dict(SHARED)
+    story["tickets"] = [*SHARED["tickets"], *UNKNOWN["tickets"][1:]]
+    story["open_questions"] = ["Which database?"]
+    monkeypatch.setattr(
+        plan_loop,
+        "run",
+        PlanRunner(
+            plan_prd(QUESTIONS),
+            plan_story(*story["tickets"], open_questions=story["open_questions"]),
+        ),
+    )
+    (fixture,) = build(["off-by-one-red"], dest=tmp_path / "repos")
+    plans = tmp_path / "plans"
+    argv = ["plan", str(fixture.path), "--plans-dir", str(plans), "--allow-unpublished", "--json"]
+    first = _run([*argv, "--idea", "Quote shipping by weight"], capsys)
+    answers = ["--answer", "1=euros", "--answer", "2=yes"]
+    document = _run([*argv, "--prd", f"@{first['prd_path']}", "--approve", *answers], capsys)
+    # The paths are under tmp_path and the commit is the fixture's.
+    document["prd_path"] = "<plans-dir>/<pipeline-run-id>.md"
+    document["repository"] = "<repo>"
+    document["ref"] = "<sha>"
+    golden("plan", document)
 
 
 # --- cost

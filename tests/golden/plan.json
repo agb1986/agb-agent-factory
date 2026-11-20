@@ -1,0 +1,82 @@
+{
+  "pipeline_run_id": "pipeline-run-1",
+  "status": "filed",
+  "approved": true,
+  "prd_path": "<plans-dir>/<pipeline-run-id>.md",
+  "repository": "<repo>",
+  "ref": "<sha>",
+  "open_questions": [
+    {
+      "question": "Which currency does it show?",
+      "why_it_matters": "Sets the price format.",
+      "answer": "euros"
+    },
+    {
+      "question": "Is a = b allowed in a name?",
+      "why_it_matters": "Changes the parser.",
+      "answer": "yes"
+    }
+  ],
+  "unanswered": 0,
+  "summary": "Cut in order.",
+  "tickets": [
+    {
+      "id": "wi-1",
+      "title": "Rates",
+      "size": "S",
+      "status": "todo",
+      "depends_on": [],
+      "impacted_paths": [
+        "shop/rates.py",
+        "shop/a.py"
+      ]
+    },
+    {
+      "id": "wi-2",
+      "title": "Rounding",
+      "size": "S",
+      "status": "todo",
+      "depends_on": [
+        "wi-1"
+      ],
+      "impacted_paths": [
+        "shop/rates.py"
+      ]
+    },
+    {
+      "id": "wi-3",
+      "title": "Docs",
+      "size": "S",
+      "status": "todo",
+      "depends_on": [],
+      "impacted_paths": []
+    }
+  ],
+  "conflicts": [
+    {
+      "earlier": "wi-1",
+      "later": "wi-2",
+      "paths": [
+        "shop/rates.py"
+      ],
+      "resolution": "serialized"
+    },
+    {
+      "earlier": "wi-1",
+      "later": "wi-3",
+      "paths": [],
+      "resolution": "unknown_paths"
+    },
+    {
+      "earlier": "wi-2",
+      "later": "wi-3",
+      "paths": [],
+      "resolution": "unknown_paths"
+    }
+  ],
+  "breakdown_open_questions": [
+    "Which database?"
+  ],
+  "cost_usd": 1.0,
+  "duration_ms": 0
+}

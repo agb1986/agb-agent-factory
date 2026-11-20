@@ -174,6 +174,15 @@ class WorkItem:
 
 
 @dataclass(frozen=True)
+class NewItem:
+    """One item of an `add_many` batch: a ticket, its size and the batch positions it follows."""
+
+    ticket: Ticket
+    size: Size | None = None
+    depends_on: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
 class ReadyResult:
     """What `ready()` did and what is ready now.
 
@@ -217,44 +226,116 @@ class WorkItems:
         size, parent, actor or reason. A new item has no dependents, so it cannot close a cycle.
         """
         ticket = Ticket.model_validate(ticket.model_dump())
-        if size is not None and size not in SIZES:
-            raise InvalidWorkItem(f"size {size!r} is not one of {', '.join(SIZES)}")
+        _check_size(size)
         _check_actor(actor, pipeline_run_id)
         reason = _check_reason(reason)
         deps = _unique(depends_on)
         with self.trace.connection() as con, _transaction(con):
-            if parent is not None:
-                if parent.startswith("prd:"):
-                    if parent == "prd:":
-                        raise InvalidWorkItem("parent prd: needs a pipeline run id")
-                else:
-                    self._get(con, _check_id(parent))
+            self._check_parent(con, parent)
             for dep in deps:
                 self._get(con, _check_id(dep))
             item_id = f"wi-{self._max_number(con) + 1}"
-            at = self._stamp()
-            con.execute(
-                "INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    item_id,
-                    ticket.kind,
-                    ticket.title,
-                    ticket.body,
-                    json.dumps(ticket.acceptance),
-                    ticket.repo,
-                    ticket.ref,
-                    parent,
-                    json.dumps(deps),
-                    json.dumps(ticket.impacted_paths),
-                    size,
-                    "todo",
-                    "[]",
-                    at,
-                    at,
-                ],
-            )
-            self._event(con, item_id, at, None, "todo", actor, pipeline_run_id, reason)
+            self._insert(con, item_id, ticket, parent, deps, size, actor, pipeline_run_id, reason)
             return self._get(con, item_id)
+
+    def add_many(
+        self,
+        batch: Sequence[NewItem],
+        *,
+        parent: str | None = None,
+        actor: str = "human",
+        pipeline_run_id: str | None = None,
+        reason: str = "created",
+    ) -> builtins.list[WorkItem]:
+        """Write every item of `batch` in `todo`, all or none, and return them in order.
+
+        The plan loop files one plan this way: its tickets name each other by position, so the
+        ids cannot be known before the store assigns them. Item `n` of the batch gets the id
+        `wi-<max + 1 + n>`, in one transaction with its creation event, and `NewItem.depends_on`
+        holds positions in `batch`, translated to those ids. `parent`, `actor`,
+        `pipeline_run_id` and `reason` are `add`'s and apply to every item. The graph of the
+        whole store is checked for a cycle before the commit, as `set_depends_on` does.
+
+        Raises `InvalidWorkItem` for an empty batch, a size, parent, actor or reason `add`
+        refuses, a position that is not in the batch, repeated or the item's own, and a cycle,
+        and `WorkItemNotFound` for an unknown parent. Nothing is written when it raises.
+        """
+        if not batch:
+            raise InvalidWorkItem("a batch needs at least one item")
+        tickets = [Ticket.model_validate(new.ticket.model_dump()) for new in batch]
+        for new in batch:
+            _check_size(new.size)
+        _check_actor(actor, pipeline_run_id)
+        reason = _check_reason(reason)
+        for position, new in enumerate(batch):
+            if len(set(new.depends_on)) != len(new.depends_on):
+                raise InvalidWorkItem(f"item {position} lists a dependency twice")
+            for dep in new.depends_on:
+                if not 0 <= dep < len(batch):
+                    raise InvalidWorkItem(
+                        f"item {position} depends on {dep}, which is not in the batch"
+                    )
+                if dep == position:
+                    raise InvalidWorkItem(f"item {position} depends on itself")
+        with self.trace.connection() as con, _transaction(con):
+            self._check_parent(con, parent)
+            first = self._max_number(con) + 1
+            ids = [f"wi-{first + n}" for n in range(len(batch))]
+            for item_id, ticket, new in zip(ids, tickets, batch, strict=True):
+                deps = [ids[dep] for dep in new.depends_on]
+                self._insert(
+                    con, item_id, ticket, parent, deps, new.size, actor, pipeline_run_id, reason
+                )
+            graph = {i.id: i.depends_on for i in self._all(con)}
+            for item_id in ids:
+                cycle = _cycle(graph, item_id)
+                if cycle:
+                    raise InvalidWorkItem(f"dependency cycle: {' -> '.join(cycle)}")
+            return [self._get(con, item_id) for item_id in ids]
+
+    def _check_parent(self, con: duckdb.DuckDBPyConnection, parent: str | None) -> None:
+        if parent is None:
+            return
+        if parent.startswith("prd:"):
+            if parent == "prd:":
+                raise InvalidWorkItem("parent prd: needs a pipeline run id")
+            return
+        self._get(con, _check_id(parent))
+
+    def _insert(
+        self,
+        con: duckdb.DuckDBPyConnection,
+        item_id: str,
+        ticket: Ticket,
+        parent: str | None,
+        deps: builtins.list[str],
+        size: Size | None,
+        actor: str,
+        pipeline_run_id: str | None,
+        reason: str,
+    ) -> None:
+        at = self._stamp()
+        con.execute(
+            "INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                item_id,
+                ticket.kind,
+                ticket.title,
+                ticket.body,
+                json.dumps(ticket.acceptance),
+                ticket.repo,
+                ticket.ref,
+                parent,
+                json.dumps(deps),
+                json.dumps(ticket.impacted_paths),
+                size,
+                "todo",
+                "[]",
+                at,
+                at,
+            ],
+        )
+        self._event(con, item_id, at, None, "todo", actor, pipeline_run_id, reason)
 
     def get(self, item_id: str) -> WorkItem:
         """Return the item with `item_id`. Raises `WorkItemNotFound` when there is none."""
@@ -560,6 +641,11 @@ def _iso(at: datetime) -> str:
 def _number(item_id: str) -> int:
     match = _ID.fullmatch(item_id)
     return int(match.group(1)) if match else 0
+
+
+def _check_size(size: Size | None) -> None:
+    if size is not None and size not in SIZES:
+        raise InvalidWorkItem(f"size {size!r} is not one of {', '.join(SIZES)}")
 
 
 def _check_id(item_id: str) -> str:

@@ -17,6 +17,7 @@ from runtime.work_items import (
     TRANSITIONS,
     IllegalTransitionError,
     InvalidWorkItem,
+    NewItem,
     WorkItemNotFound,
     WorkItems,
 )
@@ -420,3 +421,91 @@ def test_a_failed_move_rolls_back_the_row_and_the_event(
 def test_a_naive_clock_is_refused(trace: Trace) -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
         WorkItems(trace, now=lambda: datetime(2026, 11, 20)).add(TICKET)
+
+
+def test_add_many_writes_every_item_with_ids_dependencies_and_events(store: WorkItems) -> None:
+    store.add(TICKET)
+    items = store.add_many(
+        [
+            NewItem(ticket(title="one"), "S"),
+            NewItem(ticket(title="two"), "M", (0,)),
+            NewItem(ticket(title="three"), None, (0, 1)),
+        ],
+        parent="prd:run-1",
+        actor="pipeline:plan_loop",
+        pipeline_run_id="run-1",
+        reason="planned",
+    )
+    assert [i.id for i in items] == ["wi-2", "wi-3", "wi-4"]
+    assert [i.depends_on for i in items] == [(), ("wi-2",), ("wi-2", "wi-3")]
+    assert [i.size for i in items] == ["S", "M", None]
+    assert {i.parent for i in items} == {"prd:run-1"}
+    assert {i.status for i in items} == {"todo"}
+    for item in items:
+        (event,) = store.events(item.id)
+        assert (event.to_status, event.actor, event.pipeline_run_id, event.reason) == (
+            "todo",
+            "pipeline:plan_loop",
+            "run-1",
+            "planned",
+        )
+
+
+def test_add_many_may_name_a_later_position_when_the_graph_is_acyclic(store: WorkItems) -> None:
+    first, second = store.add_many([NewItem(TICKET, None, (1,)), NewItem(TICKET)])
+    assert first.depends_on == (second.id,)
+
+
+@pytest.mark.parametrize(
+    ("batch", "match"),
+    [
+        ([], "at least one"),
+        ([NewItem(TICKET, "XL")], "size"),  # ty: ignore[invalid-argument-type]
+        ([NewItem(TICKET, None, (3,))], "not in the batch"),
+        ([NewItem(TICKET, None, (-1,))], "not in the batch"),
+        ([NewItem(TICKET, None, (0,))], "itself"),
+        ([NewItem(TICKET), NewItem(TICKET, None, (0, 0))], "twice"),
+        ([NewItem(TICKET, None, (1,)), NewItem(TICKET, None, (0,))], "cycle"),
+    ],
+)
+def test_add_many_refuses_a_bad_batch_and_writes_nothing(
+    store: WorkItems, batch: list[NewItem], match: str
+) -> None:
+    with pytest.raises(InvalidWorkItem, match=match):
+        store.add_many(batch)
+    assert store.list() == []
+
+
+def test_add_many_refuses_a_bad_parent_actor_or_reason_and_writes_nothing(
+    store: WorkItems,
+) -> None:
+    with pytest.raises(WorkItemNotFound):
+        store.add_many([NewItem(TICKET)], parent="wi-9")
+    with pytest.raises(InvalidWorkItem, match="needs a pipeline run id"):
+        store.add_many([NewItem(TICKET)], parent="prd:")
+    with pytest.raises(InvalidWorkItem, match="pipeline run id"):
+        store.add_many([NewItem(TICKET)], actor="pipeline:plan_loop")
+    with pytest.raises(InvalidWorkItem, match="reason"):
+        store.add_many([NewItem(TICKET)], reason=" ")
+    assert store.list() == []
+
+
+def test_a_failure_halfway_through_add_many_rolls_every_item_back(
+    store: WorkItems, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store.add(TICKET)
+    real = store._event
+    calls: list[str] = []
+
+    def flaky(*args: Any) -> None:
+        calls.append(args[1])
+        if len(calls) == 3:
+            raise RuntimeError("disk full")
+        real(*args)
+
+    monkeypatch.setattr(store, "_event", flaky)
+    with pytest.raises(RuntimeError):
+        store.add_many([NewItem(TICKET), NewItem(TICKET), NewItem(TICKET)])
+    monkeypatch.undo()
+    assert [i.id for i in store.list()] == ["wi-1"]
+    assert store.add(TICKET).id == "wi-2"
