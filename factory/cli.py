@@ -53,11 +53,26 @@ def build_parser() -> argparse.ArgumentParser:
     review_parser = sub.add_parser(
         "review",
         help="review a change with the reviewer panel and the judge",
-        epilog="example: factory review ./repo --base main --head feature --json",
+        epilog="example: factory review ./repo --pr 42 --comment",
     )
     review_parser.add_argument("repo_path", help="path of the git repository to review")
-    review_parser.add_argument("--base", required=True, help="git ref the change starts from")
-    review_parser.add_argument("--head", required=True, help="git ref under review")
+    review_parser.add_argument("--base", help="git ref the change starts from (with --head)")
+    review_parser.add_argument("--head", help="git ref under review (with --base)")
+    review_parser.add_argument(
+        "--pr",
+        type=int,
+        help="review this pull request of the repository's origin instead of --base and --head",
+    )
+    review_parser.add_argument(
+        "--comment",
+        action="store_true",
+        help="with --pr: post the findings on the pull request as a review, or edit the last one",
+    )
+    review_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="with --comment: read everything and send nothing, and say what would be posted",
+    )
     review_parser.add_argument(
         "--json", action="store_true", help="print one JSON document on stdout instead of text"
     )
@@ -399,6 +414,9 @@ def _review(args: argparse.Namespace) -> int:
         no_triage=args.no_triage,
         no_judge_gate=args.no_judge_gate,
         budget_usd=args.budget_usd,
+        pr=args.pr,
+        comment=args.comment,
+        dry_run=args.dry_run,
     )
 
 
