@@ -364,8 +364,35 @@ class WorkItems:
             raise InvalidWorkItem(f"{to!r} is not a state", hint=f"one of {', '.join(STATUSES)}")
         _check_actor(actor, pipeline_run_id)
         reason = _check_reason(reason)
+        return self.move_with(
+            item_id, to, reason, actor=actor, pipeline_run_id=pipeline_run_id, write=None
+        )
+
+    def move_with(
+        self,
+        item_id: str,
+        to: str,
+        reason: str,
+        *,
+        actor: str = "human",
+        pipeline_run_id: str | None = None,
+        write: Callable[[duckdb.DuckDBPyConnection, WorkItem], None] | None,
+    ) -> WorkItem:
+        """Run `write(con, item)` and then `move`, both in one transaction, and return the moved item.
+
+        `item` is the row as it was before the move. `write` lets another table (escalations,
+        #93) be written atomically with the move under the trace's single writer: an error raised
+        by `write` or by the move rolls both back. Raises what `move` raises, and whatever `write`
+        raises.
+        """
+        if to not in STATUSES:
+            raise InvalidWorkItem(f"{to!r} is not a state", hint=f"one of {', '.join(STATUSES)}")
+        _check_actor(actor, pipeline_run_id)
+        reason = _check_reason(reason)
         with self.trace.connection() as con, _transaction(con):
             item = self._get(con, item_id)
+            if write is not None:
+                write(con, item)
             return self._move(con, item, to, reason, actor, pipeline_run_id)
 
     def link_run(self, item_id: str, pipeline_run_id: str) -> WorkItem:
