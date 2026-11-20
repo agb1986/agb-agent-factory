@@ -20,7 +20,14 @@ from tools import (
     wire_name,
 )
 from tools._common import ToolSpec
-from tools.registry import NEEDS_WEB_DOMAINS, READ_ONLY, SANDBOX_DENIED, SANDBOX_ONLY, SPECS
+from tools.registry import (
+    NEEDS_WEB_DOMAINS,
+    OUTSIDE_WRITES,
+    READ_ONLY,
+    SANDBOX_DENIED,
+    SANDBOX_ONLY,
+    SPECS,
+)
 
 WIRE_PATTERN = re.compile(r"[a-zA-Z0-9_-]{1,64}")  # what the API accepts for a tool name
 
@@ -69,7 +76,8 @@ def test_sets_follow_the_spec_flags() -> None:
     assert SANDBOX_ONLY == {s.name for s in specs if s.writes}
     assert SANDBOX_DENIED == {s.name for s in specs if s.reaches_out}
     assert NEEDS_WEB_DOMAINS == {s.name for s in specs if s.needs_web_domains}
-    assert READ_ONLY == {s.name for s in specs if not s.writes}
+    assert OUTSIDE_WRITES == {s.name for s in specs if s.outside_write}
+    assert READ_ONLY == {s.name for s in specs if not s.writes and not s.outside_write}
 
 
 def test_discovery_refuses_a_duplicate_name(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,6 +101,10 @@ def test_spec_rejects_contradictory_flags() -> None:
         ToolSpec(name="x.y", description="d", impl=impl, writes=True, reaches_out=True)
     with pytest.raises(ValueError, match="needs web domains reaches out"):
         ToolSpec(name="x.y", description="d", impl=impl, needs_web_domains=True)
+    with pytest.raises(ValueError, match="an outside write reaches out"):
+        ToolSpec(name="x.y", description="d", impl=impl, outside_write=True)
+    with pytest.raises(ValueError, match="does not write inside the sandbox"):
+        ToolSpec(name="x.y", description="d", impl=impl, outside_write=True, writes=True)
     spec = ToolSpec(name="x.y", description="d", impl=impl)
     assert spec.definition() == {
         "name": "x.y",
@@ -202,18 +214,36 @@ def test_sandbox_denied_tools_are_refused_with_the_flag(name: str) -> None:
         tool_defs(["fs.read_file", name], sandbox=True)
     assert exit_code(err.value) == ExitCode.USAGE
     defs = tool_defs([name], web_domains=["example.com"])  # the allow-list the web tools need
-    assert [d["name"] for d in defs] == [name.replace(".", "__")]
+    wanted = [] if name in OUTSIDE_WRITES else [name.replace(".", "__")]
+    assert [d["name"] for d in defs] == wanted
 
 
 def test_the_network_tools_are_sandbox_denied() -> None:
     assert {"sentry.list_events", "sentry.read_issue", "memory.search"} <= SANDBOX_DENIED
     assert NEEDS_WEB_DOMAINS == {"web.fetch", "web.search"} <= SANDBOX_DENIED
-    assert SANDBOX_DENIED <= READ_ONLY
+    assert SANDBOX_DENIED <= READ_ONLY | OUTSIDE_WRITES
 
 
-def test_every_tool_is_either_read_only_or_sandbox_only() -> None:
-    assert READ_ONLY | SANDBOX_ONLY == set(TOOLS)
+def test_every_tool_is_read_only_sandbox_only_or_an_outside_write() -> None:
+    assert READ_ONLY | SANDBOX_ONLY | OUTSIDE_WRITES == set(TOOLS)
     assert not READ_ONLY & SANDBOX_ONLY
+    assert not READ_ONLY & OUTSIDE_WRITES
+    assert not SANDBOX_ONLY & OUTSIDE_WRITES
+
+
+def test_outside_writes_are_the_github_writes_and_reach_out() -> None:
+    assert OUTSIDE_WRITES == {"github.create_pr", "github.comment_pr"}
+    assert OUTSIDE_WRITES <= SANDBOX_DENIED
+    assert {"github.read_issue", "github.read_pr"} <= READ_ONLY
+
+
+def test_tool_defs_checks_outside_writes_but_never_hands_one_out() -> None:
+    defs = tool_defs(["git.read_file", "github.create_pr", "github.comment_pr", "github.read_pr"])
+    assert [d["name"] for d in defs] == ["git__read_file", "github__read_pr"]
+    with pytest.raises(ToolListError, match=r"github\.create_pr"):
+        tool_defs(["github.create_pr"], ["github.create_pr"])
+    with pytest.raises(ToolListError, match=r"github\.comment_pr"):
+        tool_defs(["github.comment_pr"], sandbox=True)
 
 
 # --- the spike profile

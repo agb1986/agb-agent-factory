@@ -1,7 +1,8 @@
 """Shared plumbing for the tool implementations: errors, repository and path checks, subprocesses.
 
-Every tool in this package is confined to one repository root, and all but the two in `tools.sandbox` are read-only. The helpers here are
-the only place that runs a subprocess, resolves a path or truncates output, so the rules in
+Every tool in this package is confined to one repository root, and all but the two in
+`tools.sandbox` and the outside writes in `tools.github` are read-only. The helpers here are the
+only place that runs a subprocess, resolves a path or truncates output, so the rules in
 `docs/CONVENTIONS.md` (Tools) are enforced once rather than once per tool.
 """
 
@@ -43,6 +44,14 @@ class ToolUnavailableError(ToolError, AuthOrConfigError):
     """A required executable (`git`, `rg`) is not on PATH (exit 4)."""
 
 
+class OutsideWriteRefused(ToolError):
+    """An outside write may not be made: wrong agent, wrong repository, a repeat, a fork (exit 1).
+
+    Raised by the outside-write guard and by the tool itself (`runtime.outside`, which re-exports
+    it). It ends the stage: there is no model to send a denial to.
+    """
+
+
 class UnknownToolError(ToolError, NotFoundError):
     """A tool name is not in the registry (exit 3)."""
 
@@ -68,6 +77,12 @@ class ToolSpec:
     `spike_impl` and `spike_description`, when set, replace `impl` and `description` for an agent
     whose manifest says `sandbox: spike` (`tools.registry.impl_for`): `shell.run` runs its command
     in the networked profile there, and tells the model so.
+
+    `outside_write` marks a tool that changes something a person reads outside the sandbox, such
+    as a pull request (`docs/decisions/0003-outside-writes.md`). It requires `reaches_out` and
+    forbids `writes`. The registry names such tools in `OUTSIDE_WRITES`, `tool_defs` never sends
+    them to a model, and their `impl` takes a `runtime.outside.OutsideContext` in place of
+    `repo_path`: `impl(context, **arguments, max_bytes=...)`. Only `runtime.outside.write` calls it.
     """
 
     name: str
@@ -86,10 +101,15 @@ class ToolSpec:
     needs_web_domains: bool = False
     spike_impl: Callable[..., str] | None = None
     spike_description: str | None = None
+    outside_write: bool = False
 
     def __post_init__(self) -> None:
+        if self.outside_write and self.writes:
+            raise ValueError(f"{self.name}: an outside write does not write inside the sandbox")
         if self.writes and self.reaches_out:
             raise ValueError(f"{self.name}: a tool cannot both write and reach out")
+        if self.outside_write and not self.reaches_out:
+            raise ValueError(f"{self.name}: an outside write reaches out")
         if self.needs_web_domains and not self.reaches_out:
             raise ValueError(f"{self.name}: a tool that needs web domains reaches out")
 
@@ -128,15 +148,24 @@ def _first_line(data: bytes) -> str:
     return ""
 
 
-def run(argv: list[str], cwd: Path) -> subprocess.CompletedProcess[bytes]:
+def run(
+    argv: list[str], cwd: Path, *, input: bytes | None = None
+) -> subprocess.CompletedProcess[bytes]:
     """Run `argv` in `cwd` and return the finished process without checking its exit status.
 
-    The command is an argument list and never goes through a shell. A missing executable raises
-    `ToolUnavailableError`; running past `TIMEOUT_S` raises `ToolExecutionError`.
+    The command is an argument list and never goes through a shell. `input`, when given, is sent
+    on standard input. A missing executable raises `ToolUnavailableError`; running past
+    `TIMEOUT_S` raises `ToolExecutionError`.
     """
     try:
         return subprocess.run(
-            argv, cwd=cwd, env=_env(), capture_output=True, timeout=TIMEOUT_S, check=False
+            argv,
+            cwd=cwd,
+            env=_env(),
+            input=input,
+            capture_output=True,
+            timeout=TIMEOUT_S,
+            check=False,
         )
     except FileNotFoundError as exc:
         raise ToolUnavailableError(
