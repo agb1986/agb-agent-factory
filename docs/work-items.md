@@ -79,6 +79,12 @@ are `dropped` do not count), then the older, then the lower id. The Jev ranking 
 CONVENTIONS is left out until a ranking agent exists. Running `ready` again with nothing changed
 promotes nothing.
 
+An `incident` has no dependencies, so `ready` promotes every one left in `todo`, including the
+ones the incident pipeline filed there because no test reproduced the event (#108). For an
+incident, `ready` therefore does not mean reproduced: the hotfix pipeline (#109) checks
+`pipelines.incident.is_reproduced` on the body before it acts, as [incident.md](incident.md)
+describes.
+
 ## Exit codes
 
 | Code | When |

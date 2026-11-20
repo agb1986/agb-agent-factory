@@ -205,6 +205,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         help="stop the run once it has spent this many dollars (default: the pipeline default)",
     )
+    _add_incident_parser(sub)
     run_parser = sub.add_parser(
         "run",
         help="run one LLM agent once on a JSON payload and print its output",
@@ -286,6 +287,51 @@ def build_parser() -> argparse.ArgumentParser:
     _add_ticket_parser(sub)
     _add_build_parser(sub)
     return parser
+
+
+def _add_incident_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add `factory incident` to `sub`."""
+    incident_parser = sub.add_parser(
+        "incident",
+        help="diagnose a Sentry event at its release, reproduce it and file an incident ticket",
+        epilog="example: factory incident ./repo --event @issue.json --json",
+    )
+    incident_parser.add_argument(
+        "repo_path", help="path of the git repository the event came from; never changed"
+    )
+    incident_parser.add_argument(
+        "--event",
+        required=True,
+        help="the Sentry issue as `sentry.read_issue` returns it: JSON, or @FILE holding it",
+    )
+    incident_parser.add_argument(
+        "--ref",
+        help="git ref of the release (default: the event's release, as a tag or as v<release>)",
+    )
+    incident_parser.add_argument(
+        "--repository",
+        help="name the ticket gives the repository (default: its absolute path)",
+    )
+    incident_parser.add_argument(
+        "--out-dir", help="where the report goes (default: data/incidents)"
+    )
+    incident_parser.add_argument(
+        "--work-dir",
+        help="directory for the throwaway clone (default: the system temporary directory)",
+    )
+    incident_parser.add_argument(
+        "--json", action="store_true", help="print one JSON document on stdout instead of text"
+    )
+    incident_parser.add_argument(
+        "--allow-unpublished",
+        action="store_true",
+        help="also use agent versions that have not passed `factory publish-check`",
+    )
+    incident_parser.add_argument(
+        "--budget-usd",
+        type=float,
+        help="stop the run once it has spent this many dollars (default: the pipeline default)",
+    )
 
 
 def _add_ticket_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -437,6 +483,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _plan(args)
         if args.command == "build":
             return _build(args)
+        if args.command == "incident":
+            return _incident(args)
         if args.command == "run":
             return _run(args)
         if args.command == "cost":
@@ -570,6 +618,23 @@ def _build(args: argparse.Namespace) -> int:
         args.id,
         repo=args.repo,
         dry_run=args.dry_run,
+        out_dir=args.out_dir,
+        work_dir=args.work_dir,
+        budget_usd=args.budget_usd,
+        as_json=args.json,
+        allow_unpublished=args.allow_unpublished,
+    )
+
+
+def _incident(args: argparse.Namespace) -> int:
+    """Diagnose one Sentry event at its release and file an incident ticket."""
+    from pipelines.incident import command  # imported here: it pulls in the Anthropic SDK
+
+    return command(
+        args.repo_path,
+        event=args.event,
+        ref=args.ref,
+        repository=args.repository,
         out_dir=args.out_dir,
         work_dir=args.work_dir,
         budget_usd=args.budget_usd,

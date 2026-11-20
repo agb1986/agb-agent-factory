@@ -1,0 +1,146 @@
+{
+  "pipeline_run_id": "pipeline-run-1",
+  "repo_path": "<repo>",
+  "release": "head",
+  "commit": "f2135236fa26e762b00eeeca7f52d1d83dcbc3d4",
+  "event": {
+    "id": "4501",
+    "short_id": "SHOP-7A",
+    "title": "ZeroDivisionError: division by zero",
+    "culprit": "reviews.scores in average_rating",
+    "level": "error",
+    "status": "unresolved",
+    "count": 214,
+    "user_count": 61,
+    "first_seen": "2026-11-18T09:12:44Z",
+    "last_seen": "2026-11-20T15:02:10Z",
+    "release": "head",
+    "first_release": "head",
+    "last_release": "head",
+    "event_id": "9b2f6c1e4d8a4f37a0c1b2d3e4f5a6b7",
+    "exceptions": [
+      {
+        "type": "ZeroDivisionError",
+        "value": "division by zero",
+        "frames": [
+          {
+            "file": "/app/reviews/listing.py",
+            "function": "product_line",
+            "line": 8,
+            "in_app": true
+          },
+          {
+            "file": "/app/reviews/scores.py",
+            "function": "average_rating",
+            "line": 7,
+            "in_app": true
+          }
+        ]
+      }
+    ],
+    "breadcrumbs": [
+      {
+        "time": "2026-11-20T15:02:09Z",
+        "category": "http",
+        "level": "info",
+        "message": "GET /products/travel-mug"
+      },
+      {
+        "time": "2026-11-20T15:02:10Z",
+        "category": "reviews",
+        "level": "info",
+        "message": "loaded 0 ratings for product 'Travel mug'"
+      }
+    ]
+  },
+  "triage": {
+    "ref": "triage-diagnostics@0.1.0",
+    "output": {
+      "title": "ZeroDivisionError in average_rating for a product with no ratings",
+      "summary": "average_rating divides by len(ratings), which is 0 for a product without ratings. product_line passes the empty list straight through.",
+      "reproduction_steps": [
+        "Load a product with no ratings.",
+        "Call product_line with its name and the empty list.",
+        "average_rating raises ZeroDivisionError."
+      ],
+      "suspected_paths": [
+        "reviews/scores.py",
+        "reviews/listing.py"
+      ],
+      "culprit": {
+        "file": "reviews/scores.py",
+        "line_start": 6,
+        "line_end": 7,
+        "reason": "it divides by the number of ratings without checking for none."
+      },
+      "confidence": 0.75,
+      "reproduction_test": {
+        "path": "tests/test_no_ratings.py",
+        "code": "from reviews.listing import product_line\n\n\ndef test_a_product_with_no_ratings_has_a_line() -> None:\n    assert product_line(\"Travel mug\", []) == \"Travel mug: no ratings\"\n"
+      }
+    }
+  },
+  "test_writer": {
+    "ref": "test-writer@0.2.0",
+    "output": {
+      "files_changed": [
+        {
+          "path": "tests/test_no_ratings.py",
+          "action": "created",
+          "summary": "reproduces the event"
+        }
+      ],
+      "commands_run": [],
+      "test_files": [
+        "tests/test_no_ratings.py"
+      ],
+      "fails_on_head": true,
+      "summary": "a test for a product with no ratings"
+    }
+  },
+  "reproduction": {
+    "test_files": [
+      "tests/test_no_ratings.py"
+    ],
+    "exception": "ZeroDivisionError",
+    "crash_file": "reviews/scores.py",
+    "reproduced": true,
+    "why_not": null,
+    "run": {
+      "argv": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "-p",
+        "no:cacheprovider",
+        "tests/test_no_ratings.py"
+      ],
+      "exit_code": 1,
+      "seconds": 0.1,
+      "output_tail": "tests/test_no_ratings.py F\nreviews/scores.py:7: in average_rating\n    return round(total / len(ratings), 1)\nE   ZeroDivisionError: division by zero\n1 failed in 0.02s\n"
+    }
+  },
+  "confidence": 0.9,
+  "ticket": {
+    "id": "wi-1",
+    "status": "ready",
+    "kind": "incident",
+    "title": "ZeroDivisionError in average_rating for a product with no ratings",
+    "body": "## Event\n\n- Sentry issue: SHOP-7A\n- Title: ZeroDivisionError: division by zero\n- Level: error\n- Release: head (commit f2135236fa26e762b00eeeca7f52d1d83dcbc3d4)\n- Exception: ZeroDivisionError: division by zero\n- Crash file: reviews/scores.py\n- Events: 214, 61 users; first seen 2026-11-18T09:12:44Z, last seen 2026-11-20T15:02:10Z\n- Latest event: 9b2f6c1e4d8a4f37a0c1b2d3e4f5a6b7\n\n## Summary\n\naverage_rating divides by len(ratings), which is 0 for a product without ratings. product_line passes the empty list straight through.\n\n## Stack trace\n\n```text\nTraceback (most recent call last):\n  File \"/app/reviews/listing.py\", line 8, in product_line\n  File \"/app/reviews/scores.py\", line 7, in average_rating\nZeroDivisionError: division by zero\n```\n\n## Reproduction steps\n\n1. Load a product with no ratings.\n2. Call product_line with its name and the empty list.\n3. average_rating raises ZeroDivisionError.\n\n## Suspected paths\n\n- `reviews/scores.py`\n- `reviews/listing.py`\n\n## Culprit\n\n`reviews/scores.py` lines 6-7: it divides by the number of ratings without checking for none.\n\n## Confidence\n\n- Confidence: 0.90\n- Reproduced: yes\n- Diagnosis confidence: 0.75\n\n## Reproduction test\n\n`tests/test_no_ratings.py` fails at head with ZeroDivisionError raised from `reviews/scores.py`.\n\n`tests/test_no_ratings.py`:\n\n```python\nfrom reviews.listing import product_line\n\n\ndef test_a_product_with_no_ratings_has_a_line() -> None:\n    assert product_line(\"Travel mug\", []) == \"Travel mug: no ratings\"\n```\n",
+    "acceptance": [
+      "tests/test_no_ratings.py passes, where it fails at head with ZeroDivisionError.",
+      "The whole test suite passes."
+    ],
+    "repo": "<repo>",
+    "ref": "f2135236fa26e762b00eeeca7f52d1d83dcbc3d4",
+    "impacted_paths": [
+      "reviews/scores.py",
+      "reviews/listing.py"
+    ]
+  },
+  "report_path": "<out-dir>/<pipeline-run-id>.json",
+  "total_cost_usd": 0.5,
+  "duration_ms": 0
+}

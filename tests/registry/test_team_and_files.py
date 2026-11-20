@@ -25,6 +25,7 @@ ADR_TEAMS: dict[str, str | None] = {
     "perf-reviewer": "qa",
     "judge": "qa",
     "test-writer": "qa",
+    "triage-diagnostics": "sre",
     "diff-triage": "sre",
     "judge-gate": "sre",
     "technical-feasibility": "research",

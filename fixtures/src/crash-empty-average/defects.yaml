@@ -1,0 +1,19 @@
+fixture: crash-empty-average
+summary: >-
+  Rounds the average rating and drops the guard for a product with no ratings, so
+  average_rating divides by zero and product_line no longer shows "no ratings yet". The tests
+  only rate products that have ratings. A triage-diagnostics fixture: the event is a
+  ZeroDivisionError raised in reviews/scores.py.
+defects:
+  - id: empty-ratings-divide-by-zero
+    file: reviews/scores.py
+    line_start: 6
+    line_end: 7
+    severity: major
+    category: logic
+    title: average_rating divides by zero for a product with no ratings
+    snippet: "total / len(ratings)"
+    description: >-
+      The early return for an empty list is gone, so a product nobody rated raises
+      ZeroDivisionError from average_rating, and product_line fails with it. Restore the guard and
+      the "no ratings yet" line.

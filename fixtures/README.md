@@ -60,6 +60,10 @@ fixture**; add a new one instead.
 | `sast-false-positive` | Names the auth header and the token env var as constants and adds jittered retry waits; a static analyser flags all three, wrongly | none |
 | `storefront` | Adds a line to the README on how to run the tests. A small shop package (money, catalog, cart, orders, API, CLI) whose modules import one another, for story-breakdown evals | none |
 | `tracker` | Adds a line to the README on how to run the tests. A small issue tracker package (models, storage, search, report, CLI), for story-breakdown evals | none |
+| `crash-empty-average` | `average_rating` divides by the number of ratings with no check for none, so a product with no ratings raises `ZeroDivisionError` (a triage-diagnostics eval) | 1 (major, logic) |
+| `crash-missing-config-key` | `timeout_seconds` reads `config["timeout"]` and drops the default, so a config without it raises `KeyError` (a triage-diagnostics eval) | 1 (major, logic) |
+| `crash-loader-caller` | The feed loader stops skipping lines with no price, so `line_total` in `pricing.py` raises `ValueError`; the fault is in the loader, one frame up (a triage-diagnostics eval) | 1 (major, logic) |
+| `crash-first-of-empty` | `next_job` takes the first of a sorted list and drops the empty-queue check, so an idle worker raises `IndexError` (a triage-diagnostics eval) | 1 (major, logic) |
 
 ## `defects.yaml`
 

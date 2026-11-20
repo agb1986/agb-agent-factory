@@ -23,7 +23,7 @@ from factory import cli
 from factory.cli import main
 from factory.exit import ExitCode
 from fixtures.build import build
-from pipelines import build_loop, fix_loop, plan_loop, review_panel, triage
+from pipelines import build_loop, fix_loop, incident, plan_loop, review_panel, triage
 from registry import AgentRef
 from registry.common_schemas import Ticket
 from registry.spec import LLMSpec
@@ -34,6 +34,9 @@ from tests.gh_fake import FakeGh, github_repo
 from tests.pipelines.test_build_loop import FULL, PULL_JSON, REPO_JSON, BuildRunner
 from tests.pipelines.test_build_loop import _ticket as build_ticket
 from tests.pipelines.test_fix_loop import FINDING, FakeSandbox, FixRunner
+from tests.pipelines.test_incident import FakeSandbox as IncidentSandbox
+from tests.pipelines.test_incident import IncidentRunner
+from tests.pipelines.test_incident import _event as incident_event
 from tests.pipelines.test_plan_loop import QUESTIONS, SHARED, UNKNOWN
 from tests.pipelines.test_plan_loop import FakeRunner as PlanRunner
 from tests.pipelines.test_plan_loop import _prd as plan_prd
@@ -302,6 +305,31 @@ def test_plan_json(
     document["repository"] = "<repo>"
     document["ref"] = "<sha>"
     golden("plan", document)
+
+
+# --- incident
+
+
+def test_incident_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    golden: Golden,
+) -> None:
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(tmp_path / "traces.duckdb"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(incident, "run", IncidentRunner())
+    monkeypatch.setattr(incident, "DockerSandbox", IncidentSandbox)
+    (fixture,) = build(["crash-empty-average"], dest=tmp_path / "repos")
+    out, work = tmp_path / "out", tmp_path / "work"
+    work.mkdir()
+    event = json.dumps(incident_event())
+    argv = ["incident", str(fixture.path), "--event", event, "--out-dir", str(out)]
+    document = _run([*argv, "--work-dir", str(work), "--allow-unpublished", "--json"], capsys)
+    # The paths are under tmp_path and name the run.
+    document["repo_path"] = document["ticket"]["repo"] = "<repo>"
+    document["report_path"] = "<out-dir>/<pipeline-run-id>.json"
+    golden("incident", document)
 
 
 # --- build

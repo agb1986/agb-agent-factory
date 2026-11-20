@@ -1,0 +1,18 @@
+fixture: crash-first-of-empty
+summary: >-
+  Rewrites next_job with a sort to break ties by order and drops the check for an empty queue, so
+  run_once on an idle worker raises IndexError from next_job instead of returning "idle". The only
+  test has jobs pending. A triage-diagnostics fixture: the event is an IndexError raised in
+  jobs/queue.py.
+defects:
+  - id: empty-queue-index-error
+    file: jobs/queue.py
+    line_start: 14
+    line_end: 15
+    severity: major
+    category: logic
+    title: next_job indexes an empty list when nothing is pending
+    snippet: "ranked[0]"
+    description: >-
+      With no pending jobs the sorted list is empty and ranked[0] raises IndexError. Return None for
+      an empty queue again, as run_once expects.
