@@ -41,6 +41,7 @@ import duckdb
 
 from factory.exit import FactoryError, NotFoundError
 from registry.spec import ScoringSpec
+from runtime.outside import TAG_PREFIX as OUTSIDE_TAG_PREFIX
 from runtime.scoring import score_values, ship, weighted_score
 from runtime.work_items import STATUSES
 
@@ -441,6 +442,8 @@ def panel_ship(
     A run's verdict is its judge's weighted score at `scoring.ship_threshold`; for a run whose
     judge-gate skipped the judge it is the gate's verdict. Where a run has several judge rows the
     last counts. A judge output that does not carry the four scores is counted as `unreadable`.
+    Rows tagged `outside:`, the trace rows of outside writes such as a review posted for the judge
+    (`runtime/outside.py`), carry the judge's `agent_ref` but are not judge runs and are ignored.
     """
     judged: dict[str, tuple[bool, float] | None] = {}
     for run_id, output in con.execute(
@@ -448,10 +451,11 @@ def panel_ship(
         SELECT pipeline_run_id, output_json FROM traces
         WHERE starts_with(agent_ref, ?) AND kind = 'llm' AND error IS NULL
           AND output_json IS NOT NULL AND pipeline_run_id IS NOT NULL
+          AND (tag IS NULL OR NOT starts_with(tag, ?))
           AND started_at >= ? AND started_at < ?
         ORDER BY started_at, rowid
         """,
-        [f"{JUDGE_AGENT}@", start, end],
+        [f"{JUDGE_AGENT}@", OUTSIDE_TAG_PREFIX, start, end],
     ).fetchall():
         judged[run_id] = _verdict(json.loads(output), scoring)
     skipped: dict[str, bool] = {}
@@ -503,16 +507,19 @@ def agent_costs(
 ) -> tuple[AgentCost, ...]:
     """Return runs, errors and cost per agent version in `[start, end)`, dearest first.
 
-    An `agent_ref` is `name@version`; a ref without an `@` has the version `""`.
+    An `agent_ref` is `name@version`; a ref without an `@` has the version `""`. Rows tagged
+    `outside:` are left out: an outside write is recorded under the agent it is made for but is a
+    call of the guard, not a run of that agent, costs nothing and would only inflate its `runs`.
     """
     rows = con.execute(
         """
         SELECT agent_ref, count(*), count(*) FILTER (WHERE error IS NOT NULL),
                COALESCE(sum(cost_usd), 0.0)
-        FROM traces WHERE started_at >= ? AND started_at < ?
+        FROM traces
+        WHERE (tag IS NULL OR NOT starts_with(tag, ?)) AND started_at >= ? AND started_at < ?
         GROUP BY agent_ref ORDER BY 4 DESC, agent_ref
         """,
-        [start, end],
+        [OUTSIDE_TAG_PREFIX, start, end],
     ).fetchall()
     return tuple(
         AgentCost(ref.partition("@")[0], ref.partition("@")[2], int(n), int(errors), float(cost))

@@ -309,6 +309,27 @@ def test_panel_ship_rate_counts_judged_and_skipped_runs(con: Any) -> None:
     assert panel.mean_score == pytest.approx((0.9 + 0.235) / 2)
 
 
+def test_an_outside_write_row_for_the_judge_is_not_a_judge_run(tmp_path: Path) -> None:
+    store = Seed(tmp_path)
+    store.row("run-a", at(17, 9), "judge@2.1.0", 0.1, output={"scores": _scores(SHIP)})
+    store.row(
+        "run-a",
+        at(17, 10),
+        "judge@2.1.0",
+        0.0,
+        tag="outside:github.comment_pr",
+        output={"action": "comment_pr", "url": "https://example.test/1", "body": "ok"},
+    )
+
+    with open_store(store.path) as con:
+        panel = reporting.panel_ship(con, START, END, scoring())
+        (agent,) = reporting.agent_costs(con, START, END)
+
+    assert (panel.judged, panel.shipped, panel.unreadable) == (1, 1, 0)
+    assert panel.ship_rate == 1.0
+    assert (agent.runs, agent.cost_usd) == (1, pytest.approx(0.1))  # the write is not a run
+
+
 def test_panel_ship_follows_the_threshold(con: Any) -> None:
     strict = scoring().model_copy(update={"ship_threshold": 0.95})
 
