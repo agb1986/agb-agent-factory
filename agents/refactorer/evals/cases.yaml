@@ -1,0 +1,147 @@
+# Eval cases for refactorer. Each one gives the agent a refactor ticket for a fixture from
+# fixtures/src/ whose head plants a smell: a query run once per row, duplicated code, a call to a
+# deprecated function, and unnamed numbers. Each fixture's suite pins the behaviour. The
+# sandbox_tests grader checks the work tree the agent leaves, with no rubric: the whole suite must
+# pass, production code must have changed, no test file may have changed, and the public names and
+# signatures of the target files must be the same as at HEAD (expected.run.public_api, compared by
+# evals.public_api from the source with ast). The LLM judge then reads only the criteria below and
+# the answer. `repo_path` is not in the payload: the eval runner fills it in with a private copy of
+# the built fixture repository.
+cases:
+  - id: n-plus-one-join
+    fixture: n-plus-one
+    payload:
+      ticket:
+        kind: refactor
+        title: orders_with_customer_names runs one query per order
+        body: >-
+          orders_with_customer_names in orders/db.py looks up each order's customer with its own
+          query, so N orders cost N + 1 queries. The standard is one query: join orders and
+          customers in SQL and return the rows it gives. Any helper you add is private.
+        acceptance:
+          - orders_with_customer_names issues a single SQL query whatever the number of orders.
+          - It returns the same (order_id, customer_name, total) rows in the same order as before.
+          - Every test passes unchanged, and no public name or signature in orders/db.py changes.
+        repo: acme/orders
+        ref: head
+        impacted_paths: [orders/db.py]
+      depends_on: []
+    expected:
+      verdict: null
+      criteria: >-
+        The summary says orders_with_customer_names in orders/db.py now runs one query that joins
+        orders and customers, in place of a query per order. behaviour_kept says the rows and their
+        order are the same and that the suite passes before and after. signatures_changed is empty
+        and the answer is not blocked.
+      run:
+        suite: pass
+        production: changed
+        tests: unchanged
+        public_api: [orders/db.py]
+    grader: sandbox_tests
+
+  - id: duplicate-amount-formatting
+    fixture: refactor-duplicate
+    payload:
+      ticket:
+        kind: refactor
+        title: The three line formatters repeat the same amount code
+        body: >-
+          invoice_line, refund_line and credit_line in report/lines.py each check for a negative
+          amount and split cents into euros with the same lines. The standard is one private
+          helper that checks and formats the amount, called by all three, with each public
+          function keeping its own sign.
+        acceptance:
+          - The negative check and the euros and cents formatting exist once, in a private helper.
+          - invoice_line, refund_line and credit_line return the same text and raise the same
+            ValueError messages as before.
+          - Every test passes unchanged, and no public name or signature in report/lines.py
+            changes.
+        repo: acme/report
+        ref: head
+        impacted_paths: [report/lines.py]
+      depends_on: []
+    expected:
+      verdict: null
+      criteria: >-
+        The summary says the amount check and formatting in report/lines.py moved into one private
+        helper that invoice_line, refund_line and credit_line call. behaviour_kept says their text
+        and error messages are unchanged and the suite passes before and after. signatures_changed
+        is empty and the answer is not blocked.
+      run:
+        suite: pass
+        production: changed
+        tests: unchanged
+        public_api: [report/lines.py]
+    grader: sandbox_tests
+
+  - id: deprecated-to-cents
+    fixture: refactor-deprecated
+    payload:
+      ticket:
+        kind: refactor
+        title: prices/invoice.py calls the deprecated to_cents
+        body: >-
+          prices/invoice.py imports and calls to_cents, which prices/money.py deprecates in favour
+          of parse_amount and which warns with DeprecationWarning on every call. The standard is
+          that invoice.py uses parse_amount and no longer calls to_cents. to_cents itself stays in
+          prices/money.py for other callers.
+        acceptance:
+          - prices/invoice.py no longer imports or calls to_cents, and computing a total raises no
+            DeprecationWarning.
+          - line_total and invoice_total return the same values and raise the same errors as
+            before.
+          - to_cents and parse_amount stay in prices/money.py as they are.
+          - Every test passes unchanged, and no public name or signature in prices/invoice.py or
+            prices/money.py changes.
+        repo: acme/prices
+        ref: head
+        impacted_paths: [prices/invoice.py, prices/money.py]
+      depends_on: []
+    expected:
+      verdict: null
+      criteria: >-
+        The summary says prices/invoice.py now calls parse_amount in place of the deprecated
+        to_cents, and that to_cents was left in prices/money.py. behaviour_kept says line_total and
+        invoice_total give the same results and the suite passes before and after.
+        signatures_changed is empty and the answer is not blocked.
+      run:
+        suite: pass
+        production: changed
+        tests: unchanged
+        public_api: [prices/invoice.py, prices/money.py]
+    grader: sandbox_tests
+
+  - id: named-shipping-rates
+    fixture: refactor-magic-numbers
+    payload:
+      ticket:
+        kind: refactor
+        title: shipping_cents is written in unnamed numbers
+        body: >-
+          shipping_cents in shipping/rates.py uses bare numbers for the free-shipping threshold,
+          the base rate, the weight it covers, the rate per extra kilogram and the express
+          surcharge. The standard is a private module-level constant with a descriptive name for
+          each, used in place of the number.
+        acceptance:
+          - Each rate, threshold and weight in shipping_cents is a named private constant.
+          - shipping_cents returns the same cents and raises the same ValueError as before.
+          - Every test passes unchanged, and no public name or signature in shipping/rates.py
+            changes.
+        repo: acme/shipping
+        ref: head
+        impacted_paths: [shipping/rates.py]
+      depends_on: []
+    expected:
+      verdict: null
+      criteria: >-
+        The summary says the numbers in shipping_cents in shipping/rates.py were replaced by named
+        private constants, and names some of them. behaviour_kept says the costs and the error are
+        the same and the suite passes before and after. signatures_changed is empty and the answer
+        is not blocked.
+      run:
+        suite: pass
+        production: changed
+        tests: unchanged
+        public_api: [shipping/rates.py]
+    grader: sandbox_tests

@@ -1,0 +1,17 @@
+fixture: refactor-magic-numbers
+summary: >-
+  Adds shipping_cents, whose free-shipping threshold, base rate, weight allowance, per-kilogram
+  surcharge and express factor are bare numbers in the code.
+defects:
+  - id: unnamed-shipping-rates
+    file: shipping/rates.py
+    line_start: 18
+    line_end: 24
+    severity: info
+    category: maintainability
+    title: Shipping rates are unnamed numbers
+    snippet: "cost = 499"
+    description: >-
+      5000, 499, 2000, 150, 1000 and the 3 // 2 express factor carry the shipping policy but have
+      no names, and 2000 appears twice, so a rate change means finding every copy. Named
+      module-level constants make the policy readable and keep one copy of each value.

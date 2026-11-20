@@ -23,14 +23,24 @@ from factory import cli
 from factory.cli import main
 from factory.exit import ExitCode
 from fixtures.build import build
-from pipelines import fix_loop, review_panel, triage
+from pipelines import build_loop, fix_loop, incident, plan_loop, review_panel, triage
 from registry import AgentRef
 from registry.common_schemas import Ticket
 from registry.spec import LLMSpec
 from runtime import run_once
 from runtime.trace import Trace, TraceRow
 from runtime.work_items import WorkItems
+from tests.gh_fake import FakeGh, github_repo
+from tests.pipelines.test_build_loop import FULL, PULL_JSON, REPO_JSON, BuildRunner
+from tests.pipelines.test_build_loop import _ticket as build_ticket
 from tests.pipelines.test_fix_loop import FINDING, FakeSandbox, FixRunner
+from tests.pipelines.test_incident import FakeSandbox as IncidentSandbox
+from tests.pipelines.test_incident import IncidentRunner
+from tests.pipelines.test_incident import _event as incident_event
+from tests.pipelines.test_plan_loop import QUESTIONS, SHARED, UNKNOWN
+from tests.pipelines.test_plan_loop import FakeRunner as PlanRunner
+from tests.pipelines.test_plan_loop import _prd as plan_prd
+from tests.pipelines.test_plan_loop import _story as plan_story
 from tests.pipelines.test_review_panel import FakeJev
 from tests.test_run_cli import PAYLOAD, FakeRunner, write_llm
 
@@ -260,6 +270,102 @@ def test_fix_json(
     document["report_path"] = "<out-dir>/<pipeline-run-id>.json"
     document["panel"]["head"] = "<fix-sha>"
     golden("fix", document)
+
+
+# --- plan
+
+
+def test_plan_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    golden: Golden,
+) -> None:
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(tmp_path / "traces.duckdb"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    story = dict(SHARED)
+    story["tickets"] = [*SHARED["tickets"], *UNKNOWN["tickets"][1:]]
+    story["open_questions"] = ["Which database?"]
+    monkeypatch.setattr(
+        plan_loop,
+        "run",
+        PlanRunner(
+            plan_prd(QUESTIONS),
+            plan_story(*story["tickets"], open_questions=story["open_questions"]),
+        ),
+    )
+    (fixture,) = build(["off-by-one-red"], dest=tmp_path / "repos")
+    plans = tmp_path / "plans"
+    argv = ["plan", str(fixture.path), "--plans-dir", str(plans), "--allow-unpublished", "--json"]
+    first = _run([*argv, "--idea", "Quote shipping by weight"], capsys)
+    answers = ["--answer", "1=euros", "--answer", "2=yes"]
+    document = _run([*argv, "--prd", f"@{first['prd_path']}", "--approve", *answers], capsys)
+    # The paths are under tmp_path and the commit is the fixture's.
+    document["prd_path"] = "<plans-dir>/<pipeline-run-id>.md"
+    document["repository"] = "<repo>"
+    document["ref"] = "<sha>"
+    golden("plan", document)
+
+
+# --- incident
+
+
+def test_incident_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    golden: Golden,
+) -> None:
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(tmp_path / "traces.duckdb"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(incident, "run", IncidentRunner())
+    monkeypatch.setattr(incident, "DockerSandbox", IncidentSandbox)
+    (fixture,) = build(["crash-empty-average"], dest=tmp_path / "repos")
+    out, work = tmp_path / "out", tmp_path / "work"
+    work.mkdir()
+    event = json.dumps(incident_event())
+    argv = ["incident", str(fixture.path), "--event", event, "--out-dir", str(out)]
+    document = _run([*argv, "--work-dir", str(work), "--allow-unpublished", "--json"], capsys)
+    # The paths are under tmp_path and name the run.
+    document["repo_path"] = document["ticket"]["repo"] = "<repo>"
+    document["report_path"] = "<out-dir>/<pipeline-run-id>.json"
+    golden("incident", document)
+
+
+# --- build
+
+
+def test_build_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    golden: Golden,
+) -> None:
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(tmp_path / "traces.duckdb"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(build_loop, "run", BuildRunner())
+    monkeypatch.setattr(build_loop, "run_jev", FakeJev())
+    monkeypatch.setattr(build_loop, "DockerSandbox", FakeSandbox)
+    gh = FakeGh(tmp_path, monkeypatch)
+    gh.route("GET", f"repos/{FULL}", REPO_JSON)
+    gh.route("POST", f"repos/{FULL}/pulls", PULL_JSON)
+    repo = github_repo(tmp_path)
+    with Trace(tmp_path / "traces.duckdb") as trace:
+        items = WorkItems(trace)
+        item = items.add(build_ticket())
+        items.ready()
+    out, work = tmp_path / "out", tmp_path / "work"
+    work.mkdir()
+    argv = ["build", item.id, "--repo", str(repo.root), "--out-dir", str(out)]
+    assert main([*argv, "--work-dir", str(work), "--allow-unpublished", "--json"]) == ExitCode.OK
+    raw = json.loads(capsys.readouterr().out)
+    # The run id is in the branch and the body, the paths are under tmp_path and the commits are
+    # dated now.
+    text = json.dumps(raw).replace(raw["pipeline_run_id"], "pipeline-run-1")
+    for round_ in raw["rounds"]:
+        text = text.replace(round_["commit"], "<commit>")
+    text = text.replace(raw["head"], "<head>").replace(str(tmp_path), "<tmp>")
+    golden("build", _normalised(json.loads(text)))
 
 
 # --- cost

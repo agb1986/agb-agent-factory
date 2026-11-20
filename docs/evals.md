@@ -8,7 +8,7 @@ agent may use.
 
 ## Ground truth first
 
-An eval is only as good as what it compares against. The `llm_judge`, `sandbox_tests` and `jev`
+An eval is only as good as what it compares against. The `llm_judge`, `sandbox_tests`, `incident` and `jev`
 graders all start from ground truth that the case states: a verdict, planted defects at known
 lines, tests that must fail and then pass, or the option a Jev question must pick. The judge model
 only grades what is left once those deterministic checks pass.
@@ -111,6 +111,17 @@ summary says what was built and where. The fourth is a ticket whose criteria con
 nothing may change, and the rubric checks that the answer is blocked and names the contradiction.
 The rubric model never sees the ticket, so each criterion restates what it needs from it.
 
+## A refactor case has no rubric
+
+The `refactorer` (#98) is graded on the work tree only. Its four cases each give it a refactor
+ticket on a fixture with a planted smell: an N-plus-one query (`n-plus-one`), duplicate code
+(`refactor-duplicate`), a deprecated call (`refactor-deprecated`) and magic numbers
+(`refactor-magic-numbers`). Each must leave a passing suite, changed production code and unchanged
+tests, and its `expected.run.public_api` lists the ticket's target files, so the case fails when a
+public name or signature in them differs from the fixture's HEAD (`evals/public_api.py`, which reads
+both with `ast`). These checks are deterministic and decide the case; the `criteria` the judge reads
+afterwards check only that the answer says what changed and what stayed the same.
+
 ## The `citations_resolve` check
 
 `rubric` scores how well a research agent reasons; it cannot tell whether the facts are true.
@@ -179,3 +190,35 @@ still allow `web.fetch` or `web.search` with a non-empty list, and for an agent 
 lists no domain the case list is ignored. Entries are bare lowercase hosts, as in the manifest,
 and a case with any other entry fails to load. `factory run --allow-domain` is the same override
 for one run outside the eval.
+
+## The `incident` grader
+
+triage-diagnostics (#108) is graded by `incident` (`evals/graders/incident.py`). Its cases pair a
+fixture that plants a crash on `head` with a hand-written Sentry event for that crash, in the shape
+`sentry.read_issue` returns; no case reads Sentry, and `head` plays the release tag. The ground
+truth is in the case:
+
+```yaml
+  expected:
+    verdict: null
+    incident:
+      suspected_path: reviews/scores.py   # the file of the planted fault
+      exception: ZeroDivisionError        # the class the event shows
+      crash_file: reviews/scores.py       # the file of the frame that raised it
+  grader: incident
+```
+
+A case passes on two checks, in this order, and the grader calls no model:
+
+1. The answer's `suspected_paths` list `suspected_path`.
+2. The answer's `reproduction_test` reproduces the event. Its code is written at its path into a
+   fresh copy of the fixture at `head` and run with pytest in the offline sandbox. It reproduces
+   the event when pytest exits 1, the output has an `E   <exception>` line (a module prefix is
+   allowed), and the traceback has a line in `crash_file`. A test that fails on an assertion, or
+   that raises the right exception from another file, does not.
+
+`suspected_path` and `crash_file` differ when the fault is above the raising frame, as in the
+`crash-loader-caller` case, where the loader no longer skips a feed line with no price and
+`int("")` raises one frame below it. The rule in step 2 is `reproduces`, and `factory incident` applies the same function to the
+tests test-writer writes ([incident.md](incident.md)), so the eval scores what the pipeline counts.
+The grader needs Docker and the sandbox image.

@@ -1,0 +1,79 @@
+name: refactorer
+version: 0.1.0
+kind: llm
+team: dev
+description: Refactors production code to a ticket's standard without changing behaviour, tests or public signatures.
+model: claude-sonnet-5-5 # verified by tests/live/test_refactorer_live.py
+effort: xhigh
+system_prompt: system.md
+schemas: schemas.py
+input_model: RefactorerInput
+output_model: RefactorerOutput
+sandbox: true
+guard: action-guard@^0.1
+tools:
+  allow: [fs.list_files, fs.read_file, fs.write_file, shell.run]
+  deny: []
+files:
+  # A refactor keeps the tests as they are: they are what shows behaviour held. It may not change
+  # how the suite runs either. The build loop also refuses a round that changed any test file.
+  deny:
+    # version control and CI
+    - ".git/**"
+    - ".github/**"
+    # the test layout, as evals.graders.sandbox_tests.is_test_file defines it
+    - "**/tests/**"
+    - "**/conftest.py"
+    - "**/test_*.py"
+    - "**/*_test.py"
+    # pytest's configuration at the root of the repository
+    - pytest.ini
+    - .pytest.ini
+    - pytest.toml
+    - .pytest.toml
+    - pyproject.toml
+    - setup.cfg
+    - tox.ini
+    # root modules and packages named like one `python -m pytest` imports, which would replace it
+    - "pytest/**"
+    - pytest.py
+    - "pytest.*.py"
+    - pytest.pyc
+    - "pytest.*.pyc"
+    - pytest.so
+    - "pytest.*.so"
+    - "_pytest/**"
+    - _pytest.py
+    - "_pytest.*.py"
+    - _pytest.pyc
+    - "_pytest.*.pyc"
+    - _pytest.so
+    - "_pytest.*.so"
+    - "pluggy/**"
+    - pluggy.py
+    - "pluggy.*.py"
+    - pluggy.pyc
+    - "pluggy.*.pyc"
+    - pluggy.so
+    - "pluggy.*.so"
+    - "iniconfig/**"
+    - iniconfig.py
+    - "iniconfig.*.py"
+    - iniconfig.pyc
+    - "iniconfig.*.pyc"
+    - iniconfig.so
+    - "iniconfig.*.so"
+    - "packaging/**"
+    - packaging.py
+    - "packaging.*.py"
+    - packaging.pyc
+    - "packaging.*.pyc"
+    - packaging.so
+    - "packaging.*.so"
+limits:
+  max_tool_turns: 30
+  timeout_s: 900
+  max_output_tokens: 8192
+  max_tokens_total: 300000
+evals:
+  min_pass_rate: 0.75

@@ -1,0 +1,191 @@
+# Eval cases for triage-diagnostics. Each one pairs a fixture from fixtures/src/ that plants a
+# crash on `head` with a hand-written Sentry payload, in the shape `sentry.read_issue` returns, for
+# that crash. No case reads Sentry. `head` plays the release tag: the event's `release` and the
+# payload's `ref` both name it. The incident grader checks two things and calls no judge: the
+# answer's suspected_paths list the file of the planted fault, and its reproduction test, run at
+# `head` in the offline sandbox, fails with the event's exception raised from the crash file.
+# Frame paths carry a production prefix (`/app/`, site-packages) on purpose, as real ones do.
+# `crash-loader-caller` is the case where the fault is one frame above the raising one.
+# `repo_path` is not in the payload: the eval runner fills it in with the built fixture repository.
+cases:
+  - id: empty-ratings-divide-by-zero
+    fixture: crash-empty-average
+    payload:
+      ref: head
+      event:
+        id: "4501"
+        short_id: SHOP-7A
+        title: "ZeroDivisionError: division by zero"
+        culprit: reviews.scores in average_rating
+        level: error
+        status: unresolved
+        count: 214
+        user_count: 61
+        first_seen: "2026-11-18T09:12:44Z"
+        last_seen: "2026-11-20T15:02:10Z"
+        release: head
+        first_release: head
+        last_release: head
+        event_id: 9b2f6c1e4d8a4f37a0c1b2d3e4f5a6b7
+        exceptions:
+          - type: ZeroDivisionError
+            value: division by zero
+            frames:
+              - file: /app/reviews/listing.py
+                function: product_line
+                line: 8
+                in_app: true
+              - file: /app/reviews/scores.py
+                function: average_rating
+                line: 7
+                in_app: true
+        breadcrumbs:
+          - time: "2026-11-20T15:02:09Z"
+            category: http
+            level: info
+            message: GET /products/travel-mug
+          - time: "2026-11-20T15:02:10Z"
+            category: reviews
+            level: info
+            message: "loaded 0 ratings for product 'Travel mug'"
+    expected:
+      verdict: null
+      incident:
+        suspected_path: reviews/scores.py
+        exception: ZeroDivisionError
+        crash_file: reviews/scores.py
+    grader: incident
+
+  - id: missing-timeout-key
+    fixture: crash-missing-config-key
+    payload:
+      ref: head
+      event:
+        id: "4502"
+        short_id: SHOP-7B
+        title: "KeyError: 'timeout'"
+        culprit: appconfig.settings in timeout_seconds
+        level: error
+        status: unresolved
+        count: 38
+        user_count: 0
+        first_seen: "2026-11-19T22:40:01Z"
+        last_seen: "2026-11-20T06:15:33Z"
+        release: head
+        event_id: 1c3e5a7b9d0f4e2a8b6c4d2e0f1a3b5c
+        exceptions:
+          - type: KeyError
+            value: "'timeout'"
+            frames:
+              - file: /usr/local/lib/python3.13/site-packages/appconfig/client.py
+                function: make_client
+                line: 16
+                in_app: true
+              - file: /usr/local/lib/python3.13/site-packages/appconfig/settings.py
+                function: timeout_seconds
+                line: 8
+                in_app: true
+        breadcrumbs:
+          - time: "2026-11-20T06:15:33Z"
+            category: config
+            level: info
+            message: "loaded config keys: base_url"
+    expected:
+      verdict: null
+      incident:
+        suspected_path: appconfig/settings.py
+        exception: KeyError
+        crash_file: appconfig/settings.py
+    grader: incident
+
+  - id: priceless-feed-line
+    fixture: crash-loader-caller
+    payload:
+      ref: head
+      event:
+        id: "4503"
+        short_id: FEED-3
+        title: "ValueError: invalid literal for int() with base 10: ''"
+        culprit: feed.pricing in line_total
+        level: error
+        status: unresolved
+        count: 12
+        user_count: 3
+        first_seen: "2026-11-20T02:00:05Z"
+        last_seen: "2026-11-20T14:00:04Z"
+        release: head
+        event_id: 7d9e1f3a5b7c4d9e8f0a2b4c6d8e0f1a
+        exceptions:
+          - type: ValueError
+            value: "invalid literal for int() with base 10: ''"
+            frames:
+              - file: /app/feed/pricing.py
+                function: feed_total
+                line: 13
+                in_app: true
+              - file: /app/feed/pricing.py
+                function: <genexpr>
+                line: 13
+                in_app: true
+              - file: /app/feed/pricing.py
+                function: line_total
+                line: 8
+                in_app: true
+        breadcrumbs:
+          - time: "2026-11-20T14:00:03Z"
+            category: feed
+            level: info
+            message: "fetched supplier feed: 3 lines"
+          - time: "2026-11-20T14:00:04Z"
+            category: feed
+            level: warning
+            message: "line 2 is 'C3,,4'"
+    expected:
+      verdict: null
+      incident:
+        suspected_path: feed/loader.py
+        exception: ValueError
+        crash_file: feed/pricing.py
+    grader: incident
+
+  - id: idle-worker-index-error
+    fixture: crash-first-of-empty
+    payload:
+      ref: head
+      event:
+        id: "4504"
+        short_id: JOBS-11
+        title: "IndexError: list index out of range"
+        culprit: jobs.queue in next_job
+        level: error
+        status: unresolved
+        count: 1890
+        user_count: 0
+        first_seen: "2026-11-20T00:00:12Z"
+        last_seen: "2026-11-20T15:10:00Z"
+        release: head
+        event_id: 2e4f6a8c0b1d4f3e9a7c5b3d1f0e2a4c
+        exceptions:
+          - type: IndexError
+            value: list index out of range
+            frames:
+              - file: /srv/worker/jobs/worker.py
+                function: run_once
+                line: 8
+                in_app: true
+              - file: /srv/worker/jobs/queue.py
+                function: next_job
+                line: 15
+                in_app: true
+        breadcrumbs:
+          - time: "2026-11-20T15:09:59Z"
+            category: worker
+            level: info
+            message: "polling: 0 jobs pending"
+    expected:
+      verdict: null
+      incident:
+        suspected_path: jobs/queue.py
+        exception: IndexError
+        crash_file: jobs/queue.py
+    grader: incident

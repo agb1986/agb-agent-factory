@@ -22,7 +22,7 @@ SEVERITIES = ("info", "minor", "major", "blocker")
 """Finding severities, lowest first. A finding meets a `severity_floor` at or above its index."""
 
 type Severity = Literal["info", "minor", "major", "blocker"]
-type GraderName = Literal["llm_judge", "sandbox_tests", "jev", "rubric"]
+type GraderName = Literal["llm_judge", "sandbox_tests", "jev", "rubric", "incident"]
 type DecisionName = Literal["skip", "review", "escalate"]
 
 RUBRIC_GRADERS = ("rubric", "sandbox_tests")
@@ -96,6 +96,8 @@ class ExpectedRun(_Strict):
     reason. `suite` runs every test in the repository. `production` and `tests` say whether the
     agent changed any file that is not, or is, a test file, compared with the fixture's HEAD.
     `coverage` is the line coverage the agent's changes must add (see `ExpectedCoverage`).
+    `public_api` lists Python files, relative to the repository, whose public names and signatures
+    must be the same in the work tree as at HEAD (see `evals.public_api`), for a refactor.
     """
 
     new_tests: Literal["fail", "pass"] | None = None
@@ -104,11 +106,21 @@ class ExpectedRun(_Strict):
     production: Literal["changed", "unchanged"] | None = None
     tests: Literal["changed", "unchanged"] | None = None
     coverage: ExpectedCoverage | None = None
+    public_api: Annotated[tuple[str, ...], Field(min_length=1)] | None = None
 
     @model_validator(mode="after")
     def _base_needs_new_tests(self) -> ExpectedRun:
         if self.passes_on_base and self.new_tests is None:
             raise ValueError("passes_on_base: needs new_tests to say which tests to run")
+        return self
+
+    @model_validator(mode="after")
+    def _public_api_paths(self) -> ExpectedRun:
+        if self.public_api is not None:
+            if len(set(self.public_api)) != len(self.public_api):
+                raise ValueError(f"public_api: duplicates in {list(self.public_api)}")
+            if bad := [path for path in self.public_api if not path.endswith(".py")]:
+                raise ValueError(f"public_api: not Python files: {', '.join(bad)}")
         return self
 
 
@@ -188,6 +200,21 @@ class CitationsCheck(_Strict):
         return value
 
 
+class ExpectedIncident(_Strict):
+    """What the `incident` grader checks in a triage-diagnostics answer.
+
+    `suspected_path` is the file of the planted fault, which the answer's `suspected_paths` must
+    list. `exception` is the exception class the event shows, such as `ZeroDivisionError`, and
+    `crash_file` the repository path of the frame that raised it: the answer's reproduction test
+    must fail with that exception, raised from that file, when run at the fixture's `head`, which
+    plays the release tag. The two files differ when the fault is above the raising frame.
+    """
+
+    suspected_path: Annotated[str, Field(min_length=1)]
+    exception: Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
+    crash_file: Annotated[str, Field(min_length=1)]
+
+
 class Expected(_Strict):
     """What a good answer looks like: the verdict and the defects that must be found.
 
@@ -205,6 +232,7 @@ class Expected(_Strict):
     `sandbox_tests` case may set it too: its checks and criteria then run after the checks of
     `run`, and the rubric grader takes the place of the LLM judge.
     `citations_resolve` turns on the check of that name, which only a `rubric` case may use.
+    `incident` is what the `incident` grader checks, and is required for that grader.
     """
 
     verdict: str | None
@@ -216,6 +244,7 @@ class Expected(_Strict):
     risky: bool = Field(default=False, exclude=True)
     rubric: Rubric | None = None
     citations_resolve: CitationsCheck | None = None
+    incident: ExpectedIncident | None = None
 
     @model_validator(mode="after")
     def _risky_needs_decision(self) -> Expected:
@@ -269,6 +298,10 @@ class Case(_Strict):
             raise ValueError("expected.rubric: only the rubric and sandbox_tests graders read it")
         if self.grader != "rubric" and self.expected.citations_resolve is not None:
             raise ValueError("expected.citations_resolve: only a rubric case may use it")
+        if self.grader == "incident" and self.expected.incident is None:
+            raise ValueError("expected.incident: required by the incident grader")
+        if self.grader != "incident" and self.expected.incident is not None:
+            raise ValueError("expected.incident: only the incident grader reads it")
         return self
 
 

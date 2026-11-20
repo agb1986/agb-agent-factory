@@ -1,0 +1,18 @@
+fixture: crash-missing-config-key
+summary: >-
+  Reads the timeout with a subscript instead of falling back to the 30-second default, so a
+  configuration without a timeout raises KeyError from timeout_seconds when make_client builds a
+  client. The only test sets every key. A triage-diagnostics fixture: the event is a KeyError
+  raised in appconfig/settings.py.
+defects:
+  - id: timeout-default-dropped
+    file: appconfig/settings.py
+    line_start: 8
+    line_end: 9
+    severity: major
+    category: logic
+    title: timeout_seconds raises KeyError when the timeout is not configured
+    snippet: "config[\"timeout\"]"
+    description: >-
+      DEFAULT_TIMEOUT is still defined but no longer used: a mapping without "timeout" now raises
+      KeyError instead of giving 30. Use config.get("timeout", DEFAULT_TIMEOUT) again.

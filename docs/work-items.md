@@ -79,6 +79,12 @@ are `dropped` do not count), then the older, then the lower id. The Jev ranking 
 CONVENTIONS is left out until a ranking agent exists. Running `ready` again with nothing changed
 promotes nothing.
 
+An `incident` has no dependencies, so `ready` promotes every one left in `todo`, including the
+ones the incident pipeline filed there because no test reproduced the event (#108). For an
+incident, `ready` therefore does not mean reproduced: the hotfix pipeline (#109) checks
+`pipelines.incident.is_reproduced` on the body before it acts, as [incident.md](incident.md)
+describes.
+
 ## Exit codes
 
 | Code | When |
@@ -96,4 +102,19 @@ command does ([CONVENTIONS.md](CONVENTIONS.md#errors)).
 `todo` or `blocked`, and refuses it in any other state. It is the one write that could close a
 cycle, because a new item cannot be a dependency of anything yet, so the acyclic check runs there
 and refuses a cycle with its path, such as `dependency cycle: wi-1 -> wi-3 -> wi-2 -> wi-1`.
-There is no command for it yet; the plan loop (#92) is its first caller.
+There is no command for it yet.
+
+## Writing a batch
+
+`WorkItems.add_many(batch, parent=..., actor=..., pipeline_run_id=..., reason=...)` writes several
+items in one transaction, for a caller that has a whole plan (#92). Each `NewItem` holds a ticket, a
+size and `depends_on` as indexes into the batch: any position but its own, earlier or later, as
+long as the graph stays acyclic. Those become the new `wi-<n>` ids. The whole batch is checked before anything is written, the
+acyclic check runs over the full graph, and any error rolls back, so either every item is stored,
+with its creation event, or none is. `add` is the one-item case.
+
+## Building an item
+
+`factory build <id>` takes one `ready` item to a reviewed pull request and moves it to
+`in_progress`, then to `in_review` or `blocked`, with actor `pipeline:build_loop`. A dry run links
+its run to the item but moves nothing. [build-loop.md](build-loop.md) describes the loop (#87).
