@@ -10,13 +10,16 @@ from typing import Any
 
 import pytest
 from gh_fake import FakeGh, GithubRepo, github_repo
+from pydantic import BaseModel
 
 from factory.exit import ExitCode, exit_code
 from registry.common_schemas import Ticket
 from registry.resolver import AgentSpec, load_spec
 from registry.spec import LLMSpec
 from runtime import escalations
-from runtime.escalations import InvalidEscalation, escalate
+from runtime.after_escalation import after_escalation
+from runtime.budget import Budget
+from runtime.escalations import InvalidEscalation, escalate, get_summary, summary_markdown
 from runtime.notify import answer_from_issue, issue_repository, notify_escalation
 from runtime.outside import OutsideContext
 from runtime.trace import Trace
@@ -29,7 +32,9 @@ FULL = "acme/widgets"
 LOGIN = "factory-bot"
 ACTOR = "pipeline:build_loop"
 LIST = f"repos/{FULL}/issues?state=all&creator={LOGIN}&per_page=100"
-JUDGE = Path(__file__).resolve().parents[2] / "agents" / "judge" / "agent.yaml"
+AGENTS = Path(__file__).resolve().parents[2] / "agents"
+JUDGE = AGENTS / "judge" / "agent.yaml"
+SUMMARY_AGENT = AGENTS / "escalation-summary" / "agent.yaml"
 
 
 def ticket(repo: str = FULL) -> Ticket:
@@ -44,11 +49,12 @@ def ticket(repo: str = FULL) -> Ticket:
 
 
 @pytest.fixture
-def agent() -> AgentSpec:
-    spec = load_spec(JUDGE)
+def agent() -> LLMSpec:
+    """The escalation-summary manifest, the agent the posts are made for."""
+    spec = load_spec(SUMMARY_AGENT)
     assert isinstance(spec, LLMSpec)
-    allow = [*spec.tools.allow, notify.TOOL]
-    return spec.model_copy(update={"tools": spec.tools.model_copy(update={"allow": allow})})
+    assert notify.TOOL in spec.tools.allow
+    return spec
 
 
 @pytest.fixture
@@ -234,6 +240,185 @@ def test_an_unknown_escalation_is_a_failed_entry(
     entry = notify_escalation(trace, "esc-9", agent=agent, context=context(gh_repo, trace))
     assert entry["outcome"] == "failed"
     assert "esc-9" in entry["error"]
+
+
+# --- after_escalation's notify step ----------------------------------------------------------
+
+SUMMARY: dict[str, Any] = {
+    "paragraph": "The coder stopped: it does not know which module owns the parser.",
+    "options": [
+        {
+            "label": "Name the module",
+            "takes": "another_run",
+            "cost": "Another coder run with the answer.",
+            "evidence": "Which module owns the parser?",
+        }
+    ],
+}
+
+
+class Runner:
+    """A stand-in for `runtime.runner.run` that returns `output`, or raises it."""
+
+    def __init__(self, output: dict[str, Any] | Exception = SUMMARY) -> None:
+        self.output = output
+        self.calls = 0
+
+    def __call__(
+        self,
+        spec: LLMSpec,
+        payload: dict[str, Any],
+        trace: Trace,
+        *,
+        pipeline_run_id: str | None,
+        run_id: str,
+        budget: Budget,
+    ) -> BaseModel:
+        self.calls += 1
+        if isinstance(self.output, Exception):
+            raise self.output
+        return spec.output_class.model_validate(self.output)
+
+
+def after(
+    trace: Trace,
+    esc: str,
+    outside: OutsideContext,
+    agent: LLMSpec | None,
+    runner: Runner | None = None,
+    *,
+    dry_run: bool = False,
+):
+    return after_escalation(
+        trace,
+        escalations.get(trace, esc),
+        budget=Budget(1.0),
+        pipeline_run_id="p1",
+        dry_run=dry_run,
+        summary_agent=agent,
+        outside=outside,
+        runner=runner or Runner(),
+    )
+
+
+def test_the_notify_step_posts_the_record_with_its_stored_summary(
+    fake: FakeGh, gh_repo: GithubRepo, trace: Trace, agent: LLMSpec
+) -> None:
+    item_id, esc = escalated(trace)
+    fake.route("GET", LIST, [])
+    fake.route("POST", f"repos/{FULL}/issues", issue_json(9, item_id))
+    done = after(trace, esc, context(gh_repo, trace), agent)
+    assert done.summary.done
+    assert done.notify.done and done.notify.reason is None
+    assert done.notify.post is not None
+    assert (done.notify.post["outcome"], done.notify.post["issue"]) == ("written", 9)
+    assert done.to_json()["notify"] == {"done": True, "post": done.notify.post, "reason": None}
+    stored = get_summary(trace, esc)
+    assert stored is not None
+    text = summary_markdown(stored)
+    assert not text.startswith("## Summary") and text.startswith(SUMMARY["paragraph"])
+    [sent] = fake.writes()
+    body = sent.data["body"]
+    assert "## Summary" in body and text.strip() in body and "Which module owns the parser?" in body
+    assert WorkItems(trace).get(item_id).issue_number == 9
+    [row] = [r for r in trace.pipeline_runs("p1") if r.tag == f"outside:{notify.TOOL}"]
+    assert row.parent_run_id == done.summary.run_id
+
+
+def test_without_a_summary_the_post_is_the_record_alone(
+    fake: FakeGh, gh_repo: GithubRepo, trace: Trace, agent: LLMSpec
+) -> None:
+    item_id, esc = escalated(trace)
+    fake.route("GET", LIST, [])
+    fake.route("POST", f"repos/{FULL}/issues", issue_json(9, item_id))
+    done = after(trace, esc, context(gh_repo, trace), agent, Runner(RuntimeError("down")))
+    assert not done.summary.done
+    assert done.notify.done
+    [sent] = fake.writes()
+    assert "## Summary" not in sent.data["body"]
+    assert f"# {esc}" in sent.data["body"]
+    [row] = [r for r in trace.pipeline_runs("p1") if r.tag == f"outside:{notify.TOOL}"]
+    assert row.parent_run_id is None
+
+
+@pytest.mark.parametrize(
+    ("dry_run", "use_agent", "reason"),
+    [
+        (True, True, "dry run: nothing is posted"),
+        (False, False, "no published escalation-summary agent resolved"),
+    ],
+)
+def test_the_notify_step_is_skipped(
+    fake: FakeGh,
+    gh_repo: GithubRepo,
+    trace: Trace,
+    agent: LLMSpec,
+    dry_run: bool,
+    use_agent: bool,
+    reason: str,
+) -> None:
+    _, esc = escalated(trace)
+    done = after(trace, esc, context(gh_repo, trace), agent if use_agent else None, dry_run=dry_run)
+    assert done.notify.to_json() == {"done": False, "post": None, "reason": reason}
+    assert fake.calls() == []
+
+
+def test_a_failed_post_leaves_the_item_escalated(
+    fake: FakeGh, gh_repo: GithubRepo, trace: Trace, agent: LLMSpec
+) -> None:
+    item_id, esc = escalated(trace)
+    fake.route("GET", LIST, [])
+    fake.route("POST", f"repos/{FULL}/issues", {"message": "Server Error"}, status=500, fail=True)
+    done = after(trace, esc, context(gh_repo, trace), agent)
+    assert not done.notify.done
+    assert done.notify.post is not None and done.notify.post["outcome"] == "failed"
+    assert done.notify.reason is not None and done.notify.reason.startswith("the post was failed: ")
+    assert WorkItems(trace).get(item_id).status == "escalated"
+    assert WorkItems(trace).get(item_id).issue_number is None
+    assert escalations.get(trace, esc).is_open
+
+
+def test_a_post_outside_the_target_is_refused_without_reading_github(
+    fake: FakeGh, gh_repo: GithubRepo, trace: Trace, agent: LLMSpec
+) -> None:
+    item_id, esc = escalated(trace, repo="acme/other")
+    done = after(trace, esc, context(gh_repo, trace), agent)
+    assert not done.notify.done
+    assert done.notify.reason is not None and done.notify.reason.startswith(
+        "the post was refused: "
+    )
+    assert fake.calls() == []
+    assert WorkItems(trace).get(item_id).status == "escalated"
+
+
+def test_an_outside_dry_run_returns_the_planned_post(
+    fake: FakeGh, gh_repo: GithubRepo, trace: Trace, agent: LLMSpec
+) -> None:
+    _, esc = escalated(trace)
+    fake.route("GET", LIST, [])
+    done = after(trace, esc, context(gh_repo, trace, dry_run=True), agent)
+    assert not done.notify.done
+    assert done.notify.reason == "dry run: the planned post is in the entry, nothing was sent"
+    assert done.notify.post is not None and "## Summary" in done.notify.post["body"]
+    assert fake.writes() == []
+
+
+def test_the_notify_step_never_raises(
+    gh_repo: GithubRepo, trace: Trace, agent: LLMSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, esc = escalated(trace)
+
+    def broken(*_: Any, **__: Any) -> None:
+        raise RuntimeError("the summary table is gone")
+
+    monkeypatch.setattr("runtime.after_escalation.get_summary", broken)
+    done = after(trace, esc, context(gh_repo, trace), agent)
+    assert done.notify.to_json() == {
+        "done": False,
+        "post": None,
+        "reason": "RuntimeError: the summary table is gone",
+    }
+    assert escalations.get(trace, esc).is_open
 
 
 # --- answer_from_issue --------------------------------------------------------------------------

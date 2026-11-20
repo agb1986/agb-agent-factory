@@ -17,6 +17,7 @@ from registry.spec import LLMSpec
 from runtime.escalation_summary import EVIDENCE_MIN_CHARS, ungrounded
 from runtime.escalations import TRIGGERS
 from runtime.runner import build_request
+from tools.registry import OUTSIDE_WRITES, tool_defs
 
 AGENT_DIR = AGENTS_DIR / "escalation-summary"
 CASES = AGENT_DIR / "evals" / "cases.yaml"
@@ -165,9 +166,13 @@ def test_the_model_line_names_its_live_test() -> None:
     assert "tests/live/test_escalation_summary_live.py" in line
 
 
-def test_the_agent_has_no_tools(spec: LLMSpec) -> None:
-    assert not spec.tools.allow
+def test_the_agent_allows_only_the_issue_post_which_no_model_is_sent(spec: LLMSpec) -> None:
+    # notify.issue is an outside write the notify step makes on the agent's behalf (#95); the
+    # model itself is given no tool.
+    assert spec.tools.allow == ("notify.issue",)
     assert not spec.tools.deny
+    assert set(spec.tools.allow) <= OUTSIDE_WRITES
+    assert tool_defs(spec.tools.allow, spec.tools.deny) == []
 
 
 def test_models_are_the_ones_the_manifest_names(spec: LLMSpec) -> None:

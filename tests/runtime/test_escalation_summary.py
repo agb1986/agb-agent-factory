@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from gh_fake import FakeGh
 from pydantic import BaseModel
 
 from registry.common_schemas import Ticket
@@ -33,8 +34,10 @@ from runtime.escalations import (
     render_markdown,
     store_summary,
 )
+from runtime.outside import OutsideContext
 from runtime.trace import Trace
 from runtime.work_items import WorkItems
+from tools.github import Repository
 
 T0 = datetime(2026, 11, 20, 9, 0, tzinfo=UTC)
 ACTOR = "pipeline:build_loop"
@@ -77,6 +80,12 @@ class Clock:
     def __call__(self) -> datetime:
         self.at += timedelta(minutes=1)
         return self.at
+
+
+@pytest.fixture(autouse=True)
+def no_github(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeGh:
+    """A fake `gh` with no routes, so a post the notify step tries never leaves the machine."""
+    return FakeGh(tmp_path, monkeypatch)
 
 
 @pytest.fixture
@@ -342,8 +351,21 @@ def test_render_puts_the_summary_above_the_record(trace: Trace) -> None:
 # --- after_escalation
 
 
+OTHER = "acme/widgets"
+"""The hook's outside target: not the ticket's repository, so the notify step is refused before
+it reads GitHub. The notify step's own tests are in tests/runtime/test_notify_escalation.py."""
+
+
 def hook(trace: Trace, record: Escalation, agent: LLMSpec | None, runner: Runner, **kw: Any):
-    options: dict[str, Any] = {"budget": Budget(1.0), "pipeline_run_id": "p1", "dry_run": False}
+    outside = OutsideContext(
+        target=Repository.parse(OTHER), repo_path=Path.cwd(), pipeline_run_id="p1", trace=trace
+    )
+    options: dict[str, Any] = {
+        "budget": Budget(1.0),
+        "pipeline_run_id": "p1",
+        "dry_run": False,
+        "outside": outside,
+    }
     options.update(kw)
     return after_escalation(trace, record, summary_agent=agent, runner=runner, **options)
 
@@ -366,7 +388,9 @@ def test_the_summary_is_written_and_stored_with_its_run(trace: Trace, agent: LLM
     assert stored is not None
     assert (stored.run_id, stored.agent_ref) == (after.summary.run_id, agent.address)
     assert stored.summary == GOOD
-    assert after.to_json() == {"summary": {"done": True, "run_id": call["run_id"], "reason": None}}
+    summary = after.to_json()["summary"]
+    assert summary == {"done": True, "run_id": call["run_id"], "reason": None}
+    assert after.to_json()["notify"]["done"] is False
 
 
 @pytest.mark.parametrize(

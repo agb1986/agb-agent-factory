@@ -481,6 +481,15 @@ def render_markdown(record: Escalation, summary: Summary | None = None) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def summary_markdown(summary: Summary) -> str:
+    """Return `summary` as the Markdown `render_markdown` shows under `## Summary`, heading left out.
+
+    The paragraph, the options numbered with what each takes, its cost and the evidence it quotes,
+    and the run that wrote it. `runtime.notify` puts this at the top of an issue post.
+    """
+    return "\n".join(_summary_lines(summary)[2:]).strip() + "\n"
+
+
 def _summary_lines(summary: Summary) -> list[str]:
     lines = ["## Summary", "", str(summary.summary.get("paragraph", "")).strip(), ""]
     for number, option in enumerate(summary.summary.get("options", []), start=1):

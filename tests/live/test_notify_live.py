@@ -3,8 +3,8 @@
 Needs `FACTORY_LIVE=1`, a `GH_TOKEN` that can write issues, and `FACTORY_LIVE_SCRATCH_REPO` naming
 a throwaway `owner/name` repository the token's user owns or collaborates on; skipped without it.
 Each run opens one issue there, posts a reply as the token's user, and closes the issue at the end
-(the test closes it, never the factory). The posts are made for the `judge` manifest with
-`notify.issue` added to its `tools.allow` until `escalation-summary` (#94) lists it.
+(the test closes it, never the factory). The posts are made for the `escalation-summary`
+manifest, which lists `notify.issue` in `tools.allow`; no model is called.
 """
 
 import os
@@ -27,7 +27,7 @@ from tools import notify
 from tools.github import gh
 
 SCRATCH = "FACTORY_LIVE_SCRATCH_REPO"
-JUDGE = Path(__file__).resolve().parents[2] / "agents" / "judge" / "agent.yaml"
+SUMMARY_AGENT = Path(__file__).resolve().parents[2] / "agents" / "escalation-summary" / "agent.yaml"
 ACTOR = "pipeline:build_loop"
 
 
@@ -55,10 +55,10 @@ def trace(tmp_path: Path) -> Iterator[Trace]:
 
 
 def agent() -> AgentSpec:
-    spec = load_spec(JUDGE)
+    spec = load_spec(SUMMARY_AGENT)
     assert isinstance(spec, LLMSpec)
-    allow = [*spec.tools.allow, notify.TOOL]
-    return spec.model_copy(update={"tools": spec.tools.model_copy(update={"allow": allow})})
+    assert notify.TOOL in spec.tools.allow
+    return spec
 
 
 @pytest.mark.live_github
