@@ -133,5 +133,6 @@
     "verdict": null,
     "judge_cost_estimate_usd": null,
     "error": null
-  }
+  },
+  "comment": null
 }

@@ -29,8 +29,14 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from factory.exit import AuthOrConfigError, ExitCode, FactoryError, UsageError
+from factory.exit import AuthOrConfigError, ExitCode, FactoryError, UsageError, exit_code
 from pipelines.ids import new_pipeline_run_id
+from pipelines.review_comment import (
+    comment_text,
+    failure_section,
+    post_review,
+    resolve_pull_request,
+)
 from registry.common_schemas import ReviewInput, ReviewOutput
 from registry.jev_spec import JevOutput, JevSpec
 from registry.resolver import resolve
@@ -39,6 +45,7 @@ from runtime.async_runner import arun
 from runtime.budget import DEFAULT_BUDGET_USD, Budget, BudgetExceeded
 from runtime.gates import ROUTE_ONLY, Decision, decide, decide_judge_gate, jev_error
 from runtime.jev_runner import run_jev
+from runtime.outside import OutsideContext
 from runtime.pricing import TokenUsage, cost_usd
 from runtime.runner import API_KEY_ENV, run
 from runtime.scoring import Assessment, assess
@@ -805,26 +812,48 @@ def run_panel(
 def command(
     repo_path: str,
     *,
-    base: str,
-    head: str,
+    base: str | None = None,
+    head: str | None = None,
     as_json: bool,
     reviewers: Sequence[str] | None = None,
     allow_unpublished: bool = False,
     no_triage: bool = False,
     no_judge_gate: bool = False,
     budget_usd: float | None = None,
+    pr: int | None = None,
+    comment: bool = False,
+    dry_run: bool = False,
 ) -> int:
-    """Run `factory review`: review `base..head` of `repo_path` with the panel and report it.
+    """Run `factory review`: review a change of `repo_path` with the panel and report it.
+
+    The change is `base..head`, or pull request `pr` of the repository's `origin` on github.com:
+    the merge base of its base branch and its head commit, read through `github.read_pr`, which
+    needs `GH_TOKEN` and the commits in the local clone. `comment` then posts the judge's findings
+    on the pull request through `github.comment_pr` (see `pipelines.review_comment`), and
+    `dry_run` makes that a plan: every read runs, nothing is sent. `comment` and `dry_run` need
+    `pr`, and `dry_run` needs `comment`. Everything that can fail before the models are called
+    (the flags, `GH_TOKEN`, the pull request, the `origin`) is checked first, so a bad call costs
+    nothing.
 
     `no_triage` skips the Jev call. Triage needs `TYPESAFE_API_KEY` only to work: without it the
     run records a `jev_error` and the reviewers still run. `no_judge_gate` skips the judge-gate
     call, so the judge always runs; the gate fails the same way, escalating to the judge.
 
     Prose goes to stderr under `as_json`, where stdout gets exactly one JSON document, also when
-    the change does not ship. Without it the text report goes to stdout. Returns 0 when the change
-    ships and 1 when it does not. `budget_usd` caps the spend of the whole run (default:
+    the change does not ship. Without it the text report goes to stdout. The document's `comment`
+    section is null without `comment`; when the write is refused or fails, the review is still
+    reported, with the error in the section, and the exit code is the error's. Returns 0 when the
+    change ships and 1 when it does not. `budget_usd` caps the spend of the whole run (default:
     `DEFAULT_BUDGET_USD`); passing it raises `BudgetExceeded`, exit 1, with the spend so far.
     """
+    if pr is not None and (base is not None or head is not None):
+        raise UsageError("--pr replaces --base and --head", hint="give one or the other")
+    if pr is None and (base is None or head is None):
+        raise UsageError("give --pr N, or both --base and --head")
+    if (comment or dry_run) and pr is None:
+        raise UsageError("--comment and --dry-run need --pr")
+    if dry_run and not comment:
+        raise UsageError("--dry-run needs --comment")
     panel = resolve_panel(
         reviewers,
         allow_unpublished=allow_unpublished,
@@ -837,13 +866,49 @@ def command(
             hint=f"store it with `agb sys secrets set {API_KEY_ENV}` and export it",
         )
     budget = Budget(DEFAULT_BUDGET_USD if budget_usd is None else budget_usd)
+    pull = resolve_pull_request(repo_path, pr) if pr is not None else None
+    if pull is not None:
+        base, head = pull.base, pull.head
+    assert base is not None and head is not None  # checked above, and set from the pull request
+    comment_section: dict[str, Any] | None = None
+    failure: FactoryError | None = None
     with Trace() as trace:
-        result = run_panel(
-            panel, repo_path, base, head, trace, runner=run, jev_runner=run_jev, budget=budget
+        context = (
+            OutsideContext.for_repository(
+                repo_path, pipeline_run_id=new_pipeline_run_id(), trace=trace, dry_run=dry_run
+            )
+            if comment
+            else None
         )
+        result = run_panel(
+            panel,
+            repo_path,
+            base,
+            head,
+            trace,
+            runner=run,
+            jev_runner=run_jev,
+            pipeline_run_id=context.pipeline_run_id if context is not None else None,
+            budget=budget,
+        )
+        if context is not None and pull is not None:
+            try:
+                comment_section = post_review(result, pull, context)
+            except FactoryError as exc:
+                comment_section = failure_section(exc)
+                failure = exc
+    text = result.text()
+    if comment_section is not None:
+        text += "\n" + comment_text(comment_section)
+    document = {**result.to_json(), "comment": comment_section}
     if as_json:
-        print(result.text(), file=sys.stderr)
-        print(json.dumps(result.to_json()))
+        print(text, file=sys.stderr)
+        print(json.dumps(document))
     else:
-        print(result.text())
+        print(text)
+    if failure is not None:
+        print(failure.message, file=sys.stderr)
+        if failure.hint:
+            print(f"hint: {failure.hint}", file=sys.stderr)
+        return exit_code(failure)
     return ExitCode.OK if result.ship else ExitCode.ERROR
