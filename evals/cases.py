@@ -255,6 +255,9 @@ class Expected(_Strict):
     `sandbox_tests` case may set it too: its checks and criteria then run after the checks of
     `run`, and the rubric grader takes the place of the LLM judge.
     `citations_resolve` turns on the check of that name, which only a `rubric` case may use.
+    `options_in_record` turns on the check that every option of an escalation summary appears in
+    the record the case's payload holds (`runtime.escalation_summary.ungrounded`, the same code
+    that runs before a summary is stored); only a `rubric` case may use it.
     `incident` is what the `incident` grader checks, and is required for that grader.
     """
 
@@ -267,6 +270,7 @@ class Expected(_Strict):
     risky: bool = Field(default=False, exclude=True)
     rubric: Rubric | None = None
     citations_resolve: CitationsCheck | None = None
+    options_in_record: bool = Field(default=False, exclude=True)
     incident: ExpectedIncident | None = None
 
     @model_validator(mode="after")
@@ -321,6 +325,8 @@ class Case(_Strict):
             raise ValueError("expected.rubric: only the rubric and sandbox_tests graders read it")
         if self.grader != "rubric" and self.expected.citations_resolve is not None:
             raise ValueError("expected.citations_resolve: only a rubric case may use it")
+        if self.grader != "rubric" and self.expected.options_in_record:
+            raise ValueError("expected.options_in_record: only a rubric case may use it")
         if self.grader == "incident" and self.expected.incident is None:
             raise ValueError("expected.incident: required by the incident grader")
         if self.grader != "incident" and self.expected.incident is not None:

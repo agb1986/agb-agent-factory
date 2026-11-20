@@ -255,6 +255,7 @@
   },
   "board_error": null,
   "escalation": null,
+  "after_escalation": null,
   "timing": {
     "event_time": "2026-11-20T15:02:10+00:00",
     "event_time_source": "last_seen",

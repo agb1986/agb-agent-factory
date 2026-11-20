@@ -35,7 +35,10 @@ work item. The flow (docs/build-loop.md has the options and outputs):
 Every other end is settled in a `finally` block, with `<ErrorClass>: <message>` and the report's
 path as the reason. A stop a person can answer (`stop_trigger`, the table in docs/CONVENTIONS.md,
 Escalations) writes an escalation record and moves the item to `escalated` in one step
-(`runtime.escalations.escalate`); any other stop or crash moves it to `blocked`. A run after an
+(`runtime.escalations.escalate`); any other stop or crash moves it to `blocked`. Right after the
+record is written, `runtime.after_escalation.after_escalation` runs once: the escalation-summary
+agent summarises the record under the run's budget, and the summary is stored with the record when
+it passes its check. A summary that is skipped or fails changes nothing else. A run after an
 answer gets the answers in its ticket body (`runtime.escalations.ticket_for_run`).
 
 A dry run (`dry_run=True`) runs every step, reads included, but makes no outside write and moves no item; it still links the run,
@@ -93,6 +96,11 @@ from pipelines.sandbox import (
 from registry.common_schemas import Ticket
 from registry.resolver import resolve
 from registry.spec import FilesSpec, LLMSpec
+from runtime.after_escalation import (
+    AfterEscalation,
+    after_escalation,
+    resolve_summary_agent,
+)
 from runtime.budget import DEFAULT_BUDGET_USD, Budget, BudgetExceeded
 from runtime.escalations import AgentOutput, Trigger, escalate, ticket_for_run
 from runtime.jev_runner import run_jev
@@ -243,10 +251,15 @@ def escalation_question(
 
 @dataclass(frozen=True, slots=True)
 class BuildAgents:
-    """The resolved agents of one build run: the coder for the ticket's kind and the panel."""
+    """The resolved agents of one build run: the coder for the ticket's kind and the panel.
+
+    `summary` is the escalation-summary agent, or None when no version of it resolves; a stop
+    then gets its escalation record without a summary.
+    """
 
     coder: LLMSpec
     panel: Panel
+    summary: LLMSpec | None = None
 
 
 def coder_for(kind: str) -> tuple[str, str]:
@@ -281,7 +294,9 @@ def resolve_build_agents(
     Unless `allow_unpublished` is set, only published versions resolve. Raises `UsageError` for a
     kind the build loop does not take, and when the coder is not an LLM agent sandboxed offline or
     has no action guard or no `files` policy; the resolver's `NotFoundError` subclasses (exit 3)
-    when an agent or version is missing.
+    when an agent or version is missing. The escalation-summary agent (`SUMMARY_AGENT`) is
+    optional: when it does not resolve, or is not an LLM agent, `summary` is None and the build
+    runs without summaries.
     """
     name, version_range = coder_for(kind)
     spec = resolve(name, version_range, published_only=not allow_unpublished, trace_path=trace_path)
@@ -299,7 +314,11 @@ def resolve_build_agents(
         )
     _coder_files(spec)
     panel = resolve_panel(allow_unpublished=allow_unpublished, trace_path=trace_path)
-    return BuildAgents(coder=spec, panel=panel)
+    return BuildAgents(
+        coder=spec,
+        panel=panel,
+        summary=resolve_summary_agent(allow_unpublished=allow_unpublished, trace_path=trace_path),
+    )
 
 
 def _coder_files(coder: LLMSpec) -> FilesSpec:
@@ -540,7 +559,10 @@ def run_build(
     stop and its exit code. Unless it is a dry run, a stop `stop_trigger` names writes an
     escalation record and moves the item to `escalated`; any other end moves it to `blocked`, and
     so does a stop whose escalation cannot be written. The report's `escalation` is the record's
-    id, or null. The coder gets the ticket with the answers to earlier escalations appended. Any
+    id, or null. After the record is written, `after_escalation` runs once under `budget` and the
+    report's `after_escalation` says what it did (the summary's run id, or why there is none), or
+    is null when no record was written; it never changes the item's state or the result's code.
+    The coder gets the ticket with the answers to earlier escalations appended. Any
     other exception is recorded the same way and then raised. The report `<pipeline run id>.json` goes to `out_dir`
     on every end after preflight. Every agent call and the outside write share `pipeline_run_id`
     and are charged to `budget` (default: `DEFAULT_BUDGET_USD`). The result's code is 0 when the
@@ -586,6 +608,7 @@ def run_build(
     stopped: dict[str, Any] | None = None
     board_error: dict[str, Any] | None = None
     escalation: str | None = None
+    after: AfterEscalation | None = None
     stop_exc: FactoryError | None = None
     workspace: dict[str, str] = {}
     shipped = False
@@ -639,8 +662,9 @@ def run_build(
             reason = f"{cause}; report {report_path}"
             trigger = stop_trigger(stop_exc) if stop_exc is not None else None
             if stop_exc is not None and trigger is not None:
+                record = None
                 try:
-                    escalation = escalate(
+                    record = escalate(
                         trace,
                         item.id,
                         trigger=trigger,
@@ -651,9 +675,20 @@ def run_build(
                         diff=workspace.get("diff", ""),
                         agent_outputs=_last_outputs(agents, rounds),
                         suite_tail=_last_suite_tail(rounds),
-                    ).id
+                    )
                 except FactoryError as exc:
                     board_error = _stop_json(exc)
+                if record is not None:
+                    escalation = record.id
+                    after = after_escalation(
+                        trace,
+                        record,
+                        budget=budget,
+                        pipeline_run_id=run_id,
+                        dry_run=dry_run,
+                        summary_agent=agents.summary,
+                        runner=runner,
+                    )
             if escalation is None:
                 try:
                     items.move(item.id, "blocked", reason, actor=ACTOR, pipeline_run_id=run_id)
@@ -677,6 +712,7 @@ def run_build(
             "pull_request": pull,
             "board_error": board_error,
             "escalation": escalation,
+            "after_escalation": after.to_json() if after is not None else None,
             "report_path": str(report_path),
             "total_cost_usd": trace.cost_by_pipeline_run(run_id),
             "duration_ms": round((time.monotonic() - start) * 1000),

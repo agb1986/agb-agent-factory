@@ -47,7 +47,7 @@ Every agent call, every move of the item and the outside write carry the same `p
    1. The coder's last commit is fetched from the clone into the source repository's object store. No ref, branch or config is made.
    2. `runtime.outside.write("github.create_pr", ...)` runs for the judge's manifest, with the judge's row as the parent. It pushes `factory/<pipeline_run_id>` from the source repository and opens the pull request.
    3. The item moves to `in_review`, with the pull request's URL in the reason.
-7. **End.** Every end after preflight other than a shipped change moves the item out of `in_progress`, in a `finally` block. A stop a person can answer (a `blocked` coder, a budget stop, a second request for changes, a coder that changed nothing, or a failed check) writes an escalation record and moves the item to `escalated` in one step, through `runtime.escalations.escalate`. Every other stop, and a crash, moves it to `blocked`, and so does a stop whose record cannot be written, with the report's `board_error` saying why. The reason is `<ErrorClass>: <message>; report <path>` either way. [CONVENTIONS.md](CONVENTIONS.md#escalations) has the table of every stop and where it goes. The report's `escalation` is the record's id, or null. The container and the clone are removed however the run ends, and the report is written last.
+7. **End.** Every end after preflight other than a shipped change moves the item out of `in_progress`, in a `finally` block. A stop a person can answer (a `blocked` coder, a budget stop, a second request for changes, a coder that changed nothing, or a failed check) writes an escalation record and moves the item to `escalated` in one step, through `runtime.escalations.escalate`. Every other stop, and a crash, moves it to `blocked`, and so does a stop whose record cannot be written, with the report's `board_error` saying why. The reason is `<ErrorClass>: <message>; report <path>` either way. [CONVENTIONS.md](CONVENTIONS.md#escalations) has the table of every stop and where it goes. The report's `escalation` is the record's id, or null. Right after the record is written, `runtime.after_escalation.after_escalation` has the escalation-summary agent write a summary of it under the run's budget, unless the stop was a budget stop or the run is a dry run; the summary never changes the item's state or the exit code ([CONVENTIONS.md](CONVENTIONS.md#summaries)). The container and the clone are removed however the run ends, and the report is written last.
 
 The pull request's body holds the ticket's body, its acceptance criteria, the coder's summary and the line ``Work item `wi-<n>`.``. `github.create_pr` adds the pipeline run id and its marker below that.
 
@@ -145,6 +145,8 @@ The report is `<pipeline_run_id>.json` in `--out-dir`, the same document `--json
 | `stopped` | Null, or the stop's `type`, `message`, `hint` and `exit_code` |
 | `pull_request` | Null, or `outcome` (`written` or `dry_run`), `action`, `url` (null in a dry run), `branch`, `commit`, `title`, `body` and `patch` (the path of the dry run's patch, null otherwise) |
 | `board_error` | Null, or the error when the final move of the item failed |
+| `escalation` | Null, or the id of the escalation record the stop wrote |
+| `after_escalation` | Null when no record was written, or `summary`: `done`, `run_id` (the summary agent's run, when it ran) and `reason` (why it was skipped or failed) |
 | `report_path` | Where the report was written |
 | `total_cost_usd` | `Trace.cost_by_pipeline_run` |
 | `duration_ms` | How long the run took |

@@ -141,6 +141,18 @@ MIGRATIONS: tuple[Migration, ...] = (
         )
         """,
     ),
+    (
+        7,
+        """
+        CREATE TABLE escalation_summaries (
+            escalation_id VARCHAR PRIMARY KEY,
+            run_id VARCHAR NOT NULL,
+            agent_ref VARCHAR NOT NULL,
+            summary JSON NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL
+        )
+        """,
+    ),
 )
 
 

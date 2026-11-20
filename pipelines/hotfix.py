@@ -30,10 +30,14 @@ deploys, and the factory has no deploy tool and makes no merge call (ADR 0004). 
 Every other end, a stop or a crash, goes through `_stop_item`. A stop a person can answer
 (`ESCALATE_ON`: the panel asking for changes, the budget, the fixer changing nothing, a refused
 write to a protected or test file, a red suite, a test that no longer reproduces) writes an
-escalation record and moves the item to `escalated` (`runtime.escalations.escalate`, ADR 0002);
-any other stop, a crash, and a stop whose record cannot be written move it to `blocked`. The
-reason is `<ErrorClass>: <message>; report <path>` either way. A dry run runs every step, reads included (the
-label check too), but makes no outside write and moves no item. The report,
+escalation record and moves the item to `escalated` (`runtime.escalations.escalate`, ADR 0002),
+and then `runtime.after_escalation.after_escalation` runs once, as it does in the build loop: the
+escalation-summary agent summarises the record under the run's budget, and the report's
+`after_escalation` says what it did. That step never changes the item's state, the report's
+escalation id or the exit code. Any other stop, a crash, and a stop whose record cannot be
+written move it to `blocked`. The reason is `<ErrorClass>: <message>; report <path>` either way.
+A dry run runs every step, reads included (the label check too), but makes no outside write and
+moves no item. The report,
 `<pipeline run id>.json`, is written last, however the run ended after preflight, and records the
 time from the event to the pull request.
 """
@@ -85,6 +89,7 @@ from pipelines.review_panel import JevRunner, Panel, Runner, resolve_panel
 from pipelines.sandbox import DockerSandbox, Sandbox, checkout, clean, commit_all
 from registry.common_schemas import Finding, Ticket
 from registry.spec import LLMSpec
+from runtime.after_escalation import AfterEscalation, after_escalation, resolve_summary_agent
 from runtime.budget import DEFAULT_BUDGET_USD, Budget, BudgetExceeded
 from runtime.escalations import AgentOutput, Trigger, escalate
 from runtime.jev_runner import run_jev
@@ -139,10 +144,15 @@ test no longer reproduces. docs/CONVENTIONS.md (Escalations) has the table with 
 
 @dataclass(frozen=True, slots=True)
 class HotfixAgents:
-    """The resolved agents of one hotfix run: the fixer and the review panel."""
+    """The resolved agents of one hotfix run: the fixer, the review panel and the summariser.
+
+    `summary` is the escalation-summary agent, or None when no version of it resolves; a stop then
+    escalates without a summary.
+    """
 
     fixer: LLMSpec
     panel: Panel
+    summary: LLMSpec | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,7 +182,7 @@ class IncidentPlan:
 def resolve_hotfix_agents(
     *, allow_unpublished: bool = False, trace_path: Path | None = None
 ) -> HotfixAgents:
-    """Resolve the fixer and the full review panel with triage and judge gate.
+    """Resolve the fixer, the full review panel with triage and judge gate, and the summariser.
 
     Unless `allow_unpublished` is set, only published versions resolve. Raises `UsageError` when
     the fixer is not an LLM agent sandboxed offline or has no action guard or no `files` policy,
@@ -186,7 +196,8 @@ def resolve_hotfix_agents(
         )
     _fixer_files(fixer)
     panel = resolve_panel(allow_unpublished=allow_unpublished, trace_path=trace_path)
-    return HotfixAgents(fixer=fixer, panel=panel)
+    summary = resolve_summary_agent(allow_unpublished=allow_unpublished, trace_path=trace_path)
+    return HotfixAgents(fixer=fixer, panel=panel, summary=summary)
 
 
 def _bullets(section: str) -> dict[str, str]:
@@ -397,14 +408,19 @@ def _stop_item(
     diff: str,
     agent_outputs: list[AgentOutput],
     suite_tail: str,
-) -> tuple[str | None, dict[str, Any] | None]:
+    budget: Budget,
+    summary_agent: LLMSpec | None,
+    runner: Runner,
+) -> tuple[str | None, dict[str, Any] | None, AfterEscalation | None]:
     """Move the item out of `in_progress` for a run that did not open its pull request.
 
     A stop on an error `ESCALATE_ON` lists writes an escalation record, with `diff`,
     `agent_outputs` and `suite_tail`, and moves the item to `escalated`; any other end, and a stop
     whose record cannot be written, moves it to `blocked`. The reason is
-    `<ErrorClass>: <message>; report <path>`. Returns the escalation's id or None, and the stop of
-    a write that failed, for the report, or None. Every stop goes through here.
+    `<ErrorClass>: <message>; report <path>`. Right after the record is written,
+    `after_escalation` runs once with `budget`, `summary_agent` and `runner`; it never raises and
+    changes nothing above. Returns the escalation's id or None, the stop of a write that failed or
+    None, and what `after_escalation` did or None, for the report. Every stop goes through here.
     """
     cause = (
         f"{stopped['type']}: {stopped['message']}"
@@ -431,14 +447,23 @@ def _stop_item(
         except FactoryError as error:
             board_error = _stop_json(error)
         else:
-            return record.id, None
+            after = after_escalation(
+                trace,
+                record,
+                budget=budget,
+                pipeline_run_id=pipeline_run_id,
+                dry_run=False,
+                summary_agent=summary_agent,
+                runner=runner,
+            )
+            return record.id, None, after
     try:
         WorkItems(trace).move(
             item_id, "blocked", reason, actor=ACTOR, pipeline_run_id=pipeline_run_id
         )
     except FactoryError as error:
         board_error = board_error or _stop_json(error)
-    return None, board_error
+    return None, board_error, None
 
 
 def _stop_outputs(agents: HotfixAgents, fix: Mapping[str, Any] | None) -> list[AgentOutput]:
@@ -534,7 +559,10 @@ def run_hotfix(
 
     After that nothing is raised for a `FactoryError`: the run stops, `_stop_item` escalates the
     item or moves it to `blocked` (not in a dry run; `ESCALATE_ON` says which) and the result
-    carries the stop, its exit code and the escalation's id. A missing
+    carries the stop, its exit code and the escalation's id. After the record is written,
+    `after_escalation` runs once under `budget` and the report's `after_escalation` says what it
+    did (the summary's run id, or why there is none), or is null when nothing was escalated; it
+    never changes the item's state, the report's escalation id or the result's code. A missing
     `hotfix` label is such a stop: `github.create_pr` refuses with `OutsideWriteRefused` (exit 1),
     in a dry run too. Any other exception is recorded the same way and then raised. The report goes
     to `out_dir` on every end after preflight. Every agent call and the outside write share
@@ -589,6 +617,7 @@ def run_hotfix(
     stopped: dict[str, Any] | None = None
     board_error: dict[str, Any] | None = None
     escalation: str | None = None
+    after: AfterEscalation | None = None
     stop_exc: FactoryError | None = None
     diff = ""
     opened_at: datetime | None = None
@@ -668,7 +697,7 @@ def run_hotfix(
         stop_exc = exc
     finally:
         if not dry_run and not shipped:
-            escalation, board_error = _stop_item(
+            escalation, board_error, after = _stop_item(
                 trace,
                 item.id,
                 stop_exc,
@@ -678,6 +707,9 @@ def run_hotfix(
                 diff=diff,
                 agent_outputs=_stop_outputs(agents, fix),
                 suite_tail=_stop_suite_tail(stop_exc, reproduction, fix),
+                budget=budget,
+                summary_agent=agents.summary,
+                runner=runner,
             )
         document = {
             "pipeline_run_id": run_id,
@@ -699,6 +731,7 @@ def run_hotfix(
             "pull_request": pull,
             "board_error": board_error,
             "escalation": escalation,
+            "after_escalation": after.to_json() if after is not None else None,
             "timing": _timing(plan, opened_at),
             "report_path": str(report_path),
             "total_cost_usd": trace.cost_by_pipeline_run(run_id),

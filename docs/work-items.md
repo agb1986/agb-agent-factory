@@ -130,8 +130,14 @@ outputs and the end of the suite output. The rules, and the table of which stop 
 | Command | What it does |
 | --- | --- |
 | `factory escalations list [--open]` | Every record, oldest first, or only the unanswered ones |
-| `factory escalations show <id>` | One record as Markdown, with the diff, the outputs and the suite tail in `<details>` sections |
+| `factory escalations show <id>` | One record as Markdown, its summary first when it has one, then the diff, the outputs and the suite tail in `<details>` sections; `--json` adds `summary` (null when there is none) |
 | `factory escalations answer <id> --text TEXT\|@FILE` | Store the answer and, when no other record on the item is open, move the item to `ready` |
+
+When a run writes a record, the escalation-summary agent (#94) also writes a summary of it: one
+paragraph on what is blocked and what the person must decide, and up to four options, each with
+what it costs and a quote from the record that backs it. A summary whose quotes are not in the
+record is not stored, and a budget stop gets none; `show` then prints the record alone. The rules
+are in [CONVENTIONS.md](CONVENTIONS.md#summaries).
 
 Each takes `--json`. A typical round:
 

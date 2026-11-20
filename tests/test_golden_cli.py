@@ -28,7 +28,7 @@ from registry import AgentRef
 from registry.common_schemas import Ticket
 from registry.spec import LLMSpec
 from runtime import run_once
-from runtime.escalations import AgentOutput, escalate
+from runtime.escalations import AgentOutput, escalate, store_summary
 from runtime.trace import Trace, TraceRow
 from runtime.work_items import WorkItems
 from tests.gh_fake import FakeGh, github_repo
@@ -492,14 +492,8 @@ def test_ticket_show_json(
 # --- escalations
 
 
-def test_escalation_show_json(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    golden: Golden,
-) -> None:
-    path = tmp_path / "traces.duckdb"
-    monkeypatch.setenv("FACTORY_TRACE_DB", str(path))
+def _seed_escalation(path: Path, *, summary: bool = False) -> None:
+    """Escalate one item into the store at `path`, with a stored summary when `summary`."""
     clock = iter(COST_T0 + timedelta(minutes=minute) for minute in range(1, 100))
     ticket = build_ticket()
     with Trace(path) as trace:
@@ -532,7 +526,56 @@ def test_escalation_show_json(
             suite_tail="1 failed in 0.02s\n",
             now=lambda: next(clock),
         )
+        if summary:
+            store_summary(
+                trace,
+                "esc-1",
+                {
+                    "paragraph": "wi-1 stopped because the coder cannot tell which module the"
+                    " ticket means, and LIMIT is already changed in widgets.py.",
+                    "options": [
+                        {
+                            "label": "Name the module and run again",
+                            "takes": "another_run",
+                            "cost": "Another coder and panel run.",
+                            "evidence": "Which module?",
+                        },
+                        {
+                            "label": "Drop the change",
+                            "takes": "drop_work",
+                            "cost": "The LIMIT change is thrown away; $0.25 has been spent.",
+                            "evidence": "-LIMIT = 5\n+LIMIT = 10",
+                        },
+                    ],
+                },
+                run_id="run-summary",
+                agent_ref="escalation-summary@0.1.0",
+                now=lambda: next(clock),
+            )
+
+
+def test_escalation_show_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    golden: Golden,
+) -> None:
+    path = tmp_path / "traces.duckdb"
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(path))
+    _seed_escalation(path)
     golden("escalation-show", _run(["escalations", "show", "esc-1", "--json"], capsys))
+
+
+def test_escalation_show_json_with_a_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    golden: Golden,
+) -> None:
+    path = tmp_path / "traces.duckdb"
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(path))
+    _seed_escalation(path, summary=True)
+    golden("escalation-show-summary", _run(["escalations", "show", "esc-1", "--json"], capsys))
 
 
 # --- deps
