@@ -106,3 +106,9 @@ size and `depends_on` as indexes into the batch: any position but its own, earli
 long as the graph stays acyclic. Those become the new `wi-<n>` ids. The whole batch is checked before anything is written, the
 acyclic check runs over the full graph, and any error rolls back, so either every item is stored,
 with its creation event, or none is. `add` is the one-item case.
+
+## Building an item
+
+`factory build <id>` takes one `ready` item to a reviewed pull request and moves it to
+`in_progress`, then to `in_review` or `blocked`, with actor `pipeline:build_loop`. A dry run links
+its run to the item but moves nothing. [build-loop.md](build-loop.md) describes the loop (#87).
