@@ -1,4 +1,9 @@
-"""Scoped, read-only tools that LLM agents may call, and the helpers that select them per agent."""
+"""Scoped tools that LLM agents may call, and the helpers that select them per agent.
+
+Most tools only read. The sandbox tools write inside a container, and the outside writes
+(`tools.registry.OUTSIDE_WRITES`) are never sent to a model: pipeline code calls them through
+`runtime.outside.write`.
+"""
 
 from tools._common import (
     PathEscapeError,

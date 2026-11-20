@@ -1,0 +1,21 @@
+name: story-breakdown
+version: 0.1.0
+kind: llm
+team: planning
+description: Breaks a product requirements document into ordered tickets with acceptance criteria, sizes, dependencies and impacted paths.
+model: claude-sonnet-5-5 # verified by tests/live/test_story_breakdown_live.py
+effort: high
+system_prompt: system.md
+schemas: schemas.py
+input_model: StoryInput
+output_model: StoryOutput
+tools:
+  allow: [git.read_file, rg.search, deps.graph, deps.impact]
+  deny: []
+limits:
+  max_tool_turns: 15
+  timeout_s: 300
+  max_output_tokens: 12000
+  max_tokens_total: 300000
+evals:
+  min_pass_rate: 0.75

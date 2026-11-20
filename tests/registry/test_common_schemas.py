@@ -1,9 +1,9 @@
-"""Tests for the Citation and Claim models in registry/common_schemas.py."""
+"""Tests for the Citation, Claim and Ticket models in registry/common_schemas.py."""
 
 import pytest
 from pydantic import ValidationError
 
-from registry.common_schemas import Citation, Claim
+from registry.common_schemas import Citation, Claim, Ticket
 
 CITATION = {
     "url": "https://docs.python.org/3/",
@@ -48,3 +48,50 @@ def test_a_claim_that_is_not_a_fact_may_cite_nothing() -> None:
 def test_the_claim_schema_is_a_plain_json_schema() -> None:
     schema = Claim.model_json_schema()
     assert set(schema["required"]) == {"text", "fact", "citations"}
+
+
+TICKET = {
+    "kind": "bug",
+    "title": "Fix the parser",
+    "body": "It drops the last line.",
+    "acceptance": ["the last line parses"],
+    "repo": "agb1986/agb-agent-factory",
+    "ref": "main",
+}
+
+
+def test_a_ticket_has_exactly_the_agent_visible_fields() -> None:
+    assert set(Ticket.model_fields) == {
+        "kind", "title", "body", "acceptance", "repo", "ref", "impacted_paths",
+    }  # fmt: skip
+    assert Ticket.model_validate(TICKET).impacted_paths == []
+
+
+@pytest.mark.parametrize("repo", ["agb1986/agb-agent-factory", "/home/me/repo"])
+def test_a_ticket_takes_a_github_name_or_an_absolute_path(repo: str) -> None:
+    assert Ticket.model_validate({**TICKET, "repo": repo}).repo == repo
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"kind": "chore"},
+        {"title": ""},
+        {"title": "two\nlines"},
+        {"title": "   "},
+        {"title": "x" * 121},
+        {"acceptance": []},
+        {"acceptance": [" "]},
+        {"repo": "just-a-name"},
+        {"repo": "a/b/c"},
+        {"repo": "relative/path with space"},
+        {"ref": ""},
+        {"impacted_paths": ["/etc/passwd"]},
+        {"impacted_paths": [""]},
+        {"status": "todo"},
+        {"depends_on": []},
+    ],
+)
+def test_a_ticket_rejects_a_bad_or_unknown_field(bad: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        Ticket.model_validate({**TICKET, **bad})

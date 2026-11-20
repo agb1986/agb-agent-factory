@@ -1,0 +1,5 @@
+# tracker
+
+A small in-memory issue tracker with search and a summary report.
+
+Run the tests with `pytest tests`.

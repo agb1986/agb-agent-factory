@@ -1,0 +1,200 @@
+# Eval cases for story-breakdown. Each one gives the agent a hand-written PRD for a fixture from
+# fixtures/src/ and grades the tickets with the rubric grader: deterministic field and path checks
+# first (every ticket's impacted paths must exist at the ref), then a small model scores the
+# criteria. A breakdown has no single right answer, so these cases check the properties that make
+# it usable: acceptance criteria that can be checked, dependencies that follow the code, and
+# parallel tickets that touch disjoint files, not a fixed list of tickets.
+# `repo_path` is not in the payload: the eval runner fills it in with the built fixture repository.
+cases:
+  - id: storefront-wishlist-and-ratings
+    fixture: storefront
+    payload:
+      repository: acme/storefront
+      ref: head
+      prd: |-
+        # Wishlist and product ratings
+
+        Shoppers want to save products they like for later, and to see what other shoppers think
+        of a product before they buy it.
+
+        - A shopper can add a product to a wishlist and remove it again, and can list the
+          wishlist. Adding an unknown product is an error.
+        - A shopper can rate a product from 1 to 5 stars. The product list shows each product's
+          average rating next to its name, and "no ratings yet" for a product nobody rated.
+        - Both are available from the functions in the storefront API.
+    expected:
+      verdict: null
+      rubric:
+        criteria:
+          - id: acceptance-checkable
+            text: >-
+              Every ticket has acceptance criteria that a test or a reader can check, each about
+              behaviour, such as an unknown product being rejected or the rating being shown in
+              the product list. None is vague, like "works well".
+            required: true
+            floor: 0.6
+          - id: parallel-tickets-disjoint
+            text: >-
+              The wishlist and the ratings both reach storefront/api.py. Either the tickets that
+              touch api.py are ordered with a dependency between them, or they are cut so that two
+              tickets with no dependency share no impacted path. No two unordered tickets share a
+              path.
+            required: true
+            floor: 0.6
+          - id: covers-the-prd
+            text: >-
+              The tickets together cover the wishlist (add, remove, list, unknown product), the
+              ratings (1 to 5, average) and the display of the average in the product list, and
+              nothing else.
+            required: true
+            floor: 0.5
+          - id: sizes-and-paths-are-plausible
+            text: >-
+              Sizes fit the work (no ticket marked L for a few lines), and each ticket's impacted
+              paths are files in storefront/ that the ticket would really change.
+        threshold: 0.7
+        required_fields: [summary, tickets]
+        forbidden: [TODO, lorem ipsum]
+        paths_exist: [tickets.*.impacted_paths]
+    grader: rubric
+
+  - id: storefront-money-decimal
+    fixture: storefront
+    payload:
+      repository: acme/storefront
+      ref: head
+      prd: |-
+        # Prices in decimal with a currency
+
+        Prices are whole cents today, which cannot express a price in a currency without cents and
+        rounds badly when we add tax. Move all money to `decimal.Decimal` amounts that carry a
+        currency code, so that a price, a cart total and a receipt all say which currency they
+        are in. The shop sells in euros only for now, so every amount is in EUR.
+
+        - Adding amounts in two different currencies is an error.
+        - The receipt and the product list show the amount with its currency code, such as
+          "12.50 EUR".
+        - The existing orders, cart and catalog behaviour is otherwise unchanged.
+    expected:
+      verdict: null
+      rubric:
+        criteria:
+          - id: shared-module-first
+            text: >-
+              storefront/money.py is imported by the catalog, the cart and the orders. The ticket
+              that changes it comes first, and every ticket that touches a module importing it
+              depends on it, directly or through another ticket. The change is not left to run in
+              parallel with its importers.
+            required: true
+            floor: 0.6
+          - id: impact-is-followed
+            text: >-
+              The impacted paths of the money ticket, or of the tickets after it, include the
+              modules that import money.py (catalog.py, cart.py, orders.py) and their tests that
+              need to change, so no importer is missed.
+            required: true
+            floor: 0.5
+          - id: acceptance-checkable
+            text: >-
+              Every ticket has acceptance criteria that a test or a reader can check, including
+              that adding two currencies is an error and that the receipt shows the currency code.
+            required: true
+            floor: 0.6
+          - id: no-invented-scope
+            text: >-
+              The tickets do not add other currencies, exchange rates or rounding rules the PRD did
+              not ask for; where the PRD leaves a choice open, such as the rounding mode, it is in
+              open_questions.
+        threshold: 0.7
+        required_fields: [summary, tickets]
+        forbidden: [TODO, lorem ipsum]
+        paths_exist: [tickets.*.impacted_paths]
+    grader: rubric
+
+  - id: tracker-csv-export
+    fixture: tracker
+    payload:
+      repository: acme/tracker
+      ref: head
+      prd: |-
+        # Export issues to CSV
+
+        Teams want to take their issues into a spreadsheet.
+
+        - A new command, `tracker export PATH`, writes every issue to a CSV file at PATH with the
+          columns number, title, state and labels. Labels are joined with a semicolon.
+        - `tracker export` with no path is an error that prints the usage line and exits with 2,
+          like the other commands.
+        - The README describes the new command.
+    expected:
+      verdict: null
+      rubric:
+        criteria:
+          - id: docs-after-feature
+            text: >-
+              The README change is its own docs ticket, or is part of the feature ticket, and when
+              it is its own ticket it depends on the feature ticket. A docs ticket never comes
+              before or runs unordered beside the ticket that adds the command.
+            required: true
+            floor: 0.6
+          - id: acceptance-checkable
+            text: >-
+              The feature ticket's acceptance criteria name the CSV columns, the semicolon-joined
+              labels and the usage error with exit code 2, each as something a test can check.
+            required: true
+            floor: 0.6
+          - id: parallel-tickets-disjoint
+            text: >-
+              No two tickets without a dependency between them share an impacted path.
+            required: true
+            floor: 0.6
+          - id: paths-are-real
+            text: >-
+              The feature ticket's impacted paths include tracker/cli.py, where the command is
+              wired in, and the paths are files that exist in the repository.
+        threshold: 0.7
+        required_fields: [summary, tickets]
+        forbidden: [TODO, lorem ipsum]
+        paths_exist: [tickets.*.impacted_paths]
+    grader: rubric
+
+  - id: tracker-reject-empty-title
+    fixture: tracker
+    payload:
+      repository: acme/tracker
+      ref: head
+      prd: |-
+        # Reject empty titles
+
+        `tracker add` lets a person create an issue whose title is empty or only spaces. Adding
+        such an issue should raise a ValueError from `tracker.storage.add`, and the command line
+        should print the message to stderr and exit with 2.
+    expected:
+      verdict: null
+      rubric:
+        criteria:
+          - id: one-small-ticket
+            text: >-
+              The PRD is a small, single change, so the answer is one ticket sized S, or at most two
+              closely tied tickets. It does not pad the work with extra tickets for design, tests,
+              documentation or clean-up the PRD did not ask for.
+            required: true
+            floor: 0.6
+          - id: acceptance-checkable
+            text: >-
+              The acceptance criteria say that an empty and a spaces-only title raise a ValueError
+              from storage.add, and that the command line prints the message to stderr and exits
+              with 2, each as something a test can check.
+            required: true
+            floor: 0.6
+          - id: paths-are-real
+            text: >-
+              The impacted paths name tracker/storage.py and tracker/cli.py, and no file the change
+              does not need.
+            required: true
+            floor: 0.5
+        threshold: 0.7
+        required_fields: [summary, tickets]
+        forbidden: [TODO, lorem ipsum]
+        paths_exist: [tickets.*.impacted_paths]
+    grader: rubric

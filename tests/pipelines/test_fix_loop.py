@@ -7,6 +7,7 @@ given first, and the sandbox is a fake that reports what it was asked to run.
 
 import json
 import os
+import re
 import subprocess
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import UTC, datetime
@@ -20,15 +21,16 @@ from factory.cli import main
 from factory.exit import ExitCode, UsageError
 from fixtures.build import build
 from pipelines import fix_loop
+from pipelines.file_policy import FilePolicy, FilePolicyGuard
 from pipelines.fix_loop import (
     FIXER,
+    PROTECTED_REASON,
     TEST_WRITE_REFUSED_TAG,
     TEST_WRITER,
     FixAgents,
     FixError,
     FixResult,
     SuiteFailedError,
-    TestFileGuard,
     TestFileWriteError,
     load_finding,
     resolve_fix_agents,
@@ -277,6 +279,18 @@ def test_a_fixer_without_a_guard_is_a_usage_error(monkeypatch: pytest.MonkeyPatc
         resolve_fix_agents(allow_unpublished=True)
 
 
+def test_a_fixer_without_a_files_policy_is_a_usage_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    real = fix_loop.resolve
+
+    def unpoliced(name: str, *args: Any, **kwargs: Any) -> Any:
+        spec = real(name, *args, **kwargs)
+        return spec.model_copy(update={"files": None}) if name == FIXER[0] else spec
+
+    monkeypatch.setattr(fix_loop, "resolve", unpoliced)
+    with pytest.raises(UsageError, match="no files policy"):
+        resolve_fix_agents(allow_unpublished=True)
+
+
 def test_an_unsandboxed_worker_is_a_usage_error(monkeypatch: pytest.MonkeyPatch) -> None:
     real = fix_loop.resolve
 
@@ -338,37 +352,61 @@ def test_a_bad_finding_is_a_usage_error(text: str, message: str) -> None:
         load_finding(text)
 
 
-# --- the test-file guard
+# --- the test-file guard: the fixer's files policy as the fix loop enforces it
+
+
+def _deny(pattern: str) -> str:
+    return f"the path matches the files.deny pattern {pattern}"
+
+
+def _guard(
+    agents: FixAgents, clone: Path, trace: Trace, protected: frozenset[str] = frozenset()
+) -> FilePolicyGuard:
+    assert agents.fixer.files is not None
+    policy = FilePolicy(agents.fixer.files, dict.fromkeys(protected, PROTECTED_REASON))
+
+    def refuse(agent: str, path: str, reason: str, check: str) -> TestFileWriteError:
+        return fix_loop._refuse(trace, RUN_ID, agent, path, reason, check)
+
+    return FilePolicyGuard(clone, policy, refuse)
 
 
 @pytest.mark.parametrize(
-    "path", ["tests/test_x.py", "./tests/test_x.py", "series/../tests/test_x.py", "conftest.py"]
+    ("path", "pattern"),
+    [
+        ("tests/test_x.py", "**/tests/**"),
+        ("./tests/test_x.py", "**/tests/**"),
+        ("series/../tests/test_x.py", "**/tests/**"),
+        ("conftest.py", "**/conftest.py"),
+        ("series/test_rolling.py", "**/test_*.py"),
+        ("series/rolling_test.py", "**/*_test.py"),
+    ],
 )
 def test_the_guard_refuses_a_write_to_the_test_layout(
-    path: str, tmp_path: Path, trace: Trace
+    path: str, pattern: str, agents: FixAgents, tmp_path: Path, trace: Trace
 ) -> None:
-    guard = TestFileGuard(tmp_path.resolve(), frozenset(), trace, RUN_ID)
+    guard = _guard(agents, tmp_path.resolve(), trace)
     call = ToolCall("fs.write_file", {"path": path, "content": ""}, "fixer@0.1.1")
-    with pytest.raises(TestFileWriteError, match="in the test layout"):
+    with pytest.raises(TestFileWriteError, match=re.escape(_deny(pattern))):
         guard.before_tool(call)
     ((agent, run_id, cost, decision, error),) = _refusals(trace)
     assert (agent, run_id, cost) == ("fixer@0.1.1", RUN_ID, 0.0)
     assert json.loads(decision) == {
         "allow": False,
         "path": os.path.normpath(path),
-        "reason": "the path is in the test layout",
+        "reason": _deny(pattern),
         "check": "hook",
     }
     assert "may not change the test file" in error
 
 
 def test_the_guard_refuses_an_absolute_path_and_a_symlink_into_tests(
-    tmp_path: Path, trace: Trace
+    agents: FixAgents, tmp_path: Path, trace: Trace
 ) -> None:
     clone = tmp_path.resolve()
     (clone / "tests").mkdir()
     (clone / "alias").symlink_to(clone / "tests")
-    guard = TestFileGuard(clone, frozenset(), trace, RUN_ID)
+    guard = _guard(agents, clone, trace)
     for path in (str(clone / "tests" / "test_x.py"), "alias/helpers.py"):
         with pytest.raises(TestFileWriteError):
             guard.before_tool(ToolCall("fs.write_file", {"path": path}, "fixer@0.1.1"))
@@ -376,36 +414,36 @@ def test_the_guard_refuses_an_absolute_path_and_a_symlink_into_tests(
     assert paths == ["tests/test_x.py", "tests/helpers.py"]
 
 
-def test_the_guard_refuses_a_path_the_test_writer_changed(tmp_path: Path, trace: Trace) -> None:
-    guard = TestFileGuard(tmp_path.resolve(), frozenset({"data/cases.json"}), trace, RUN_ID)
+def test_the_guard_refuses_a_path_the_test_writer_changed(
+    agents: FixAgents, tmp_path: Path, trace: Trace
+) -> None:
+    guard = _guard(agents, tmp_path.resolve(), trace, frozenset({"data/cases.json"}))
     with pytest.raises(TestFileWriteError, match="the test-writer changed this path"):
         guard.before_tool(ToolCall("fs.write_file", {"path": "data/cases.json"}, "fixer@0.1.1"))
 
 
-CONFIGURES = "the file configures the test run"
-SHADOWS = "the path shadows the test runner"
-
-
 @pytest.mark.parametrize(
-    ("path", "reason"),
+    ("path", "pattern"),
     [
-        ("pytest.ini", CONFIGURES),
-        ("./pyproject.toml", CONFIGURES),
-        ("setup.cfg", CONFIGURES),
-        ("tox.ini", CONFIGURES),
-        ("pytest.py", SHADOWS),
-        ("pluggy.cpython-312.pyc", SHADOWS),
-        ("pytest/__init__.py", SHADOWS),
-        ("_pytest/python.py", SHADOWS),
-        ("packaging.py", SHADOWS),
-        ("packaging/version.py", SHADOWS),
+        ("pytest.ini", "pytest.ini"),
+        ("./pyproject.toml", "pyproject.toml"),
+        ("setup.cfg", "setup.cfg"),
+        ("tox.ini", "tox.ini"),
+        ("pytest.py", "pytest.py"),
+        ("pluggy.cpython-312.pyc", "pluggy.*.pyc"),
+        ("iniconfig.so", "iniconfig.so"),
+        ("pytest/__init__.py", "pytest/**"),
+        ("_pytest/python.py", "_pytest/**"),
+        ("packaging.py", "packaging.py"),
+        ("packaging/version.py", "packaging/**"),
     ],
 )
 def test_the_guard_refuses_what_controls_the_test_run(
-    path: str, reason: str, tmp_path: Path, trace: Trace
+    path: str, pattern: str, agents: FixAgents, tmp_path: Path, trace: Trace
 ) -> None:
-    guard = TestFileGuard(tmp_path.resolve(), frozenset(), trace, RUN_ID)
-    with pytest.raises(TestFileWriteError, match=reason):
+    reason = _deny(pattern)
+    guard = _guard(agents, tmp_path.resolve(), trace)
+    with pytest.raises(TestFileWriteError, match=re.escape(reason)):
         guard.before_tool(ToolCall("fs.write_file", {"path": path}, "fixer@0.1.1"))
     ((_, _, _, decision, _),) = _refusals(trace)
     assert json.loads(decision)["reason"] == reason
@@ -429,9 +467,9 @@ def test_the_guard_refuses_what_controls_the_test_run(
     ],
 )
 def test_the_guard_allows_everything_else(
-    name: str, arguments: dict[str, Any], tmp_path: Path, trace: Trace
+    name: str, arguments: dict[str, Any], agents: FixAgents, tmp_path: Path, trace: Trace
 ) -> None:
-    guard = TestFileGuard(tmp_path.resolve(), frozenset(), trace, RUN_ID)
+    guard = _guard(agents, tmp_path.resolve(), trace)
     assert guard.before_tool(ToolCall(name, arguments, "fixer@0.1.1")).allowed
     assert _refusals(trace) == []
 
@@ -555,7 +593,7 @@ def test_a_test_changed_by_another_route_is_refused_after_the_fixer(
     assert json.loads(decision) == {
         "allow": False,
         "path": "tests/test_rolling.py",
-        "reason": "the path is in the test layout",
+        "reason": _deny("**/tests/**"),
         "check": "post-check",
     }
     assert sandbox.runs == []
@@ -582,10 +620,14 @@ def test_what_the_test_writer_only_reports_is_not_protected(
 @pytest.mark.parametrize(
     ("path", "content", "reason"),
     [
-        ("pyproject.toml", "[tool.pytest.ini_options]\naddopts = '-k nothing'\n", CONFIGURES),
-        ("pytest.ini", "[pytest]\n", CONFIGURES),
-        ("pytest.py", "raise SystemExit(0)\n", SHADOWS),
-        ("packaging.py", "raise SystemExit(0)\n", SHADOWS),
+        (
+            "pyproject.toml",
+            "[tool.pytest.ini_options]\naddopts = '-k nothing'\n",
+            _deny("pyproject.toml"),
+        ),
+        ("pytest.ini", "[pytest]\n", _deny("pytest.ini")),
+        ("pytest.py", "raise SystemExit(0)\n", _deny("pytest.py")),
+        ("packaging.py", "raise SystemExit(0)\n", _deny("packaging.py")),
     ],
 )
 def test_a_change_to_the_test_run_by_another_route_is_refused_after_the_fixer(
@@ -598,7 +640,7 @@ def test_a_change_to_the_test_run_by_another_route_is_refused_after_the_fixer(
     tmp_path: Path,
 ) -> None:
     sandbox = FakeSandbox()
-    with pytest.raises(TestFileWriteError, match=reason):
+    with pytest.raises(TestFileWriteError, match=re.escape(reason)):
         _fix(
             agents,
             repo,

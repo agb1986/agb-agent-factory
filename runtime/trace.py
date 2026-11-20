@@ -20,11 +20,12 @@ Nothing secret goes into a row. Callers pass already-validated payloads in `inpu
 `output_json`.
 """
 
+import contextlib
 import functools
 import json
 import os
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -75,6 +76,46 @@ MIGRATIONS: tuple[Migration, ...] = (
         """,
     ),
     (3, "ALTER TABLE traces ADD COLUMN parent_run_id VARCHAR"),
+    (
+        4,
+        """
+        CREATE TABLE work_items (
+            id VARCHAR PRIMARY KEY,
+            kind VARCHAR NOT NULL
+                CHECK (kind IN ('feature', 'bug', 'refactor', 'docs', 'research', 'incident')),
+            title VARCHAR NOT NULL,
+            body VARCHAR NOT NULL,
+            acceptance JSON NOT NULL,
+            repo VARCHAR NOT NULL,
+            ref VARCHAR NOT NULL,
+            parent VARCHAR,
+            depends_on JSON NOT NULL,
+            impacted_paths JSON NOT NULL,
+            size VARCHAR CHECK (size IN ('S', 'M', 'L')),
+            status VARCHAR NOT NULL CHECK (status IN (
+                'todo', 'ready', 'in_progress', 'in_review', 'blocked', 'escalated', 'done',
+                'dropped'
+            )),
+            pipeline_run_ids JSON NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL
+        )
+        """,
+    ),
+    (
+        5,
+        """
+        CREATE TABLE work_item_events (
+            work_item_id VARCHAR NOT NULL,
+            "at" TIMESTAMPTZ NOT NULL,
+            from_status VARCHAR,
+            to_status VARCHAR NOT NULL,
+            actor VARCHAR NOT NULL,
+            pipeline_run_id VARCHAR,
+            reason VARCHAR NOT NULL CHECK (reason <> '')
+        )
+        """,
+    ),
 )
 
 
@@ -220,6 +261,18 @@ class Trace:
                 con.execute("ROLLBACK")
                 raise
             con.execute("COMMIT")
+
+    @contextlib.contextmanager
+    def connection(self) -> Generator[duckdb.DuckDBPyConnection]:
+        """Hold the lock and yield the connection, with the schema applied, for the block.
+
+        For a store that lives in the same file, such as `runtime/work_items.py`: its queries run
+        under the same lock as `record`, so the one connection still sees one call at a time. The
+        block may open its own transaction; it must not close the connection.
+        """
+        with self._lock:
+            self.ensure_schema()
+            yield self._connect()
 
     @_serialised
     def schema_version(self) -> int:

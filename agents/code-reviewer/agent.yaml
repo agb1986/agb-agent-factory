@@ -1,6 +1,7 @@
 name: code-reviewer
 version: 1.2.0
 kind: llm
+team: qa
 description: Reviews a diff for defects and reports findings with head-revision line numbers.
 model: claude-sonnet-5-5 # verified by tests/live/test_code_reviewer_live.py
 effort: high

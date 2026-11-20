@@ -1,6 +1,7 @@
 name: benchmark
 version: 0.1.0
 kind: llm
+team: research
 description: >-
   Compares candidate libraries for one need on fixed criteria (licence, maintenance, documented
   performance, size, language support), with every number cited from the page it came from, then

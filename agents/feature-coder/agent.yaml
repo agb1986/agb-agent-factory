@@ -1,0 +1,73 @@
+name: feature-coder
+version: 0.1.0
+kind: llm
+team: dev
+description: Builds a ticket's feature in a repository, with a test for every acceptance criterion it can check.
+model: claude-sonnet-5-5 # verified by tests/live/test_feature_coder_live.py
+effort: xhigh
+system_prompt: system.md
+schemas: schemas.py
+input_model: FeatureInput
+output_model: FeatureOutput
+sandbox: true
+guard: action-guard@^0.1
+tools:
+  allow: [fs.list_files, fs.read_file, fs.write_file, shell.run]
+  deny: []
+files:
+  # The coder writes code and tests. It may not change how the suite that judges its work runs.
+  deny:
+    # version control and CI
+    - ".git/**"
+    - ".github/**"
+    # pytest's configuration at the root of the repository
+    - pytest.ini
+    - .pytest.ini
+    - pytest.toml
+    - .pytest.toml
+    - pyproject.toml
+    - setup.cfg
+    - tox.ini
+    # root modules and packages named like one `python -m pytest` imports, which would replace it
+    - "pytest/**"
+    - pytest.py
+    - "pytest.*.py"
+    - pytest.pyc
+    - "pytest.*.pyc"
+    - pytest.so
+    - "pytest.*.so"
+    - "_pytest/**"
+    - _pytest.py
+    - "_pytest.*.py"
+    - _pytest.pyc
+    - "_pytest.*.pyc"
+    - _pytest.so
+    - "_pytest.*.so"
+    - "pluggy/**"
+    - pluggy.py
+    - "pluggy.*.py"
+    - pluggy.pyc
+    - "pluggy.*.pyc"
+    - pluggy.so
+    - "pluggy.*.so"
+    - "iniconfig/**"
+    - iniconfig.py
+    - "iniconfig.*.py"
+    - iniconfig.pyc
+    - "iniconfig.*.pyc"
+    - iniconfig.so
+    - "iniconfig.*.so"
+    - "packaging/**"
+    - packaging.py
+    - "packaging.*.py"
+    - packaging.pyc
+    - "packaging.*.pyc"
+    - packaging.so
+    - "packaging.*.so"
+limits:
+  max_tool_turns: 40
+  timeout_s: 900
+  max_output_tokens: 12000
+  max_tokens_total: 400000
+evals:
+  min_pass_rate: 0.75

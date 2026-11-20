@@ -195,9 +195,12 @@ def test_the_rubric_grader_needs_a_rubric(tmp_path: Path) -> None:
     assert "expected.rubric" in _rejects(tmp_path, _case(grader="rubric"))
 
 
-def test_a_rubric_is_read_only_by_the_rubric_grader(tmp_path: Path) -> None:
-    case = _case(expected={"verdict": None, "rubric": _rubric()})
-    assert "only the rubric grader" in _rejects(tmp_path, case)
+@pytest.mark.parametrize("grader", ["llm_judge", "jev"])
+def test_a_rubric_is_read_only_by_the_rubric_and_sandbox_graders(
+    tmp_path: Path, grader: str
+) -> None:
+    case = _case(grader=grader, expected={"verdict": None, "rubric": _rubric()})
+    assert "only the rubric and sandbox_tests graders" in _rejects(tmp_path, case)
 
 
 @pytest.mark.parametrize(
