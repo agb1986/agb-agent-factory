@@ -25,9 +25,11 @@ from factory.exit import ExitCode
 from fixtures.build import build
 from pipelines import fix_loop, review_panel, triage
 from registry import AgentRef
+from registry.common_schemas import Ticket
 from registry.spec import LLMSpec
 from runtime import run_once
 from runtime.trace import Trace, TraceRow
+from runtime.work_items import WorkItems
 from tests.pipelines.test_fix_loop import FINDING, FakeSandbox, FixRunner
 from tests.pipelines.test_review_panel import FakeJev
 from tests.test_run_cli import PAYLOAD, FakeRunner, write_llm
@@ -303,6 +305,47 @@ def test_cost_json(
     golden(
         "cost-by-kind", _run(["cost", "--since", "2026-10-20", "--by", "kind", "--json"], capsys)
     )
+
+
+# --- ticket
+
+
+def test_ticket_show_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    golden: Golden,
+) -> None:
+    path = tmp_path / "traces.duckdb"
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(path))
+    clock = iter(COST_T0 + timedelta(minutes=minute) for minute in range(1, 100))
+    ticket = Ticket(
+        kind="feature",
+        title="Add the work-item store",
+        body="Keep work items in the trace store.",
+        acceptance=["factory ticket show prints the item", "an illegal move exits 2"],
+        repo="agb1986/agb-agent-factory",
+        ref="main",
+        impacted_paths=["runtime/work_items.py"],
+    )
+    with Trace(path) as trace:
+        store = WorkItems(trace, now=lambda: next(clock))
+        store.add(ticket.model_copy(update={"kind": "docs", "title": "Write the ADR"}))
+        store.add(ticket, parent="wi-1", depends_on=["wi-1"], size="M")
+        for to in ("ready", "in_progress", "in_review", "done"):
+            store.move("wi-1", to, f"to {to}")
+        store.ready()
+        store.move("wi-2", "in_progress", "picked", actor="pipeline:feature_loop",
+                   pipeline_run_id="pipe-1")  # fmt: skip
+        store.link_run("wi-2", "pipe-1")
+        for run_id, agent_ref, pipeline, cost, tag in COST_RUNS[:3]:
+            trace.record(
+                TraceRow(
+                    run_id=run_id, pipeline_run_id=pipeline, agent_ref=agent_ref, kind="llm",
+                    started_at=COST_T0, duration_ms=900, input_json={}, cost_usd=cost, tag=tag,
+                )
+            )  # fmt: skip
+    golden("ticket-show", _run(["ticket", "show", "wi-2", "--json"], capsys))
 
 
 # --- deps
