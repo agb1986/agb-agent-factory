@@ -29,6 +29,8 @@ from pipelines.hotfix import (
     run_hotfix,
 )
 from registry.common_schemas import Ticket
+from runtime.budget import Budget, BudgetExceeded
+from runtime.escalations import Escalation, InvalidEscalation, list_escalations
 from runtime.trace import Trace
 from runtime.work_items import WorkItemNotFound, WorkItems
 from tests.gh_fake import FakeGh, GithubRepo, git, github_repo
@@ -184,13 +186,15 @@ def _branches_tags_and_head(root: Path) -> tuple[str, str]:
     return git(root, "for-each-ref", "refs/heads", "refs/tags"), git(root, "rev-parse", "HEAD")
 
 
-def _stopped(result: HotfixResult, trace: Trace, item_id: str, message: str) -> dict[str, Any]:
+def _stopped(
+    result: HotfixResult, trace: Trace, item_id: str, message: str, *, status: str = "escalated"
+) -> dict[str, Any]:
     assert result.code == ExitCode.ERROR
     doc = result.document
     assert doc["outcome"] == "stopped" and doc["pull_request"] is None
     assert message in doc["stopped"]["message"]
     item = WorkItems(trace).get(item_id)
-    assert item.status == "blocked" == doc["work_item"]["status_after"]
+    assert item.status == status == doc["work_item"]["status_after"]
     (last,) = WorkItems(trace).events(item_id)[-1:]
     assert last.actor == ACTOR and last.pipeline_run_id == RUN_ID
     assert last.reason.startswith(f"{doc['stopped']['type']}: {doc['stopped']['message']}")
@@ -198,6 +202,16 @@ def _stopped(result: HotfixResult, trace: Trace, item_id: str, message: str) -> 
     assert Path(doc["report_path"]).is_file()
     assert doc["timing"]["pr_opened_at"] is None and doc["timing"]["time_to_pr_seconds"] is None
     return doc
+
+
+def _escalation(trace: Trace, doc: dict[str, Any], trigger: str) -> Escalation:
+    """Check the stop wrote one record with `trigger`, and return it."""
+    (record,) = list_escalations(trace, work_item_id=doc["work_item"]["id"])
+    assert doc["escalation"] == record.id and doc["board_error"] is None
+    assert record.trigger == trigger and record.actor == ACTOR
+    assert record.pipeline_run_id == RUN_ID and record.from_status == "in_progress"
+    assert record.question.startswith(f"{doc['stopped']['message']}.")
+    return record
 
 
 # --- reading the incident ticket
@@ -395,8 +409,9 @@ def test_the_fixer_may_not_change_the_reproduction_test(
     item_id = _ready(trace)
     runner = _runner(fixes={SCORES: FIXED}, unhooked={TEST_PATH: "def test_x() -> None:\n"})
     result = _hotfix(agents, repo, trace, tmp_path, item_id, runner=runner)
-    _stopped(result, trace, item_id, TEST_PATH)
+    doc = _stopped(result, trace, item_id, TEST_PATH)
     assert gh.writes() == []
+    _escalation(trace, doc, "check_failed")
 
 
 # --- dry runs
@@ -445,7 +460,9 @@ def test_a_missing_hotfix_label_stops_the_run_with_exit_1(
     if dry_run:
         assert WorkItems(trace).get(item_id).status == "ready"
     else:
-        _stopped(result, trace, item_id, "labels missing")
+        # An operator precondition, outside the item: blocked, not escalated.
+        doc = _stopped(result, trace, item_id, "labels missing", status="blocked")
+        assert doc["escalation"] is None and list_escalations(trace) == []
 
 
 # --- runs that stop
@@ -465,9 +482,14 @@ def test_a_test_that_no_longer_reproduces_stops_before_any_model_runs(
     assert doc["reproduction"]["commit"] is not None and doc["fix"] is None
     assert runner.calls == [] and gh.writes() == []
     assert "does not reproduce" in result.text()
+    record = _escalation(trace, doc, "contradiction")
+    assert "factory incident" in record.question
+    assert TEST_PATH in record.diff and record.agent_outputs == ()
+    assert record.suite_tail == doc["reproduction"]["run"]["output_tail"]
+    assert f"escalation {record.id}" in result.text()
 
 
-def test_a_request_for_changes_blocks_the_item_after_one_round(
+def test_a_request_for_changes_escalates_the_item_after_one_round(
     agents: HotfixAgents, repo: GithubRepo, trace: Trace, tmp_path: Path, gh: FakeGh
 ) -> None:
     item_id = _ready(trace)
@@ -479,25 +501,82 @@ def test_a_request_for_changes_blocks_the_item_after_one_round(
     assert doc["fix"]["panel"]["ship"] is False
     assert runner.names().count("fixer") == 1 and gh.writes() == []
     assert "panel asks for changes" in result.text()
+    record = _escalation(trace, doc, "changes_requested")
+    assert [o.agent for o in record.agent_outputs] == [agents.fixer.address, "review panel"]
+    assert record.agent_outputs[0].run_id == doc["fix"]["fixer"]["run_id"]
+    assert SCORES in record.diff and TEST_PATH in record.diff
+    assert record.suite_tail == doc["fix"]["suite"]["output_tail"]
 
 
-def test_a_failing_suite_blocks_the_item(
+def test_a_failing_suite_escalates_the_item(
     agents: HotfixAgents, repo: GithubRepo, trace: Trace, tmp_path: Path, gh: FakeGh
 ) -> None:
     item_id = _ready(trace)
     sandbox = SequencedSandbox((1, REPRODUCED), (1, FAILED))
     result = _hotfix(agents, repo, trace, tmp_path, item_id, sandbox=sandbox)
-    _stopped(result, trace, item_id, "suite failed")
+    doc = _stopped(result, trace, item_id, "suite failed")
     assert gh.writes() == []
+    record = _escalation(trace, doc, "check_failed")
+    assert record.suite_tail and record.suite_tail == doc["stopped"]["hint"]
+    assert "get past this check" in record.question and SCORES in record.diff
 
 
-def test_a_fixer_that_changes_nothing_blocks_the_item(
+def test_a_fixer_that_changes_nothing_escalates_the_item(
     agents: HotfixAgents, repo: GithubRepo, trace: Trace, tmp_path: Path, gh: FakeGh
 ) -> None:
     item_id = _ready(trace)
     result = _hotfix(agents, repo, trace, tmp_path, item_id, runner=_runner(fixes={}))
-    _stopped(result, trace, item_id, "changed nothing")
+    doc = _stopped(result, trace, item_id, "changed nothing")
     assert gh.writes() == []
+    record = _escalation(trace, doc, "contradiction")
+    assert "already fixed" in record.question
+
+
+def test_a_run_past_its_budget_escalates_the_item(
+    agents: HotfixAgents, repo: GithubRepo, trace: Trace, tmp_path: Path, gh: FakeGh
+) -> None:
+    item_id = _ready(trace)
+    result = _hotfix(agents, repo, trace, tmp_path, item_id, budget=Budget(0.0001))
+    doc = _stopped(result, trace, item_id, "budget")
+    assert doc["stopped"]["type"] == BudgetExceeded.__name__ and gh.writes() == []
+    record = _escalation(trace, doc, "budget")
+    assert "bigger budget" in record.question
+
+
+def test_a_stop_whose_record_cannot_be_written_blocks_the_item(
+    agents: HotfixAgents,
+    repo: GithubRepo,
+    trace: Trace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def refused(*args: Any, **kwargs: Any) -> Any:
+        raise InvalidEscalation("no room for a record")
+
+    monkeypatch.setattr(hotfix, "escalate", refused)
+    item_id = _ready(trace)
+    result = _hotfix(agents, repo, trace, tmp_path, item_id, runner=_runner(fixes={}))
+    doc = _stopped(result, trace, item_id, "changed nothing", status="blocked")
+    assert doc["escalation"] is None
+    assert doc["board_error"]["message"] == "no room for a record"
+
+
+def test_a_crash_blocks_the_item_and_is_raised(
+    agents: HotfixAgents,
+    repo: GithubRepo,
+    trace: Trace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def crash(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(hotfix, "fix_and_review", crash)
+    item_id = _ready(trace)
+    with pytest.raises(RuntimeError, match="boom"):
+        _hotfix(agents, repo, trace, tmp_path, item_id)
+    assert WorkItems(trace).get(item_id).status == "blocked"
+    assert list_escalations(trace) == []
 
 
 def test_a_dry_run_that_stops_leaves_the_item_ready(
@@ -597,7 +676,8 @@ def test_factory_hotfix_exits_1_when_the_panel_asks_for_changes(
     assert main(_argv(item_id, repo, tmp_path)) == ExitCode.ERROR
     out = capsys.readouterr().out
     assert "stopped: the panel asked for changes, and a hotfix gets one round" in out
-    assert f"work item {item_id}: ready -> blocked" in out
+    assert f"work item {item_id}: ready -> escalated" in out
+    assert "escalation esc-1: factory escalations show to answer it" in out
 
 
 def test_factory_hotfix_exits_2_for_a_featurehotfix_ticket(

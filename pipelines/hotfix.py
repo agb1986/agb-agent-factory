@@ -27,8 +27,12 @@ deploys, and the factory has no deploy tool and makes no merge call (ADR 0004). 
    `factory/<pipeline_run_id>` and opens the pull request with the `hotfix` label, for the judge
    manifest and with the judge's row as the parent. The item moves to `in_review`.
 
-Every other end, a stop or a crash, goes through `_stop_item`, which moves the item to `blocked`
-with `<ErrorClass>: <message>; report <path>`. A dry run runs every step, reads included (the
+Every other end, a stop or a crash, goes through `_stop_item`. A stop a person can answer
+(`ESCALATE_ON`: the panel asking for changes, the budget, the fixer changing nothing, a refused
+write to a protected or test file, a red suite, a test that no longer reproduces) writes an
+escalation record and moves the item to `escalated` (`runtime.escalations.escalate`, ADR 0002);
+any other stop, a crash, and a stop whose record cannot be written move it to `blocked`. The
+reason is `<ErrorClass>: <message>; report <path>` either way. A dry run runs every step, reads included (the
 label check too), but makes no outside write and moves no item. The report,
 `<pipeline run id>.json`, is written last, however the run ended after preflight, and records the
 time from the event to the pull request.
@@ -55,20 +59,34 @@ from factory.exit import AuthOrConfigError, ExitCode, FactoryError, UsageError
 from pipelines.build_loop import (
     GH_TOKEN_ENV,
     BuildError,
+    _capture_diff,
     _fetch_into,
     _judge_run_id,
+    _last_suite_tail,
     _pick_repo,
     _stop_json,
     _suite_json,
+    escalation_question,
+    stop_trigger,
 )
-from pipelines.fix_loop import FIXER, FixStage, _fixer_files, _resolve_worker, fix_and_review
+from pipelines.fix_loop import (
+    FIXER,
+    FixError,
+    FixStage,
+    SuiteFailedError,
+    TestFileWriteError,
+    _fixer_files,
+    _resolve_worker,
+    fix_and_review,
+)
 from pipelines.ids import new_pipeline_run_id
 from pipelines.incident import incident_sections, is_reproduced
 from pipelines.review_panel import JevRunner, Panel, Runner, resolve_panel
 from pipelines.sandbox import DockerSandbox, Sandbox, checkout, clean, commit_all
 from registry.common_schemas import Finding, Ticket
 from registry.spec import LLMSpec
-from runtime.budget import DEFAULT_BUDGET_USD, Budget
+from runtime.budget import DEFAULT_BUDGET_USD, Budget, BudgetExceeded
+from runtime.escalations import AgentOutput, Trigger, escalate
 from runtime.jev_runner import run_jev
 from runtime.outside import OutsideContext, write
 from runtime.runner import API_KEY_ENV, run
@@ -100,6 +118,23 @@ class HotfixError(BuildError):
 
 class HotfixChangesRequestedError(HotfixError):
     """The review panel asked for changes, and a hotfix gets one round."""
+
+
+ESCALATE_ON: tuple[tuple[type[FactoryError], Trigger], ...] = (
+    (HotfixChangesRequestedError, "changes_requested"),
+    (BudgetExceeded, "budget"),
+    (TestFileWriteError, "check_failed"),
+    (SuiteFailedError, "check_failed"),
+    (FixError, "contradiction"),
+    (HotfixError, "contradiction"),
+)
+"""The hotfix stops a person can answer and the trigger of each; every other stop is `blocked`.
+
+Subclasses come before their parents, since the first match wins (`stop_trigger`). `FixError` is
+left once its subclasses are out of the way: the fixer changed nothing, so the code at the ticket's
+`ref` and the ticket disagree; `HotfixError` is left once the panel's stop is out of the way: the
+test no longer reproduces. docs/CONVENTIONS.md (Escalations) has the table with the reasons.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,36 +370,94 @@ def hotfix_pr_body(item: WorkItem, ticket: Ticket, fixer_output: BaseModel) -> s
     return "\n".join(lines).strip() + "\n"
 
 
+def hotfix_question(exc: FactoryError, trigger: Trigger) -> str:
+    """Return the question an escalation for a hotfix stop on `exc` asks a person.
+
+    `build_loop.escalation_question` words every trigger but `contradiction`, which here means the
+    fixer changed nothing or the test no longer reproduces, not a coder that made no change.
+    """
+    if trigger != "contradiction":
+        return escalation_question(exc, trigger, [])
+    return (
+        f"{exc.message}.\n\n"
+        "The incident ticket says the event reproduces and needs a fix, but the code at the "
+        "ticket's ref does not agree. Is the incident already fixed, does the ticket need "
+        "`factory incident` again, or what should the fixer change?"
+    )
+
+
 def _stop_item(
-    items: WorkItems,
+    trace: Trace,
     item_id: str,
+    exc: FactoryError | None,
     stopped: Mapping[str, Any] | None,
     report_path: Path,
     *,
     pipeline_run_id: str,
-) -> dict[str, Any] | None:
-    """Move the item to `blocked` for a run that did not open its pull request.
+    diff: str,
+    agent_outputs: list[AgentOutput],
+    suite_tail: str,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Move the item out of `in_progress` for a run that did not open its pull request.
 
-    The reason is `<ErrorClass>: <message>; report <path>`. Returns the stop of a board move that
-    failed, for the report, or None. Every stop goes through here, so when the escalation API of
-    #93 lands it replaces this one function.
+    A stop on an error `ESCALATE_ON` lists writes an escalation record, with `diff`,
+    `agent_outputs` and `suite_tail`, and moves the item to `escalated`; any other end, and a stop
+    whose record cannot be written, moves it to `blocked`. The reason is
+    `<ErrorClass>: <message>; report <path>`. Returns the escalation's id or None, and the stop of
+    a write that failed, for the report, or None. Every stop goes through here.
     """
     cause = (
         f"{stopped['type']}: {stopped['message']}"
         if stopped is not None
         else "the hotfix did not finish"
     )
+    reason = f"{cause}; report {report_path}"
+    board_error: dict[str, Any] | None = None
+    trigger = stop_trigger(exc, ESCALATE_ON) if exc is not None else None
+    if exc is not None and trigger is not None:
+        try:
+            record = escalate(
+                trace,
+                item_id,
+                trigger=trigger,
+                question=hotfix_question(exc, trigger),
+                reason=reason,
+                actor=ACTOR,
+                pipeline_run_id=pipeline_run_id,
+                diff=diff,
+                agent_outputs=agent_outputs,
+                suite_tail=suite_tail,
+            )
+        except FactoryError as error:
+            board_error = _stop_json(error)
+        else:
+            return record.id, None
     try:
-        items.move(
-            item_id,
-            "blocked",
-            f"{cause}; report {report_path}",
-            actor=ACTOR,
-            pipeline_run_id=pipeline_run_id,
+        WorkItems(trace).move(
+            item_id, "blocked", reason, actor=ACTOR, pipeline_run_id=pipeline_run_id
         )
-    except FactoryError as exc:
-        return _stop_json(exc)
-    return None
+    except FactoryError as error:
+        board_error = board_error or _stop_json(error)
+    return None, board_error
+
+
+def _stop_outputs(agents: HotfixAgents, fix: Mapping[str, Any] | None) -> list[AgentOutput]:
+    """Return the fixer's answer and the panel's result, when the fix stage got that far."""
+    if fix is None:
+        return []
+    return [
+        AgentOutput.of(agents.fixer.address, fix["fixer"]["run_id"], fix["fixer"]["output"]),
+        AgentOutput.of("review panel", None, fix["panel"]),
+    ]
+
+
+def _stop_suite_tail(
+    exc: FactoryError | None, reproduction: Mapping[str, Any], fix: Mapping[str, Any] | None
+) -> str:
+    """Return the tail of the last suite run: the red suite's, the fix's, or the reproduction's."""
+    if isinstance(exc, SuiteFailedError):
+        return exc.hint or ""
+    return _last_suite_tail([{"suite": reproduction["run"]}, fix or {}])
 
 
 @dataclass(frozen=True, slots=True)
@@ -406,6 +499,8 @@ class HotfixResult:
         if seconds is not None:
             lines.append(f"time from event to pull request {seconds / 60:.1f} min")
         lines.append(f"work item {item['id']}: {item['status_before']} -> {item['status_after']}")
+        if doc["escalation"] is not None:
+            lines.append(f"  escalation {doc['escalation']}: factory escalations show to answer it")
         if doc["board_error"] is not None:
             lines.append(f"  could not move the work item: {doc['board_error']['message']}")
         lines.append(f"report {doc['report_path']}")
@@ -437,8 +532,9 @@ def run_hotfix(
     `repo_path` that is not the ticket's, or a bad `work_dir` or `out_dir`; the sandbox's
     `ToolUnavailableError` (exit 4) before any agent runs.
 
-    After that nothing is raised for a `FactoryError`: the run stops, `_stop_item` moves the item
-    to `blocked` (not in a dry run) and the result carries the stop and its exit code. A missing
+    After that nothing is raised for a `FactoryError`: the run stops, `_stop_item` escalates the
+    item or moves it to `blocked` (not in a dry run; `ESCALATE_ON` says which) and the result
+    carries the stop, its exit code and the escalation's id. A missing
     `hotfix` label is such a stop: `github.create_pr` refuses with `OutsideWriteRefused` (exit 1),
     in a dry run too. Any other exception is recorded the same way and then raised. The report goes
     to `out_dir` on every end after preflight. Every agent call and the outside write share
@@ -492,6 +588,9 @@ def run_hotfix(
     pull: dict[str, Any] | None = None
     stopped: dict[str, Any] | None = None
     board_error: dict[str, Any] | None = None
+    escalation: str | None = None
+    stop_exc: FactoryError | None = None
+    diff = ""
     opened_at: datetime | None = None
     shipped = False
     try:
@@ -537,6 +636,9 @@ def run_hotfix(
                         context, parent_run_id=_judge_run_id(trace, stage.panel)
                     ),
                 )
+            except FactoryError:
+                diff = _capture_diff(clone, head_sha)
+                raise
             finally:
                 sandbox.cleanup(clone)
         pull = {
@@ -563,9 +665,20 @@ def run_hotfix(
         stopped = _stop_json(exc)
         if not isinstance(exc, FactoryError):
             raise
+        stop_exc = exc
     finally:
         if not dry_run and not shipped:
-            board_error = _stop_item(items, item.id, stopped, report_path, pipeline_run_id=run_id)
+            escalation, board_error = _stop_item(
+                trace,
+                item.id,
+                stop_exc,
+                stopped,
+                report_path,
+                pipeline_run_id=run_id,
+                diff=diff,
+                agent_outputs=_stop_outputs(agents, fix),
+                suite_tail=_stop_suite_tail(stop_exc, reproduction, fix),
+            )
         document = {
             "pipeline_run_id": run_id,
             "work_item": {
@@ -585,6 +698,7 @@ def run_hotfix(
             "stopped": stopped,
             "pull_request": pull,
             "board_error": board_error,
+            "escalation": escalation,
             "timing": _timing(plan, opened_at),
             "report_path": str(report_path),
             "total_cost_usd": trace.cost_by_pipeline_run(run_id),
