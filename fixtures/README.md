@@ -58,6 +58,8 @@ fixture**; add a new one instead.
 | `off-by-one-single-file` | Hand-built (`fixtures/handmade/`): `last_n` as a loop that starts one item late, one file, no tests | 1 (major, logic) |
 | `secret-in-config` | Adds a payments API token to the settings module and a charge helper that uses it | 1 (blocker, security) |
 | `sast-false-positive` | Names the auth header and the token env var as constants and adds jittered retry waits; a static analyser flags all three, wrongly | none |
+| `storefront` | Adds a line to the README on how to run the tests. A small shop package (money, catalog, cart, orders, API, CLI) whose modules import one another, for story-breakdown evals | none |
+| `tracker` | Adds a line to the README on how to run the tests. A small issue tracker package (models, storage, search, report, CLI), for story-breakdown evals | none |
 
 ## `defects.yaml`
 

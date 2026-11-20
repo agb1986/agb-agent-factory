@@ -185,13 +185,43 @@ def _strings(value: Any, path: str) -> Iterator[tuple[str, str]]:
             yield from _strings(item, f"{path}.{index}" if path else str(index))
 
 
+def _expand(value: Any, parts: list[str]) -> Iterator[Any]:
+    """Yield what `parts` reach inside `value`; `*` stands for every item of a list.
+
+    A part that is missing, or a `*` on something that is not a list, ends that branch with a
+    `_MISSING` marker so the caller can report it.
+    """
+    if not parts:
+        yield value
+        return
+    head, rest = parts[0], parts[1:]
+    if head == "*":
+        if not isinstance(value, (list, tuple)):
+            yield _MISSING
+            return
+        for item in value:
+            yield from _expand(item, rest)
+    elif isinstance(value, Mapping) and head in value:
+        yield from _expand(value[head], rest)
+    else:
+        yield _MISSING
+
+
+_MISSING = object()
+
+
 def _missing_paths(actual: Mapping[str, Any], field: str, root: Path) -> list[str]:
-    found, value = _lookup(actual, field)
-    if not found:
+    values = list(_expand(actual, field.split(".")))
+    if not values or any(value is _MISSING for value in values):
         return [f"path field {field} is missing"]
-    paths = [value] if isinstance(value, str) else value
-    if not isinstance(paths, list) or not all(isinstance(item, str) for item in paths):
-        return [f"path field {field} is not a path or a list of paths"]
+    paths: list[Any] = []
+    for value in values:
+        if isinstance(value, str):
+            paths.append(value)
+        elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+            paths.extend(value)
+        else:
+            return [f"path field {field} is not a path or a list of paths"]
     failures: list[str] = []
     for item in paths:
         if not item.strip():

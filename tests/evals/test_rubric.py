@@ -174,6 +174,32 @@ def test_paths_must_exist_inside_the_fixture_repository(tmp_path: Path) -> None:
     )
 
 
+def test_a_star_in_a_path_field_checks_every_item_of_a_list(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("a")
+    rubric = Rubric(criteria=RUBRIC.criteria, threshold=0.5, paths_exist=("tickets.*.paths",))
+    ok = {"tickets": [{"paths": ["a.py"]}, {"paths": []}]}
+    assert check_output(rubric, ok, tmp_path) == ()
+    bad = {"tickets": [{"paths": ["a.py"]}, {"paths": ["b.py"]}]}
+    assert check_output(rubric, bad, tmp_path) == (
+        "tickets.*.paths: 'b.py' does not exist in the fixture repository",
+    )
+
+
+@pytest.mark.parametrize(
+    "actual",
+    [
+        {"tickets": [{"paths": ["a.py"]}, {}]},
+        {"tickets": {"paths": ["a.py"]}},
+        {"tickets": []},
+    ],
+)
+def test_a_star_with_nothing_to_walk_is_a_missing_field(
+    tmp_path: Path, actual: dict[str, object]
+) -> None:
+    rubric = Rubric(criteria=RUBRIC.criteria, threshold=0.5, paths_exist=("tickets.*.paths",))
+    assert check_output(rubric, actual, tmp_path) == ("path field tickets.*.paths is missing",)
+
+
 def test_paths_exist_without_a_repository_is_a_usage_error() -> None:
     rubric = Rubric(criteria=RUBRIC.criteria, threshold=0.5, paths_exist=("files",))
     with pytest.raises(UsageError):

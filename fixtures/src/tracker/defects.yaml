@@ -1,0 +1,6 @@
+fixture: tracker
+summary: >-
+  A small issue tracker for story-breakdown cases. storage.py is imported by search, report and
+  cli; models by storage and search. The head commit only adds a README line, so the tree is the
+  same code at both refs.
+defects: []
