@@ -20,6 +20,7 @@ ADR_TEAMS: dict[str, str | None] = {
     "story-breakdown": "planning",
     "fixer": "dev",
     "feature-coder": "dev",
+    "refactorer": "dev",
     "code-reviewer": "qa",
     "security-reviewer": "qa",
     "perf-reviewer": "qa",

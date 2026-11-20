@@ -96,6 +96,8 @@ class ExpectedRun(_Strict):
     reason. `suite` runs every test in the repository. `production` and `tests` say whether the
     agent changed any file that is not, or is, a test file, compared with the fixture's HEAD.
     `coverage` is the line coverage the agent's changes must add (see `ExpectedCoverage`).
+    `public_api` lists Python files, relative to the repository, whose public names and signatures
+    must be the same in the work tree as at HEAD (see `evals.public_api`), for a refactor.
     """
 
     new_tests: Literal["fail", "pass"] | None = None
@@ -104,11 +106,21 @@ class ExpectedRun(_Strict):
     production: Literal["changed", "unchanged"] | None = None
     tests: Literal["changed", "unchanged"] | None = None
     coverage: ExpectedCoverage | None = None
+    public_api: Annotated[tuple[str, ...], Field(min_length=1)] | None = None
 
     @model_validator(mode="after")
     def _base_needs_new_tests(self) -> ExpectedRun:
         if self.passes_on_base and self.new_tests is None:
             raise ValueError("passes_on_base: needs new_tests to say which tests to run")
+        return self
+
+    @model_validator(mode="after")
+    def _public_api_paths(self) -> ExpectedRun:
+        if self.public_api is not None:
+            if len(set(self.public_api)) != len(self.public_api):
+                raise ValueError(f"public_api: duplicates in {list(self.public_api)}")
+            if bad := [path for path in self.public_api if not path.endswith(".py")]:
+                raise ValueError(f"public_api: not Python files: {', '.join(bad)}")
         return self
 
 

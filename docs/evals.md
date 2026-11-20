@@ -111,6 +111,17 @@ summary says what was built and where. The fourth is a ticket whose criteria con
 nothing may change, and the rubric checks that the answer is blocked and names the contradiction.
 The rubric model never sees the ticket, so each criterion restates what it needs from it.
 
+## A refactor case has no rubric
+
+The `refactorer` (#98) is graded on the work tree only. Its four cases each give it a refactor
+ticket on a fixture with a planted smell: an N-plus-one query (`n-plus-one`), duplicate code
+(`refactor-duplicate`), a deprecated call (`refactor-deprecated`) and magic numbers
+(`refactor-magic-numbers`). Each must leave a passing suite, changed production code and unchanged
+tests, and its `expected.run.public_api` lists the ticket's target files, so the case fails when a
+public name or signature in them differs from the fixture's HEAD (`evals/public_api.py`, which reads
+both with `ast`). These checks are deterministic and decide the case; the `criteria` the judge reads
+afterwards check only that the answer says what changed and what stayed the same.
+
 ## The `citations_resolve` check
 
 `rubric` scores how well a research agent reasons; it cannot tell whether the facts are true.

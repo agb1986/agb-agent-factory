@@ -286,9 +286,14 @@ def test_the_agents_resolve_to_the_guarded_feature_coder_and_the_full_panel(
     assert agents.panel.judge.address.startswith("judge@")
 
 
-@pytest.mark.parametrize("kind", ["feature", "bug", "refactor", "docs"])
-def test_every_code_kind_goes_to_the_feature_coder(kind: str) -> None:
+@pytest.mark.parametrize("kind", ["feature", "bug", "docs"])
+def test_every_code_kind_but_refactor_goes_to_the_feature_coder(kind: str) -> None:
     assert coder_for(kind) == FEATURE_CODER
+
+
+def test_a_refactor_ticket_goes_to_the_refactorer() -> None:
+    # The refactor path itself is tested in tests/pipelines/test_behaviour.py.
+    assert coder_for("refactor") == ("refactorer", "^0.1")
 
 
 @pytest.mark.parametrize(("kind", "hint"), [("incident", "factory hotfix"), ("research", "run")])

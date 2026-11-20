@@ -16,7 +16,10 @@ work item. The flow (docs/build-loop.md has the options and outputs):
    refusal writes a trace row tagged `FILE_WRITE_REFUSED_TAG` and ends the run with
    `FileWriteRefusedError`. A coder answer with `blocked` set ends it with `CoderBlockedError`.
 4. The coder's work is committed in the clone, the clone is cleaned and the whole suite runs in the
-   sandbox; a failure ends the run with `SuiteFailedError`.
+   sandbox; a failure ends the run with `SuiteFailedError`. A kind with a check in `KIND_CHECKS`
+   adds its own: for `refactor`, `pipelines.behaviour.BehaviourCheck` probes the suite before the
+   coder's first round and after each passing suite, and refuses a change to a test, to a test's
+   state or to coverage with its own `BehaviourError`.
 5. The review panel reviews the change from the ticket's `ref` to the coder's commit. When it asks
    for changes the coder runs once more, with the merged findings appended to the ticket, and steps
    3 to 5 repeat. A second request for changes ends the run with `ChangesRequestedError`.
@@ -41,7 +44,7 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -51,6 +54,7 @@ from pydantic import BaseModel
 
 from evals.graders.sandbox_tests import PYTEST
 from factory.exit import AuthOrConfigError, ExitCode, FactoryError, UsageError
+from pipelines.behaviour import BehaviourCheck, KindCheck
 from pipelines.file_policy import GUARDED_TOOL, FilePolicy, FilePolicyGuard, check_changed
 from pipelines.ids import new_pipeline_run_id
 from pipelines.review_panel import JevRunner, Panel, PanelResult, Runner, resolve_panel, run_panel
@@ -82,10 +86,13 @@ FEATURE_CODER: tuple[str, str] = ("feature-coder", "^0.1")
 CODERS: Mapping[str, tuple[str, str]] = {
     "feature": FEATURE_CODER,
     "bug": FEATURE_CODER,
-    "refactor": FEATURE_CODER,  # until the refactor coder (#98) exists
+    "refactor": ("refactorer", "^0.1"),
     "docs": FEATURE_CODER,  # until the docs writer (#97) exists
 }
 """The coder for each ticket kind the build loop takes (docs/CONVENTIONS.md, Work items)."""
+
+KIND_CHECKS: Mapping[str, Callable[[], KindCheck]] = {"refactor": BehaviourCheck}
+"""The extra checks a ticket kind's rounds go through, made once per run (`pipelines.behaviour`)."""
 
 OTHER_KINDS: Mapping[str, str] = {
     "incident": "an incident goes to `factory hotfix` (#109), not the build loop",
@@ -248,6 +255,11 @@ class BuildResult:
             if r["suite"] is not None:
                 state = "passed" if r["suite"]["passed"] else "failed"
                 parts.append(f"suite {state} in {r['suite']['seconds']:.1f}s")
+            if r.get("behaviour") is not None:
+                moved = len(r["behaviour"]["tests_changed"])
+                parts.append(
+                    f"behaviour: {moved} tests changed state" if moved else "behaviour held"
+                )
             if r["panel"] is not None:
                 parts.append("panel ships" if r["panel"]["ship"] else "panel asks for changes")
             lines.append("  " + "; ".join(parts))
@@ -568,6 +580,7 @@ def _build(
     """
     coder = agents.coder
     policy = FilePolicy(_coder_files(coder))
+    check = KIND_CHECKS[item.kind]() if item.kind in KIND_CHECKS else None
 
     def refuse(agent: str, path: str, reason: str, check: str) -> FileWriteRefusedError:
         return _refuse(trace, run_id, agent, path, reason, check)
@@ -577,6 +590,8 @@ def _build(
             asked = ticket
             parent: str | None = None
             previous = head_sha
+            if check is not None:
+                check.before(clone, sandbox, head_sha)
             for number in range(1, MAX_ROUNDS + 1):
                 entry: dict[str, Any] = {
                     "number": number,
@@ -625,6 +640,8 @@ def _build(
                         hint="check the ticket still asks for a change at its ref",
                     )
                 previous = sha
+                if check is not None:
+                    check.after_commit(changed)
 
                 clean(clone)
                 suite = sandbox.run(clone, PYTEST)
@@ -634,6 +651,8 @@ def _build(
                         f"the test suite failed in the sandbox with exit code {suite.exit_code}",
                         hint=_tail(suite.output)[-400:].strip() or None,
                     )
+                if check is not None:
+                    check.after_suite(clone, sandbox, entry)
 
                 panel = run_panel(
                     agents.panel,
