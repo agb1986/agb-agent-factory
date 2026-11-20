@@ -15,12 +15,18 @@ already has; a caller must never pass a token, a key or an environment dump.
 from `escalated` to `ready` in the same transaction. The next run sees the answers through
 `ticket_for_run`, which renders them into the ticket body, so no agent's input schema changes.
 `render_markdown` and `answer` are plain functions so the summary agent (#94) and the issue
-notifier (#95) can reuse them. The rules are in `docs/CONVENTIONS.md` (Escalations).
+notifier (#95) can reuse them.
+
+A record may carry one summary (#94): a row of `escalation_summaries` (migration 7) holding the
+escalation-summary agent's output and the run that wrote it. `store_summary` writes it once,
+`get_summary` reads it, and `render_markdown` prints it above the record. The summary is written
+by `runtime.after_escalation`, never by `escalate`, so a record never waits on a model. The rules
+are in `docs/CONVENTIONS.md` (Escalations).
 """
 
 import json
 import re
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, get_args
@@ -136,6 +142,32 @@ class Escalation:
             "answer": self.answer,
             "answer_source": self.answer_source,
             "answered_at": _iso(self.answered_at) if self.answered_at else None,
+        }
+
+
+@dataclass(frozen=True)
+class Summary:
+    """One row of `escalation_summaries`: the summary of one record and the run that wrote it.
+
+    `summary` is the escalation-summary agent's output as a JSON object: `paragraph` and
+    `options`, each option with `label`, `takes`, `cost` and `evidence`.
+    """
+
+    escalation_id: str
+    run_id: str
+    agent_ref: str
+    summary: Mapping[str, Any]
+    created_at: datetime
+
+    def to_json(self) -> dict[str, Any]:
+        """Return the row as the object `factory escalations show --json` prints as `summary`."""
+        return {
+            "escalation_id": self.escalation_id,
+            "run_id": self.run_id,
+            "agent_ref": self.agent_ref,
+            "paragraph": self.summary.get("paragraph", ""),
+            "options": list(self.summary.get("options", [])),
+            "created_at": _iso(self.created_at),
         }
 
 
@@ -308,6 +340,64 @@ def answer(
         return _get(con, record.id)
 
 
+def store_summary(
+    trace: Trace,
+    escalation_id: str,
+    summary: Mapping[str, Any],
+    *,
+    run_id: str,
+    agent_ref: str,
+    now: Callable[[], datetime] | None = None,
+) -> Summary:
+    """Store the summary of one record and return it. A record has at most one summary.
+
+    `summary` is the agent's output as a JSON object; `run_id` and `agent_ref` name the run that
+    wrote it, so the summary can be traced to its cost. The caller checks the summary first
+    (`runtime.escalation_summary.ungrounded`); this function stores what it is given. Raises
+    `EscalationNotFound` for an unknown id and `InvalidEscalation`, storing nothing, when the
+    record already has a summary or `run_id` or `agent_ref` is empty.
+    """
+    if not run_id.strip() or not agent_ref.strip():
+        raise InvalidEscalation("a summary needs the run and the agent that wrote it")
+    stamp = _stamp(now)
+    with trace.connection() as con:
+        _get(con, escalation_id)
+        if _summary_row(con, escalation_id) is not None:
+            raise InvalidEscalation(
+                f"{escalation_id} already has a summary",
+                hint=f"factory escalations show {escalation_id} shows it",
+            )
+        con.execute(
+            "INSERT INTO escalation_summaries VALUES (?, ?, ?, ?, ?)",
+            [escalation_id, run_id, agent_ref, json.dumps(dict(summary)), stamp],
+        )
+        row = _summary_row(con, escalation_id)
+    assert row is not None
+    return row
+
+
+def get_summary(trace: Trace, escalation_id: str) -> Summary | None:
+    """Return the summary of one record, or None when it has none.
+
+    Raises `EscalationNotFound` for an unknown or malformed id.
+    """
+    with trace.connection() as con:
+        _get(con, escalation_id)
+        return _summary_row(con, escalation_id)
+
+
+def _summary_row(con: duckdb.DuckDBPyConnection, escalation_id: str) -> Summary | None:
+    row = con.execute(
+        "SELECT escalation_id, run_id, agent_ref, summary, timezone('UTC', created_at)"
+        " FROM escalation_summaries WHERE escalation_id = ?",
+        [escalation_id],
+    ).fetchone()
+    if row is None:
+        return None
+    esc_id, run_id, agent_ref, summary, created_at = row
+    return Summary(esc_id, run_id, agent_ref, json.loads(summary), created_at.replace(tzinfo=UTC))
+
+
 def with_answers(ticket: Ticket, records: Iterable[Escalation]) -> Ticket:
     """Return `ticket` with the answered records' questions and answers appended to its body.
 
@@ -342,10 +432,12 @@ def ticket_for_run(trace: Trace, item: WorkItem) -> Ticket:
     return with_answers(item.ticket(), list_escalations(trace, work_item_id=item.id))
 
 
-def render_markdown(record: Escalation) -> str:
+def render_markdown(record: Escalation, summary: Summary | None = None) -> str:
     """Return the record as Markdown, the diff, agent outputs and suite tail in `<details>`.
 
-    This is what `factory escalations show` prints, and what a summary or an issue may quote.
+    With a `summary`, a `## Summary` section comes right after the title: the paragraph, the
+    options numbered with what each takes and the evidence it quotes, and the run that wrote it.
+    This is what `factory escalations show` prints, and what an issue may quote.
     """
     runs = ", ".join(f"`{run}`" for run in record.pipeline_run_ids) or "none"
     raised = f"{_iso(record.created_at)} by `{record.actor}`"
@@ -354,6 +446,7 @@ def render_markdown(record: Escalation) -> str:
     lines = [
         f"# {record.id}: {record.work_item_id} escalated ({record.trigger})",
         "",
+        *(_summary_lines(summary) if summary is not None else []),
         "## Question",
         "",
         record.question,
@@ -386,6 +479,27 @@ def render_markdown(record: Escalation) -> str:
     if record.suite_tail:
         lines += _details("Suite output, last lines", record.suite_tail, "")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _summary_lines(summary: Summary) -> list[str]:
+    lines = ["## Summary", "", str(summary.summary.get("paragraph", "")).strip(), ""]
+    for number, option in enumerate(summary.summary.get("options", []), start=1):
+        head = f"{number}. **{option.get('label', '')}** ({option.get('takes', '')})"
+        lines += [
+            f"{head}: {option.get('cost', '')}",
+            "",
+            f"   Evidence: {_quote_inline(str(option.get('evidence', '')))}",
+            "",
+        ]
+    lines += [f"Written by `{summary.agent_ref}` in run `{summary.run_id}`.", ""]
+    return lines
+
+
+def _quote_inline(text: str) -> str:
+    fence = "`" * (_longest_backtick_run(text) + 1)
+    body = " ".join(text.split())
+    pad = " " if body.startswith("`") or body.endswith("`") else ""
+    return f"{fence}{pad}{body}{pad}{fence}"
 
 
 def cut_head(text: str, limit: int) -> str:

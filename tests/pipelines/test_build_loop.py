@@ -6,6 +6,7 @@ first; the reviewers and the judge are fakes too, the sandbox is `FakeSandbox` a
 of `tests/gh_fake.py`, whose pushes land in a bare repository under `tmp_path`.
 """
 
+import dataclasses
 import json
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -43,8 +44,15 @@ from pipelines.review_panel import JUDGE
 from pipelines.sandbox import DirtyRepositoryError
 from registry.common_schemas import Ticket
 from registry.spec import LLMSpec
+from runtime.after_escalation import SUMMARY_AGENT
 from runtime.budget import Budget, BudgetExceeded
-from runtime.escalations import Escalation, InvalidEscalation, answer, list_escalations
+from runtime.escalations import (
+    Escalation,
+    InvalidEscalation,
+    answer,
+    get_summary,
+    list_escalations,
+)
 from runtime.hooks import ToolCall
 from runtime.jev_runner import JevError
 from runtime.trace import Trace, TraceRow
@@ -91,7 +99,9 @@ class BuildRunner:
     The coder asks its hook about each file of `rounds[n]` (path to content; default `CODE`, then
     one more line in round 2) and writes it when allowed, then writes `unhooked` without asking,
     as a script run through `shell.run` would. With `blocked` it writes nothing and answers
-    blocked. The judge answers `judgements` in turn, the last one again once they run out. Every
+    blocked. The judge answers `judgements` in turn, the last one again once they run out. The
+    escalation-summary agent answers `summary` (a grounded one by default) or raises it when it is
+    an exception. Every
     call traces a row with its own `run_id` and charges `0.25` to the budget, as the real runner
     does after a run.
     """
@@ -103,7 +113,9 @@ class BuildRunner:
         rounds: Sequence[Mapping[str, str]] | None = None,
         unhooked: Mapping[str, str] | None = None,
         blocked: str | None = None,
+        summary: Mapping[str, Any] | Exception | None = None,
     ) -> None:
+        self.summary = summary
         self.judgements = [dict(j) for j in judgements] or [_judgement(SHIPPING)]
         self.rounds = (
             [CODE, {"widgets.py": CODE["widgets.py"] + "\n\nLIMIT = 10\n"}]
@@ -126,6 +138,10 @@ class BuildRunner:
         elif spec.name == JUDGE[0]:
             output = self.judgements[min(self.judged, len(self.judgements) - 1)]
             self.judged += 1
+        elif spec.name == SUMMARY_AGENT[0]:
+            if isinstance(self.summary, Exception):
+                raise self.summary
+            output = _grounded_summary(data) if self.summary is None else dict(self.summary)
         else:
             findings = (
                 [_finding("widgets.py", 1, 2, "major")] if spec.name == "code-reviewer" else []
@@ -190,6 +206,28 @@ class BuildRunner:
 
     def coder_calls(self) -> list[dict[str, Any]]:
         return [call for call in self.calls if call["spec"].name == FEATURE_CODER[0]]
+
+
+def _grounded_summary(record: Mapping[str, Any]) -> dict[str, Any]:
+    """A summary whose options quote the record's question, so it passes `ungrounded`."""
+    evidence = " ".join(record["question"].split())[:80]
+    return {
+        "paragraph": f"{record['work_item_id']} stopped and needs a decision.",
+        "options": [
+            {
+                "label": "Answer and run again",
+                "takes": "another_run",
+                "cost": "Another coder and panel run.",
+                "evidence": evidence,
+            },
+            {
+                "label": "Drop the work",
+                "takes": "drop_work",
+                "cost": "The work so far is thrown away.",
+                "evidence": evidence,
+            },
+        ],
+    }
 
 
 def _write(clone: Path, path: str, content: str) -> None:
@@ -508,6 +546,15 @@ def _stopped(
     return doc
 
 
+def _summary_cost(trace: Trace) -> float:
+    """What the escalation-summary runs of the pipeline run cost, from the trace."""
+    (cost,) = trace._connect().execute(
+        "SELECT coalesce(sum(cost_usd), 0) FROM traces WHERE agent_ref LIKE ?",
+        [f"{SUMMARY_AGENT[0]}@%"],
+    ).fetchone() or (0.0,)
+    return float(cost)
+
+
 def _escalation(trace: Trace, doc: Mapping[str, Any], trigger: str) -> Escalation:
     """The one record the stop wrote, checked against the report and the board."""
     (record,) = list_escalations(trace)
@@ -516,7 +563,9 @@ def _escalation(trace: Trace, doc: Mapping[str, Any], trigger: str) -> Escalatio
     assert record.from_status == "in_progress"
     assert record.actor == ACTOR and record.pipeline_run_id == RUN_ID
     assert record.pipeline_run_ids == (RUN_ID,)
-    assert record.cost_usd == pytest.approx(WorkItems(trace).cost_usd(record.work_item_id))
+    # The record's cost is a snapshot at the stop, before the summary's run is charged.
+    spent = WorkItems(trace).cost_usd(record.work_item_id) - _summary_cost(trace)
+    assert record.cost_usd == pytest.approx(spent)
     report = json.loads(Path(doc["report_path"]).read_text(encoding="utf-8"))
     assert report["escalation"] == record.id and report["board_error"] is None
     return record
@@ -586,7 +635,8 @@ def test_a_failing_suite_escalates_the_item_before_the_panel(
     doc = _stopped(result, trace, item_id, "the test suite failed in the sandbox with exit code 1")
     assert doc["rounds"][0]["suite"]["output_tail"] == FAILED.decode()
     assert doc["rounds"][0]["panel"] is None
-    assert [call["spec"].name for call in runner.calls] == [FEATURE_CODER[0]]
+    # No reviewer ran; the summary of the escalation is the only call after the coder.
+    assert [call["spec"].name for call in runner.calls] == [FEATURE_CODER[0], SUMMARY_AGENT[0]]
 
     record = _escalation(trace, doc, "check_failed")
     assert record.suite_tail == FAILED.decode()
@@ -623,6 +673,102 @@ def test_a_run_past_its_budget_escalates_the_item(
     assert "bigger budget" in record.question
     # The cost is a snapshot: a later charge to the item does not change the record.
     assert record.cost_usd == pytest.approx(0.25)
+
+
+# --- after the escalation: the summary step never changes how the run ends
+
+
+def test_an_escalation_gets_a_grounded_summary_under_the_runs_budget(
+    agents: BuildAgents, repo: GithubRepo, trace: Trace, tmp_path: Path
+) -> None:
+    assert agents.summary is not None and agents.summary.address == "escalation-summary@0.1.0"
+    item_id = _ready(trace)
+    runner = BuildRunner(blocked="The ticket names no module.")
+    result = _build(agents, repo, trace, tmp_path, item_id, runner=runner)
+    doc = _stopped(result, trace, item_id, f"the coder is blocked on {item_id}")
+    record = _escalation(trace, doc, "blocked_output")
+
+    (call,) = [c for c in runner.calls if c["spec"].name == SUMMARY_AGENT[0]]
+    assert call["payload"]["id"] == record.id and call["pipeline_run_id"] == RUN_ID
+    step = doc["after_escalation"]["summary"]
+    assert step == {"done": True, "run_id": call["run_id"], "reason": None}
+    stored = get_summary(trace, record.id)
+    assert stored is not None and stored.run_id == call["run_id"]
+    assert stored.agent_ref == "escalation-summary@0.1.0"
+    assert stored.summary["options"][0]["label"] == "Answer and run again"
+    report = json.loads(Path(doc["report_path"]).read_text(encoding="utf-8"))
+    assert report["after_escalation"] == doc["after_escalation"]
+    # The summary's run is in the trace and counts in the item's cost.
+    assert WorkItems(trace).cost_usd(item_id) == pytest.approx(0.5)
+
+
+def test_a_budget_stop_gets_no_summary(
+    agents: BuildAgents, repo: GithubRepo, trace: Trace, tmp_path: Path
+) -> None:
+    item_id = _ready(trace)
+    runner = BuildRunner()
+    result = _build(agents, repo, trace, tmp_path, item_id, runner=runner, budget=Budget(0.1))
+    doc = _stopped(result, trace, item_id, "budget")
+    record = _escalation(trace, doc, "budget")
+    assert doc["after_escalation"]["summary"]["done"] is False
+    assert "budget" in doc["after_escalation"]["summary"]["reason"]
+    assert [c for c in runner.calls if c["spec"].name == SUMMARY_AGENT[0]] == []
+    assert get_summary(trace, record.id) is None
+
+
+UNGROUNDED = {
+    "paragraph": "It stopped.",
+    "options": [
+        {
+            "label": "Merge it",
+            "takes": "by_hand",
+            "cost": "A person merges it.",
+            "evidence": "this sentence is not in the record",
+        }
+    ],
+}
+
+
+@pytest.mark.parametrize(
+    ("summary", "reason"),
+    [
+        (UNGROUNDED, "the summary failed its check: options[0]"),
+        (RuntimeError("the model is down"), "RuntimeError: the model is down"),
+    ],
+)
+def test_a_summary_that_fails_leaves_the_escalation_as_it_was(
+    agents: BuildAgents,
+    repo: GithubRepo,
+    trace: Trace,
+    tmp_path: Path,
+    summary: Mapping[str, Any] | Exception,
+    reason: str,
+) -> None:
+    item_id = _ready(trace)
+    runner = BuildRunner(blocked="The ticket names no module.", summary=summary)
+    result = _build(agents, repo, trace, tmp_path, item_id, runner=runner)
+    # The same end as without a summary: escalated, exit code ERROR, the record in the report.
+    doc = _stopped(result, trace, item_id, f"the coder is blocked on {item_id}")
+    record = _escalation(trace, doc, "blocked_output")
+    step = doc["after_escalation"]["summary"]
+    assert step["done"] is False and step["run_id"] is not None
+    assert step["reason"].startswith(reason)
+    assert get_summary(trace, record.id) is None
+
+
+def test_no_summary_agent_still_escalates(
+    agents: BuildAgents, repo: GithubRepo, trace: Trace, tmp_path: Path
+) -> None:
+    item_id = _ready(trace)
+    bare = dataclasses.replace(agents, summary=None)
+    runner = BuildRunner(blocked="The ticket names no module.")
+    doc = _stopped(_build(bare, repo, trace, tmp_path, item_id, runner=runner), trace, item_id, "")
+    _escalation(trace, doc, "blocked_output")
+    assert doc["after_escalation"]["summary"] == {
+        "done": False,
+        "run_id": None,
+        "reason": "no published escalation-summary agent resolved",
+    }
 
 
 @pytest.mark.parametrize("path", ["pyproject.toml", ".github/workflows/ci.yml", "pytest.py"])

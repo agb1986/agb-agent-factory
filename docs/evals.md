@@ -36,6 +36,12 @@ The research agent `spike` runs throwaway code in the networked spike sandbox to
 real shape; its cases are graded by rubric on the observations it reports, each with the command
 and the output, and by `citations_resolve` on the facts it read (#106).
 
+The one agent outside those teams that may use the rubric is `escalation-summary` (#94, team
+`hitl`). It writes a paragraph and a few options for a person to choose from an escalation record,
+prose that has no single right answer. Its ground truth is not the prose but the record itself:
+each case sets `expected.options_in_record`, and the case fails, without a model call, when an
+option's evidence is not a span of the record or a dollar figure was invented (see below).
+
 A rubric case has `expected.verdict: null` and an `expected.rubric` block:
 
 ```yaml
@@ -190,6 +196,24 @@ still allow `web.fetch` or `web.search` with a non-empty list, and for an agent 
 lists no domain the case list is ignored. Entries are bare lowercase hosts, as in the manifest,
 and a case with any other entry fails to load. `factory run --allow-domain` is the same override
 for one run outside the eval.
+
+## The `options_in_record` check
+
+`expected.options_in_record: true` turns on a deterministic step of a `rubric` case, for
+`escalation-summary` (#94). It runs after the rubric's own checks and before the grader model, and
+calls `runtime.escalation_summary.ungrounded(answer, payload)`, where the payload is the cut-down
+escalation record the agent was given. The case fails when the answer names no option, when an
+option's `evidence` is shorter than 12 characters or is not a substring of one single text of the
+record (the question, the diff, the suite tail, one agent output or one string value of an output
+that is JSON; runs of whitespace count as one space, nothing else is normalised), or when a dollar
+figure in the summary is neither written in those texts nor within $0.005 of the record's
+`cost_usd`.
+
+The same function runs before a summary is stored (`runtime.after_escalation`), and a summary that
+fails it is not stored, so the eval measures exactly the rule the pipeline enforces. Only a
+`rubric` case may set the flag; `evals/cases.py` refuses it on any other grader. The four cases are
+hand-written records, one per trigger (`blocked_output`, `budget`, `changes_requested`,
+`check_failed`); docs/CONVENTIONS.md (Escalations, Summaries) has the rest of the rules.
 
 ## The `incident` grader
 

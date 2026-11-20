@@ -9,7 +9,13 @@ import pytest
 from factory.cli import main
 from factory.exit import ExitCode
 from registry.common_schemas import Ticket
-from runtime.escalations import ANSWERS_HEADING, AgentOutput, escalate, ticket_for_run
+from runtime.escalations import (
+    ANSWERS_HEADING,
+    AgentOutput,
+    escalate,
+    store_summary,
+    ticket_for_run,
+)
 from runtime.trace import Trace
 from runtime.work_items import WorkItems
 
@@ -78,7 +84,7 @@ def test_list_show_and_answer_as_json(store: Path, capsys: pytest.CaptureFixture
     listed = run_json(["escalations", "list"], capsys)["escalations"]
     assert [(r["id"], r["open"], r["work_item_id"]) for r in listed] == [("esc-1", True, item_id)]
     shown = run_json(["escalations", "show", "esc-1"], capsys)
-    assert shown == listed[0] and shown["from_status"] == "in_progress"
+    assert shown == {**listed[0], "summary": None} and shown["from_status"] == "in_progress"
     answered = run_json(["escalations", "answer", "esc-1", "--text", "In parser.py."], capsys)
     assert answered["work_item"] == {"id": item_id, "status": "ready"}
     record = answered["escalation"]
@@ -97,6 +103,62 @@ def test_show_prints_markdown_with_details(store: Path, capsys: pytest.CaptureFi
     assert text.startswith(f"# esc-1: {item_id} escalated (blocked_output)\n")
     assert "Which module owns the parser?" in text
     assert text.count("<details>") == 3 and "```diff" in text
+
+
+SUMMARY: dict[str, Any] = {
+    "paragraph": "The coder stopped because the ticket does not say which module owns the parser.",
+    "options": [
+        {
+            "label": "Name the module and run again",
+            "takes": "another_run",
+            "cost": "Another coder and panel run.",
+            "evidence": "Which module owns the parser?",
+        }
+    ],
+}
+
+
+def add_summary(path: Path) -> None:
+    with Trace(path) as trace:
+        store_summary(
+            trace, "esc-1", SUMMARY, run_id="run-s1", agent_ref="escalation-summary@0.1.0"
+        )
+
+
+def test_show_prints_the_summary_above_the_record(
+    store: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    item_id = seed(store)
+    add_summary(store)
+    text = run_text(["escalations", "show", "esc-1"], capsys)
+    assert text.startswith(f"# esc-1: {item_id} escalated (blocked_output)\n")
+    summary_at = text.index("## Summary")
+    assert summary_at < text.index("Which module owns the parser?\n")
+    assert SUMMARY["paragraph"] in text
+    assert (
+        "1. **Name the module and run again** (another_run): Another coder and panel run." in text
+    )
+    assert "Written by `escalation-summary@0.1.0` in run `run-s1`." in text
+    assert text.count("<details>") == 3
+
+
+def test_show_json_carries_the_summary(store: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    seed(store)
+    add_summary(store)
+    summary = run_json(["escalations", "show", "esc-1"], capsys)["summary"]
+    assert summary["escalation_id"] == "esc-1"
+    assert (summary["run_id"], summary["agent_ref"]) == ("run-s1", "escalation-summary@0.1.0")
+    assert summary["paragraph"] == SUMMARY["paragraph"]
+    assert summary["options"] == SUMMARY["options"]
+    listed = run_json(["escalations", "list"], capsys)["escalations"]
+    assert "summary" not in listed[0]
+
+
+def test_show_without_a_summary_prints_the_record_alone(
+    store: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seed(store)
+    assert "## Summary" not in run_text(["escalations", "show", "esc-1"], capsys)
 
 
 def test_list_and_answer_text(store: Path, capsys: pytest.CaptureFixture[str]) -> None:

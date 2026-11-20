@@ -36,13 +36,24 @@ def list_records(*, open_only: bool = False, as_json: bool = False) -> int:
 def show(escalation_id: str, *, as_json: bool = False) -> int:
     """Print one record as Markdown, or as one JSON document. Returns 0.
 
-    The Markdown is `escalations.render_markdown`: the question and a summary table, then the
-    diff, the agent outputs and the suite tail in `<details>` sections. Raises
-    `EscalationNotFound` for an unknown id.
+    The Markdown is `escalations.render_markdown`: the summary first when the record has one (the
+    paragraph and the options with their evidence), then the question and a summary table, then
+    the diff, the agent outputs and the suite tail in `<details>` sections. A record without a
+    summary, because the agent failed, its output failed the check or the run's budget was spent,
+    prints the record alone. The JSON is the record as `list --json` prints it, plus `summary`:
+    the stored summary or null. Raises `EscalationNotFound` for an unknown id.
     """
     with Trace() as trace:
         record = escalations.get(trace, escalation_id)
-    print(json.dumps(record.to_json()) if as_json else escalations.render_markdown(record))
+        summary = escalations.get_summary(trace, escalation_id)
+    if as_json:
+        print(
+            json.dumps(
+                {**record.to_json(), "summary": summary.to_json() if summary is not None else None}
+            )
+        )
+    else:
+        print(escalations.render_markdown(record, summary))
     return 0
 
 

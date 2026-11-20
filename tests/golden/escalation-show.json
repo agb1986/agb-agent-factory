@@ -28,5 +28,6 @@
   "open": true,
   "answer": null,
   "answer_source": null,
-  "answered_at": null
+  "answered_at": null,
+  "summary": null
 }

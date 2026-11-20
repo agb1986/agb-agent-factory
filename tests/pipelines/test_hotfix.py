@@ -4,15 +4,18 @@ No Docker, no API key and no network. The ticket is the one `factory incident` f
 tests/golden/incident.json, pointed at a work tree whose pushes land in a bare repository under
 `tmp_path` (tests/gh_fake.py). The fixer, the reviewers and the judge are the fakes of
 tests/pipelines/test_fix_loop.py, and the sandbox answers the reproduction run and then the suite.
+The escalation-summary agent that runs after a stop is faked by `HotfixRunner`.
 """
 
+import dataclasses
 import json
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
 from factory.cli import main
 from factory.exit import ExitCode, UsageError
@@ -29,11 +32,14 @@ from pipelines.hotfix import (
     run_hotfix,
 )
 from registry.common_schemas import Ticket
+from registry.spec import LLMSpec
+from runtime.after_escalation import SUMMARY_AGENT
 from runtime.budget import Budget, BudgetExceeded
-from runtime.escalations import Escalation, InvalidEscalation, list_escalations
-from runtime.trace import Trace
+from runtime.escalations import Escalation, InvalidEscalation, get_summary, list_escalations
+from runtime.trace import Trace, TraceRow
 from runtime.work_items import WorkItemNotFound, WorkItems
 from tests.gh_fake import FakeGh, GithubRepo, git, github_repo
+from tests.pipelines.test_build_loop import UNGROUNDED, _grounded_summary
 from tests.pipelines.test_fix_loop import PASSED, FakeSandbox, FixRunner
 from tests.pipelines.test_incident import ASSERTION, REPRODUCED, TEST_CODE, TEST_PATH
 from tests.pipelines.test_review_panel import BLOCKING, FakeJev, _judgement
@@ -96,9 +102,52 @@ class SequencedSandbox(FakeSandbox):
         return SandboxResult(tuple(argv), exit_code, output, 0.1)
 
 
-def _runner(judgement: dict[str, Any] | None = None, **kwargs: Any) -> FixRunner:
+class HotfixRunner(FixRunner):
+    """`FixRunner` that also answers the escalation-summary agent.
+
+    The summary is `summary` when given, raised when it is an exception, and otherwise one that
+    quotes the record's question. The call traces a row and charges `0.25`, as the others do.
+    """
+
+    def __init__(
+        self,
+        judgement: Mapping[str, Any] | None = None,
+        *,
+        summary: Mapping[str, Any] | Exception | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(judgement, **kwargs)
+        self.summary = summary
+
+    def __call__(
+        self, spec: LLMSpec, payload: Mapping[str, Any] | BaseModel, trace: Trace, **kwargs: Any
+    ) -> BaseModel:
+        if spec.name != SUMMARY_AGENT[0]:
+            return super().__call__(spec, payload, trace, **kwargs)
+        data = payload.model_dump(mode="json") if isinstance(payload, BaseModel) else dict(payload)
+        self.calls.append({"spec": spec, "payload": data, **kwargs})
+        trace.record(
+            TraceRow(
+                run_id=kwargs["run_id"],
+                pipeline_run_id=kwargs["pipeline_run_id"],
+                agent_ref=spec.address,
+                kind="llm",
+                started_at=datetime.now(UTC),
+                duration_ms=1,
+                input_json=data,
+                cost_usd=0.25,
+            )
+        )
+        kwargs["budget"].charge(0.25)
+        if isinstance(self.summary, Exception):
+            raise self.summary
+        output = _grounded_summary(data) if self.summary is None else dict(self.summary)
+        return spec.output_class.model_validate(output)
+
+
+def _runner(judgement: dict[str, Any] | None = None, **kwargs: Any) -> HotfixRunner:
     kwargs.setdefault("fixes", {SCORES: FIXED})
-    return FixRunner(judgement, tests={}, **kwargs)
+    return HotfixRunner(judgement, tests={}, **kwargs)
 
 
 @pytest.fixture(scope="module")
@@ -163,7 +212,7 @@ def _hotfix(
     tmp_path: Path,
     item_id: str,
     *,
-    runner: FixRunner | None = None,
+    runner: HotfixRunner | None = None,
     sandbox: FakeSandbox | None = None,
     **kwargs: Any,
 ) -> HotfixResult:
@@ -480,7 +529,8 @@ def test_a_test_that_no_longer_reproduces_stops_before_any_model_runs(
     assert doc["stopped"]["type"] == "HotfixError"
     assert doc["reproduction"]["reproduced"] is False
     assert doc["reproduction"]["commit"] is not None and doc["fix"] is None
-    assert runner.calls == [] and gh.writes() == []
+    # The only model run is the summary of the escalation, after the stop.
+    assert runner.names() == [SUMMARY_AGENT[0]] and gh.writes() == []
     assert "does not reproduce" in result.text()
     record = _escalation(trace, doc, "contradiction")
     assert "factory incident" in record.question
@@ -557,8 +607,99 @@ def test_a_stop_whose_record_cannot_be_written_blocks_the_item(
     item_id = _ready(trace)
     result = _hotfix(agents, repo, trace, tmp_path, item_id, runner=_runner(fixes={}))
     doc = _stopped(result, trace, item_id, "changed nothing", status="blocked")
-    assert doc["escalation"] is None
+    assert doc["escalation"] is None and doc["after_escalation"] is None
     assert doc["board_error"]["message"] == "no room for a record"
+
+
+# --- after the escalation: the summary step never changes how the hotfix ends
+
+
+def _summary_step(doc: dict[str, Any]) -> dict[str, Any]:
+    """Return the report's summary step, after checking the report file carries the same one."""
+    report = json.loads(Path(doc["report_path"]).read_text("utf-8"))
+    assert report["after_escalation"] == doc["after_escalation"]
+    return doc["after_escalation"]["summary"]
+
+
+def test_a_hotfix_escalation_gets_a_grounded_summary_under_the_runs_budget(
+    agents: HotfixAgents, repo: GithubRepo, trace: Trace, tmp_path: Path
+) -> None:
+    assert agents.summary is not None and agents.summary.address == "escalation-summary@0.1.0"
+    item_id = _ready(trace)
+    runner = _runner(fixes={})
+    result = _hotfix(agents, repo, trace, tmp_path, item_id, runner=runner)
+    doc = _stopped(result, trace, item_id, "changed nothing")
+    record = _escalation(trace, doc, "contradiction")
+
+    (call,) = [c for c in runner.calls if c["spec"].name == SUMMARY_AGENT[0]]
+    assert call["payload"]["id"] == record.id and call["pipeline_run_id"] == RUN_ID
+    assert _summary_step(doc) == {"done": True, "run_id": call["run_id"], "reason": None}
+    stored = get_summary(trace, record.id)
+    assert stored is not None and stored.run_id == call["run_id"]
+    assert stored.agent_ref == agents.summary.address
+    # The summary's run is in the pipeline run's cost: the fixer's 0.25 and its own 0.25.
+    assert doc["total_cost_usd"] == pytest.approx(0.5)
+
+
+def test_a_hotfix_budget_stop_gets_no_summary(
+    agents: HotfixAgents, repo: GithubRepo, trace: Trace, tmp_path: Path
+) -> None:
+    item_id = _ready(trace)
+    runner = _runner()
+    result = _hotfix(agents, repo, trace, tmp_path, item_id, runner=runner, budget=Budget(0.0001))
+    doc = _stopped(result, trace, item_id, "budget")
+    record = _escalation(trace, doc, "budget")
+    step = _summary_step(doc)
+    assert step["done"] is False and step["run_id"] is None and "budget" in step["reason"]
+    assert SUMMARY_AGENT[0] not in runner.names()
+    assert get_summary(trace, record.id) is None
+
+
+@pytest.mark.parametrize(
+    ("summary", "reason"),
+    [
+        (UNGROUNDED, "the summary failed its check: "),
+        (RuntimeError("the model is down"), "RuntimeError: the model is down"),
+    ],
+    ids=["ungrounded", "agent-error"],
+)
+def test_a_hotfix_summary_that_fails_leaves_the_escalation_as_it_was(
+    agents: HotfixAgents,
+    repo: GithubRepo,
+    trace: Trace,
+    tmp_path: Path,
+    summary: Mapping[str, Any] | Exception,
+    reason: str,
+) -> None:
+    item_id = _ready(trace)
+    runner = _runner(fixes={}, summary=summary)
+    result = _hotfix(agents, repo, trace, tmp_path, item_id, runner=runner)
+    # The item stays escalated, the report keeps the record's id and the code stays the stop's.
+    doc = _stopped(result, trace, item_id, "changed nothing")
+    record = _escalation(trace, doc, "contradiction")
+    assert result.code == ExitCode.ERROR
+    step = _summary_step(doc)
+    assert step["done"] is False and step["run_id"] is not None
+    assert step["reason"].startswith(reason)
+    assert get_summary(trace, record.id) is None
+
+
+def test_a_hotfix_without_a_summary_agent_still_escalates(
+    agents: HotfixAgents, repo: GithubRepo, trace: Trace, tmp_path: Path
+) -> None:
+    item_id = _ready(trace)
+    runner = _runner(fixes={})
+    without = dataclasses.replace(agents, summary=None)
+    result = _hotfix(without, repo, trace, tmp_path, item_id, runner=runner)
+    doc = _stopped(result, trace, item_id, "changed nothing")
+    record = _escalation(trace, doc, "contradiction")
+    assert _summary_step(doc) == {
+        "done": False,
+        "run_id": None,
+        "reason": "no published escalation-summary agent resolved",
+    }
+    assert SUMMARY_AGENT[0] not in runner.names()
+    assert get_summary(trace, record.id) is None
 
 
 def test_a_crash_blocks_the_item_and_is_raised(

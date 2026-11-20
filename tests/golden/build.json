@@ -233,6 +233,7 @@
   },
   "board_error": null,
   "escalation": null,
+  "after_escalation": null,
   "report_path": "<tmp>/out/pipeline-run-1.json",
   "total_cost_usd": 1.25,
   "duration_ms": 0
