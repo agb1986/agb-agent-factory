@@ -19,6 +19,14 @@ from pydantic import BaseModel
 from factory.cli import main
 from factory.exit import ExitCode, UsageError
 from pipelines import build_loop
+from pipelines.behaviour import (
+    BaselineNotGreenError,
+    BehaviourChangedError,
+    BehaviourError,
+    CoverageDroppedError,
+    CoverageUnmeasuredError,
+    TestFileChangedError,
+)
 from pipelines.build_loop import (
     ACTOR,
     FEATURE_CODER,
@@ -35,8 +43,10 @@ from pipelines.review_panel import JUDGE
 from pipelines.sandbox import DirtyRepositoryError
 from registry.common_schemas import Ticket
 from registry.spec import LLMSpec
-from runtime.budget import Budget
+from runtime.budget import Budget, BudgetExceeded
+from runtime.escalations import Escalation, InvalidEscalation, answer, list_escalations
 from runtime.hooks import ToolCall
+from runtime.jev_runner import JevError
 from runtime.trace import Trace, TraceRow
 from runtime.work_items import WorkItemNotFound, WorkItems
 from tests.gh_fake import FakeGh, GithubRepo, git, github_repo
@@ -49,7 +59,7 @@ from tests.pipelines.test_review_panel import (
     _judgement,
     _review,
 )
-from tools._common import ToolInputError
+from tools._common import ToolExecutionError, ToolInputError
 
 RUN_ID = "pipeline-run-1"
 FULL = "acme/widgets"
@@ -239,6 +249,7 @@ def _build(
     kwargs.setdefault("jev_runner", FakeJev())
     kwargs.setdefault("work_dir", _work_dir(tmp_path))
     kwargs.setdefault("repo_path", repo.root)
+    kwargs.setdefault("pipeline_run_id", RUN_ID)
     return run_build(
         agents,
         item_id,
@@ -246,7 +257,6 @@ def _build(
         out_dir=tmp_path / "out",
         sandbox=sandbox or FakeSandbox(),
         runner=runner or BuildRunner(),
-        pipeline_run_id=RUN_ID,
         **kwargs,
     )
 
@@ -473,16 +483,18 @@ def test_findings_ticket_lists_each_finding_and_keeps_the_rest() -> None:
     assert "without a finding" in findings_ticket(_ticket(), []).body
 
 
-# --- runs that stop: the item goes to blocked
+# --- runs that stop: a stop a person can answer escalates, any other blocks
 
 
-def _stopped(result: BuildResult, trace: Trace, item_id: str, message: str) -> dict[str, Any]:
+def _stopped(
+    result: BuildResult, trace: Trace, item_id: str, message: str, status: str = "escalated"
+) -> dict[str, Any]:
     assert result.code == ExitCode.ERROR
     doc = result.document
     assert doc["outcome"] == "stopped" and doc["pull_request"] is None
     assert message in doc["stopped"]["message"]
     item = WorkItems(trace).get(item_id)
-    assert item.status == "blocked" == doc["work_item"]["status_after"]
+    assert item.status == status == doc["work_item"]["status_after"]
     (last,) = WorkItems(trace).events(item_id)[-1:]
     assert last.actor == ACTOR and last.pipeline_run_id == RUN_ID
     assert last.reason.startswith(f"{doc['stopped']['type']}: {doc['stopped']['message']}")
@@ -491,7 +503,21 @@ def _stopped(result: BuildResult, trace: Trace, item_id: str, message: str) -> d
     return doc
 
 
-def test_a_second_request_for_changes_blocks_the_item(
+def _escalation(trace: Trace, doc: Mapping[str, Any], trigger: str) -> Escalation:
+    """The one record the stop wrote, checked against the report and the board."""
+    (record,) = list_escalations(trace)
+    assert doc["escalation"] == record.id and record.trigger == trigger
+    assert record.work_item_id == doc["work_item"]["id"] and record.is_open
+    assert record.from_status == "in_progress"
+    assert record.actor == ACTOR and record.pipeline_run_id == RUN_ID
+    assert record.pipeline_run_ids == (RUN_ID,)
+    assert record.cost_usd == pytest.approx(WorkItems(trace).cost_usd(record.work_item_id))
+    report = json.loads(Path(doc["report_path"]).read_text(encoding="utf-8"))
+    assert report["escalation"] == record.id and report["board_error"] is None
+    return record
+
+
+def test_a_second_request_for_changes_escalates_the_item(
     agents: BuildAgents, repo: GithubRepo, trace: Trace, tmp_path: Path, gh: FakeGh
 ) -> None:
     item_id = _ready(trace)
@@ -502,8 +528,20 @@ def test_a_second_request_for_changes_blocks_the_item(
     assert len(doc["rounds"]) == 2 and len(runner.coder_calls()) == 2
     assert gh.writes() == [] and _branches(repo.bare) == ""
 
+    record = _escalation(trace, doc, "changes_requested")
+    assert record.question.startswith("the panel asked for changes 2 times.")
+    coder, panel = record.agent_outputs
+    assert (
+        coder.agent == "feature-coder@0.1.0" and coder.run_id == doc["rounds"][1]["coder"]["run_id"]
+    )
+    assert json.loads(coder.output)["summary"] == "Added size(), round 2."
+    assert panel.agent == "review panel" and json.loads(panel.output)["ship"] is False
+    # Both rounds' work, from the ticket's ref, is in the diff.
+    assert "+++ b/widgets.py" in record.diff and "+LIMIT = 10" in record.diff
+    assert record.suite_tail == doc["rounds"][1]["suite"]["output_tail"]
 
-def test_a_blocked_coder_blocks_the_item(
+
+def test_a_blocked_coder_escalates_the_item_with_its_reason(
     agents: BuildAgents, repo: GithubRepo, trace: Trace, tmp_path: Path
 ) -> None:
     item_id = _ready(trace)
@@ -515,8 +553,25 @@ def test_a_blocked_coder_blocks_the_item(
     assert doc["rounds"][0]["coder"]["output"]["blocked"] is True
     assert sandbox.runs == []
 
+    record = _escalation(trace, doc, "blocked_output")
+    assert "The ticket names no module." in record.question
+    assert record.question.endswith("What should it do?")
+    assert record.diff == "" and record.suite_tail == ""
+    (coder,) = record.agent_outputs
+    assert json.loads(coder.output)["blocked_reason"] == "The ticket names no module."
 
-def test_a_failing_suite_blocks_the_item_before_the_panel(
+
+def test_escalation_question_lists_the_coders_open_questions() -> None:
+    exc = build_loop.CoderBlockedError("the coder is blocked on wi-1", hint="Which module?")
+    rounds = [{"coder": {"output": {"open_questions": ["Is it widgets.py?", " "]}}}]
+    question = build_loop.escalation_question(exc, "blocked_output", rounds)
+    assert question == (
+        "The coder cannot build the ticket as written: Which module?.\n\n"
+        "- Is it widgets.py?\n\nWhat should it do?"
+    )
+
+
+def test_a_failing_suite_escalates_the_item_before_the_panel(
     agents: BuildAgents, repo: GithubRepo, trace: Trace, tmp_path: Path
 ) -> None:
     item_id = _ready(trace)
@@ -528,8 +583,13 @@ def test_a_failing_suite_blocks_the_item_before_the_panel(
     assert doc["rounds"][0]["panel"] is None
     assert [call["spec"].name for call in runner.calls] == [FEATURE_CODER[0]]
 
+    record = _escalation(trace, doc, "check_failed")
+    assert record.suite_tail == FAILED.decode()
+    assert "+++ b/widgets.py" in record.diff
+    assert [o.agent for o in record.agent_outputs] == ["feature-coder@0.1.0"]
 
-def test_a_coder_that_changes_nothing_blocks_the_item(
+
+def test_a_coder_that_changes_nothing_escalates_as_a_contradiction(
     agents: BuildAgents, repo: GithubRepo, trace: Trace, tmp_path: Path
 ) -> None:
     item_id = _ready(trace)
@@ -537,11 +597,14 @@ def test_a_coder_that_changes_nothing_blocks_the_item(
     result = _build(
         agents, repo, trace, tmp_path, item_id, runner=BuildRunner(rounds=[]), sandbox=sandbox
     )
-    _stopped(result, trace, item_id, "the coder changed nothing in round 1")
+    doc = _stopped(result, trace, item_id, "the coder changed nothing in round 1")
+    assert doc["stopped"]["type"] == "NoChangeError"
     assert sandbox.runs == []
+    record = _escalation(trace, doc, "contradiction")
+    assert "may already do what it asks" in record.question and record.diff == ""
 
 
-def test_a_run_past_its_budget_blocks_the_item(
+def test_a_run_past_its_budget_escalates_the_item(
     agents: BuildAgents, repo: GithubRepo, trace: Trace, tmp_path: Path
 ) -> None:
     item_id = _ready(trace)
@@ -551,6 +614,10 @@ def test_a_run_past_its_budget_blocks_the_item(
     assert doc["stopped"]["type"] == "BudgetExceeded"
     assert sandbox.runs == [] and len(sandbox.cleaned) == 1
     assert list(_work_dir(tmp_path).iterdir()) == []
+    record = _escalation(trace, doc, "budget")
+    assert "bigger budget" in record.question
+    # The cost is a snapshot: a later charge to the item does not change the record.
+    assert record.cost_usd == pytest.approx(0.25)
 
 
 @pytest.mark.parametrize("path", ["pyproject.toml", ".github/workflows/ci.yml", "pytest.py"])
@@ -565,6 +632,7 @@ def test_the_coder_writing_a_denied_path_through_its_tools_is_refused(
     ((agent, run_id, cost, decision, error),) = _refusals(trace)
     assert (agent, run_id, cost) == ("feature-coder@0.1.0", RUN_ID, 0.0)
     assert json.loads(decision)["check"] == "hook" and path in error
+    _escalation(trace, doc, "check_failed")
 
 
 def test_a_denied_path_changed_by_another_route_is_refused_after_the_coder(
@@ -574,10 +642,12 @@ def test_a_denied_path_changed_by_another_route_is_refused_after_the_coder(
     sandbox = FakeSandbox()
     runner = BuildRunner(unhooked={"pytest.ini": "[pytest]\naddopts = -p no:cacheprovider\n"})
     result = _build(agents, repo, trace, tmp_path, item_id, runner=runner, sandbox=sandbox)
-    _stopped(result, trace, item_id, "the coder may not change pytest.ini")
+    doc = _stopped(result, trace, item_id, "the coder may not change pytest.ini")
     ((_, _, _, decision, _),) = _refusals(trace)
     assert json.loads(decision)["check"] != "hook"
     assert sandbox.runs == []
+    record = _escalation(trace, doc, "check_failed")
+    assert "+++ b/pytest.ini" in record.diff
 
 
 def test_an_unexpected_error_blocks_the_item_and_is_raised(
@@ -592,7 +662,93 @@ def test_an_unexpected_error_blocks_the_item_and_is_raised(
         _build(agents, repo, trace, tmp_path, item_id, sandbox=Broken())
     assert WorkItems(trace).get(item_id).status == "blocked"
     doc = json.loads((tmp_path / "out" / f"{RUN_ID}.json").read_text(encoding="utf-8"))
-    assert doc["stopped"]["type"] == "RuntimeError"
+    assert doc["stopped"]["type"] == "RuntimeError" and doc["escalation"] is None
+    assert list_escalations(trace) == []
+
+
+def test_a_stop_outside_the_item_blocks_it(
+    agents: BuildAgents,
+    repo: GithubRepo,
+    trace: Trace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def no_jev(*args: Any, **kwargs: Any) -> Any:
+        raise JevError("jev is down")
+
+    monkeypatch.setattr(build_loop, "run_panel", no_jev)
+    item_id = _ready(trace)
+    result = _build(agents, repo, trace, tmp_path, item_id)
+    doc = _stopped(result, trace, item_id, "jev is down", status="blocked")
+    assert doc["escalation"] is None and list_escalations(trace) == []
+
+
+def test_a_stop_whose_record_cannot_be_written_blocks_the_item(
+    agents: BuildAgents,
+    repo: GithubRepo,
+    trace: Trace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def refused(*args: Any, **kwargs: Any) -> Any:
+        raise InvalidEscalation("no room for a record")
+
+    monkeypatch.setattr(build_loop, "escalate", refused)
+    item_id = _ready(trace)
+    result = _build(agents, repo, trace, tmp_path, item_id, runner=BuildRunner(rounds=[]))
+    doc = _stopped(result, trace, item_id, "changed nothing", status="blocked")
+    assert doc["escalation"] is None
+    assert doc["board_error"]["message"] == "no room for a record"
+
+
+def test_the_next_run_after_an_answer_gives_the_coder_the_answer(
+    agents: BuildAgents, repo: GithubRepo, trace: Trace, tmp_path: Path
+) -> None:
+    item_id = _ready(trace)
+    _build(agents, repo, trace, tmp_path, item_id, runner=BuildRunner(blocked="Which module?"))
+    (record,) = list_escalations(trace)
+    answer(trace, record.id, "Put it in widgets.py.", "cli")
+    assert WorkItems(trace).get(item_id).status == "ready"
+
+    runner = BuildRunner()
+    result = _build(
+        agents, repo, trace, tmp_path, item_id, runner=runner, pipeline_run_id="pipeline-run-2"
+    )
+    assert result.code == ExitCode.OK
+    ((call),) = runner.coder_calls()
+    body = call["payload"]["ticket"]["body"]
+    assert body.startswith("Add `size()` to widgets.py.\n\n## Answers to earlier escalations")
+    assert f"### {record.id} (blocked_output)" in body and "> Put it in widgets.py." in body
+    # The report keeps the ticket as stored; only the coder's copy carries the answers.
+    assert WorkItems(trace).get(item_id).ticket().body == "Add `size()` to widgets.py."
+
+
+@pytest.mark.parametrize(
+    ("exc", "trigger"),
+    [
+        (build_loop.CoderBlockedError("x"), "blocked_output"),
+        (BudgetExceeded(1.0, 2.0), "budget"),
+        (build_loop.ChangesRequestedError("x"), "changes_requested"),
+        (build_loop.NoChangeError("x"), "contradiction"),
+        (build_loop.SuiteFailedError("x"), "check_failed"),
+        (build_loop.FileWriteRefusedError("x"), "check_failed"),
+        (TestFileChangedError("x"), "check_failed"),
+        (BehaviourChangedError("x"), "check_failed"),
+        (CoverageDroppedError("x"), "check_failed"),
+        (CoverageUnmeasuredError("x"), "check_failed"),
+        (BaselineNotGreenError("x"), None),
+        (BehaviourError("x"), None),
+        (build_loop.BuildError("x"), None),
+        (ToolExecutionError("x"), None),
+        (JevError("x"), None),
+        (UsageError("x"), None),
+        (RuntimeError("x"), None),
+    ],
+)
+def test_stop_trigger_names_the_stops_a_person_can_answer(
+    exc: BaseException, trigger: str | None
+) -> None:
+    assert build_loop.stop_trigger(exc) == trigger
 
 
 # --- the dry run
@@ -626,6 +782,7 @@ def test_a_dry_run_that_stops_leaves_the_item_ready(
     result = _build(agents, repo, trace, tmp_path, item_id, sandbox=sandbox, dry_run=True)
     assert result.code == ExitCode.ERROR and result.document["outcome"] == "stopped"
     assert WorkItems(trace).get(item_id).status == "ready"
+    assert result.document["escalation"] is None and list_escalations(trace) == []
 
 
 # --- preflight: nothing is touched
@@ -787,7 +944,7 @@ def test_factory_build_exits_1_when_the_panel_asks_twice(
     assert main(_argv(item_id, repo, tmp_path)) == ExitCode.ERROR
     out = capsys.readouterr().out
     assert "stopped: the panel asked for changes 2 times" in out
-    assert f"work item {item_id}: ready -> blocked" in out
+    assert f"work item {item_id}: ready -> escalated" in out
 
 
 def test_factory_build_exits_2_for_an_item_that_is_not_ready(

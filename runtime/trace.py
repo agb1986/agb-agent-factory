@@ -116,6 +116,31 @@ MIGRATIONS: tuple[Migration, ...] = (
         )
         """,
     ),
+    (
+        6,
+        """
+        CREATE TABLE escalations (
+            id VARCHAR PRIMARY KEY,
+            work_item_id VARCHAR NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL,
+            actor VARCHAR NOT NULL,
+            pipeline_run_id VARCHAR,
+            "trigger" VARCHAR NOT NULL CHECK ("trigger" IN (
+                'blocked_output', 'budget', 'changes_requested', 'contradiction', 'check_failed'
+            )),
+            question VARCHAR NOT NULL CHECK (question <> ''),
+            from_status VARCHAR NOT NULL,
+            pipeline_run_ids JSON NOT NULL,
+            cost_usd DOUBLE NOT NULL,
+            diff VARCHAR NOT NULL,
+            agent_outputs JSON NOT NULL,
+            suite_tail VARCHAR NOT NULL,
+            answer VARCHAR,
+            answer_source VARCHAR,
+            answered_at TIMESTAMPTZ
+        )
+        """,
+    ),
 )
 
 

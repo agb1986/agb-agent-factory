@@ -28,6 +28,7 @@ from registry import AgentRef
 from registry.common_schemas import Ticket
 from registry.spec import LLMSpec
 from runtime import run_once
+from runtime.escalations import AgentOutput, escalate
 from runtime.trace import Trace, TraceRow
 from runtime.work_items import WorkItems
 from tests.gh_fake import FakeGh, github_repo
@@ -452,6 +453,52 @@ def test_ticket_show_json(
                 )
             )  # fmt: skip
     golden("ticket-show", _run(["ticket", "show", "wi-2", "--json"], capsys))
+
+
+# --- escalations
+
+
+def test_escalation_show_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    golden: Golden,
+) -> None:
+    path = tmp_path / "traces.duckdb"
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(path))
+    clock = iter(COST_T0 + timedelta(minutes=minute) for minute in range(1, 100))
+    ticket = build_ticket()
+    with Trace(path) as trace:
+        store = WorkItems(trace, now=lambda: next(clock))
+        item_id = store.add(ticket).id
+        store.move(item_id, "ready", "approved")
+        store.move(item_id, "in_progress", "picked", actor=build_loop.ACTOR,
+                   pipeline_run_id="pipe-1")  # fmt: skip
+        store.link_run(item_id, "pipe-1")
+        trace.record(
+            TraceRow(
+                run_id="run-a", pipeline_run_id="pipe-1", agent_ref="feature-coder@0.1.0",
+                kind="llm", started_at=COST_T0, duration_ms=900, input_json={}, cost_usd=0.25,
+            )
+        )  # fmt: skip
+        escalate(
+            trace,
+            item_id,
+            trigger="blocked_output",
+            question="The coder cannot build the ticket as written: Which module?.\n\n"
+            "What should it do?",
+            reason="CoderBlockedError: the coder is blocked on wi-1",
+            actor=build_loop.ACTOR,
+            pipeline_run_id="pipe-1",
+            diff="--- a/widgets.py\n+++ b/widgets.py\n@@ -1 +1 @@\n-LIMIT = 5\n+LIMIT = 10\n",
+            agent_outputs=[
+                AgentOutput("feature-coder@0.1.0", "run-a", '{"blocked": true}'),
+                AgentOutput("review panel", None, '{"ship": false}'),
+            ],
+            suite_tail="1 failed in 0.02s\n",
+            now=lambda: next(clock),
+        )
+    golden("escalation-show", _run(["escalations", "show", "esc-1", "--json"], capsys))
 
 
 # --- deps

@@ -19,6 +19,7 @@ fixed values, and compares the result to `tests/golden/<name>.json`.
 | `cost.json` | `factory cost --since 2026-10-20 --json` |
 | `cost-by-kind.json` | `factory cost --since 2026-10-20 --by kind --json` |
 | `ticket-show.json` | `factory ticket show wi-2 --json`, on a seeded store |
+| `escalation-show.json` | `factory escalations show esc-1 --json`, on a seeded store |
 | `deps.json` | `factory deps <repo> --impact pkg/b.py --json` |
 | `run.json` | `factory run answerer@^0.1 --input payload.json --json`, on a test agent |
 

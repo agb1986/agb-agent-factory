@@ -285,6 +285,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="print one JSON document instead of text"
     )
     _add_ticket_parser(sub)
+    _add_escalations_parser(sub)
     _add_build_parser(sub)
     return parser
 
@@ -415,6 +416,43 @@ def _add_ticket_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     )
 
 
+def _add_escalations_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add `factory escalations` and its three subcommands to `sub`."""
+    parser = sub.add_parser(
+        "escalations",
+        help="list, show and answer the questions stopped pipelines asked",
+        epilog="example: factory escalations list --open --json",
+    )
+    esub = parser.add_subparsers(dest="escalations_command")
+
+    def child(name: str, help: str, example: str) -> argparse.ArgumentParser:
+        child_parser = esub.add_parser(name, help=help, epilog=f"example: {example}")
+        child_parser.add_argument(
+            "--json", action="store_true", help="print one JSON document instead of text"
+        )
+        return child_parser
+
+    list_parser = child(
+        "list", "list escalation records, oldest first", "factory escalations list --open --json"
+    )
+    list_parser.add_argument("--open", action="store_true", help="only records not yet answered")
+    show = child(
+        "show",
+        "print one record as Markdown: the question, the run, the diff and the last outputs",
+        "factory escalations show esc-1",
+    )
+    show.add_argument("id", help="the escalation id, `esc-<n>`")
+    answer = child(
+        "answer",
+        "answer a record; the last open answer moves the item to ready for the next run",
+        'factory escalations answer esc-1 --text "Put it in widgets.py." --json',
+    )
+    answer.add_argument("id", help="the escalation id, `esc-<n>`")
+    answer.add_argument(
+        "--text", required=True, metavar="TEXT|@FILE", help="the answer, or @ and a file holding it"
+    )
+
+
 def _add_build_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """Add `factory build` to `sub`."""
     build_parser = sub.add_parser(
@@ -495,6 +533,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _deps(args)
         if args.command == "ticket" and args.ticket_command:
             return _ticket(args)
+        if args.command == "escalations" and args.escalations_command:
+            return _escalations(args)
     except Exception as exc:  # noqa: BLE001 - the root handler maps every failure to a code
         return _fail(exc, as_json=getattr(args, "json", False))
     parser.print_usage(sys.stderr)
@@ -692,6 +732,17 @@ def _ticket(args: argparse.Namespace) -> int:
     if args.ticket_command == "link":
         return ticket.link(args.id, args.pipeline_run_id, as_json=args.json)
     return ticket.ready(as_json=args.json)
+
+
+def _escalations(args: argparse.Namespace) -> int:
+    """Run one `factory escalations` subcommand against the trace store's records."""
+    from runtime import escalations_cli
+
+    if args.escalations_command == "list":
+        return escalations_cli.list_records(open_only=args.open, as_json=args.json)
+    if args.escalations_command == "show":
+        return escalations_cli.show(args.id, as_json=args.json)
+    return escalations_cli.answer(args.id, args.text, as_json=args.json)
 
 
 def _fail(exc: Exception, *, as_json: bool) -> int:

@@ -599,16 +599,16 @@ The agent is `story-breakdown@0.1` (#91). It takes a PRD, a `repository` and a `
 | `todo`, `ready`, `in_review`, `blocked`, `escalated` | `dropped` | A person | The work is abandoned |
 | `ready` | `in_progress` | The build loop (#87), the hotfix pipeline (#109) | The run starts, before the clone |
 | `in_progress` | `in_review` | The build loop (#87) | The panel said `ship` and the pull request is open |
-| `in_progress` | `blocked` | The build loop (#87) | Until #93: a second `request_changes`, a `blocked` output, a failed suite or a budget stop. After #93: only a failure outside the item |
-| `in_progress` | `escalated` | The pipeline that stopped, through #93 | A `blocked` output, a budget stop, a second `request_changes`, or the item contradicting the code |
+| `in_progress` | `blocked` | The build loop (#87) | A stop no answer settles: a failure outside the item, a crash, or an escalation that could not be written ([Escalations](#escalations)) |
+| `in_progress` | `escalated` | The pipeline that stopped, through `runtime.escalations.escalate` (#93) | A `blocked` output, a budget stop, a second `request_changes`, the item contradicting the code, or a failed check ([Escalations](#escalations)) |
 | `in_progress` | `ready` | A person | A run was killed before it could move the item |
 | `in_review` | `done` | A person | The pull request merged |
 | `in_review` | `ready` | A person | The pull request was closed or needs changes; the reason says which |
 | `blocked` | `todo`, `ready` | A person | The cause is cleared |
-| `blocked` | `escalated` | The escalation code of #93 | A question for a human is written about it |
-| `escalated` | `ready` | `factory escalations answer` (#93) | The answer is stored and goes to the next run as payload |
+| `blocked` | `escalated` | `runtime.escalations.escalate` (#93) | A question for a human is written about it |
+| `escalated` | `ready` | `factory escalations answer` (#93), actor `human` | The item's last open record is answered; the answers go to the next run in the ticket body |
 
-A pipeline moves its item out of `in_progress` in a `finally` block, as the runner writes its trace row: to `blocked` with `<ErrorClass>: <message>` as the reason when nothing more specific applies. Before it moves an item to `in_progress` it links its pipeline run id with `link_run`. The build loop's reason also names its report, `<ErrorClass>: <message>; report <path>`. A dry run of the build loop (`factory build --dry-run`) links its run, so the item's cost counts it, but moves no item, so the item stays `ready`.
+A pipeline moves its item out of `in_progress` in a `finally` block, as the runner writes its trace row: to `escalated` through `escalate` when a person's answer can settle the stop, otherwise to `blocked`, with `<ErrorClass>: <message>` as the reason either way. Before it moves an item to `in_progress` it links its pipeline run id with `link_run`. The build loop's reason also names its report, `<ErrorClass>: <message>; report <path>`. A dry run of the build loop (`factory build --dry-run`) links its run, so the item's cost counts it, but moves no item, so the item stays `ready`.
 
 These moves are illegal for everyone, people included:
 
@@ -648,6 +648,72 @@ team: dev
 The resolver, the runner and the publish gate never read `team`. It never reaches a model, and setting or changing it bumps no version, as moving a model into `registry/common_schemas.py` bumps none. `factory list` may read it to group agents. The factory metrics report (#96) does not group by team, because no manifest field exists yet; it says so in its output and gains the grouping when the field lands.
 
 Composition lives in `pipelines/`, one module per loop, named after what the loop does: `pipelines/build_loop.py` (#87), `pipelines/plan_loop.py` (#92), `pipelines/incident.py` (#108), which runs an `sre` agent and a `qa` agent. A loop may compose agents of several teams; the build loop runs `dev` and `qa` agents. The module's docstring names the teams it composes. There is no team object, no team manifest and no team version.
+
+## Escalations
+
+A pipeline that stops on something a person can settle writes an escalation record and moves its item to `escalated` (#93). The code is `runtime/escalations.py` and the table is `escalations`, migration 6 of `runtime/trace.py`. ADR 0002 sets the split: a stop a human can answer goes to `escalated`, and `blocked` keeps only failures outside the item. [work-items.md](work-items.md#escalations-and-factory-escalations) shows the commands.
+
+### The record
+
+A record holds `id` (`esc-<n>`), `work_item_id`, `created_at`, `actor`, `pipeline_run_id`, `trigger`, `question`, `from_status` (the item's state before the move), `pipeline_run_ids` (the item's linked runs), `cost_usd`, `diff`, `agent_outputs` (agent, run id and output text of each), `suite_tail`, and, once answered, `answer`, `answer_source` and `answered_at`. `show --json` prints these with `open`, true until the answer is stored.
+
+- **One row per stop.** Each stop writes a new record. A record is written once and changed once, when its answer is stored. An item stopped twice has two records, and the second keeps its own question, diff and cost.
+- **Cost is a snapshot.** `cost_usd` is `WorkItems.cost_usd` at the moment of the stop, not a live sum. The record shows what the work had cost when the person was asked, which is what the person weighs against the answer; a later run adds its own rows, and `factory ticket show` prints the live total.
+- **Large fields are capped,** and the cut is marked in the text with a `[cut: ...]` line, so a record never grows without bound:
+
+  | Field | Limit (characters) | Kept |
+  | --- | --- | --- |
+  | `question` (`QUESTION_CHARS`) | 4000 | The head |
+  | `diff` (`DIFF_CHARS`) | 20000 | The head, where the first files are |
+  | each agent output (`OUTPUT_CHARS`) | 8000 | The head |
+  | `suite_tail` (`SUITE_TAIL_CHARS`) | 4000 | The tail, where pytest sums up the failures |
+  | `answer` (`ANSWER_CHARS`) | 8000 | Nothing: a longer answer is refused, not cut, so a person's words stay whole |
+
+- **Nothing is read from the environment.** A record holds what the caller passes and what the store already has. A caller never passes a token, a key or an environment dump; the build loop passes the workspace diff, the last coder answer and panel result, and the last suite output.
+- **The record and the move are one step.** `escalate` writes the row inside `WorkItems.move_with`, so the record, the item's new status and its event commit in one transaction under the trace's single writer, and any error rolls all three back. A record never exists for an item that did not move, nor an `escalated` item without a record.
+- **One entry point.** `escalate(trace, item_id, *, trigger, question, reason, actor, pipeline_run_id, diff, agent_outputs, suite_tail)` is the one function a pipeline calls; the hotfix pipeline (#109) calls it too rather than writing its own stop. It takes an item in `in_progress` or `blocked`; any other state raises `IllegalTransitionError` and writes nothing.
+- **Plain functions for reuse.** `render_markdown(record)` returns the record as Markdown: the question and a summary table, then the diff, the agent outputs and the suite tail in `<details>` sections. `answer(trace, id, text, source)` stores an answer. The summary agent (#94) and the issue notifier (#95) reuse both.
+
+### Triggers and the build loop's stop table
+
+A record's `trigger` is one of five, `TRIGGERS` in `runtime/escalations.py`: `blocked_output`, `budget`, `changes_requested`, `contradiction` and `check_failed`. The issue names the first four; `check_failed` follows ADR 0002, because a failed check on the coder's own change is a stop a person settles by saying what the change should be.
+
+The build loop maps each stop through `ESCALATE_ON` in `pipelines/build_loop.py`. The first row whose class the error is an instance of wins, so a subclass escalates as its parent does. Every class not listed blocks.
+
+| Stop | Ends | Trigger | Why |
+| --- | --- | --- | --- |
+| `CoderBlockedError` (the coder answered `blocked`) | `escalated` | `blocked_output` | The coder asked a question; its `blocked_reason` and `open_questions` become the record's question |
+| `BudgetExceeded` | `escalated` | `budget` | A person decides on a bigger budget or a smaller ticket |
+| `ChangesRequestedError` (a second `request_changes`) | `escalated` | `changes_requested` | The panel and the coder disagree twice; a person says which findings matter |
+| `NoChangeError` (the coder changed nothing) | `escalated` | `contradiction` | The ticket and the code disagree ([below](#how-a-contradiction-is-detected)) |
+| `SuiteFailedError` | `escalated` | `check_failed` | The coder's change fails the suite; a person says what the change should be |
+| `FileWriteRefusedError` | `escalated` | `check_failed` | The coder wrote outside its policy; a person narrows the ticket or widens the policy |
+| `TestFileChangedError`, `BehaviourChangedError`, `CoverageDroppedError`, `CoverageUnmeasuredError` | `escalated` | `check_failed` | A refactor changed what the code does; a person says whether the ticket is a refactor |
+| `BaselineNotGreenError`, a bare `BehaviourError` | `blocked` | | The suite at the ticket's ref fails before the coder runs: the repository, not the ticket, needs fixing |
+| A bare `BuildError` (such as a failed fetch) | `blocked` | | A git or workspace failure outside the item |
+| `ToolError`, `ToolExecutionError` (the sandbox) | `blocked` | | Docker or the sandbox failed |
+| `JevError` | `blocked` | | The Jev service failed; nothing about the item changed. Its docstring's `jev_error` reason is not a trigger |
+| `AgentError`, `UsageError` and every other `FactoryError` | `blocked` | | An API, manifest or outside-write failure outside the item |
+| Any other exception (`RuntimeError`, a killed process) | `blocked`, or left `in_progress` if the process died | | A crash; the error propagates after the move |
+| An escalation that cannot be written | `blocked` | | The stop is kept as `blocked` and the report's `board_error` says why |
+
+A dry run writes no record and moves no item. The build report's `escalation` is the record's id, or null.
+
+### How a contradiction is detected
+
+No model judges a contradiction; the loop uses a fact it can check. The coder answered without `blocked`, yet its commit changed no file (`NoChangeError`, a `BuildError`). The ticket asks for a change, so either the code at the ticket's ref already does what it asks, or the ticket is wrong about the code, and only a person can say which. A coder that sees the contradiction itself should answer `blocked` with an open question, which escalates as `blocked_output`.
+
+### Answers
+
+`answer(trace, id, text, source)` stores a person's answer. `source` is `cli` for `--text TEXT` and `file:<path>` for `--text @path`.
+
+- When the answer closes the item's last open record, the item moves from `escalated` to `ready` as actor `human`, in the same transaction as the answer.
+- With several open records on one item, each answer is stored, and only the answer that closes the last one moves the item.
+- A second answer to the same record is refused (exit 2): an answer is never replaced.
+- An answer to a record whose item is no longer `escalated`, because a person moved it by hand, is refused (exit 2) and nothing is stored: the question no longer stands. The record stays open, so `list --open` still shows it.
+- An empty answer, one over `ANSWER_CHARS`, or an item whose dependency is no longer `done` is refused (exit 2), and nothing is stored. An unknown id exits 3.
+
+The next run gets the answers in its ticket body. `ticket_for_run(trace, item)` returns the item's ticket with every answered record appended under `## Answers to earlier escalations`, oldest first, as `### esc-<n> (trigger)` with the question and the answer quoted. The stored ticket is unchanged, no `Ticket` field is added, and no agent's input schema changes; an agent reads the answers as part of the ticket.
 
 ## Secrets
 
@@ -739,13 +805,15 @@ $ factory run product-architect --input idea.json --repo . --json
 
 `factory ticket add|list|show|move|link|ready` reads and writes the work items in the trace store ([Work items](#work-items), [work-items.md](work-items.md)). Each takes `--json`. `add`, `show`, `move` and `link` print one item with `cost_usd` and its `events`; `list [--status S]` prints `{"work_items": [...]}`; `ready` prints `{"promoted", "blocked", "ready"}`, `ready` in the orchestrator's order. A person's `move` is logged with actor `human` and needs `--reason`. A bad field, an empty reason, an illegal move or a cycle exits 2, with the legal moves as the hint of an illegal one, and an unknown id exits 3. `tests/golden/ticket-show.json` pins `ticket show --json`.
 
+`factory escalations list [--open]|show <id>|answer <id> --text TEXT|@FILE` reads and answers the escalation records in the trace store ([Escalations](#escalations), [work-items.md](work-items.md#escalations-and-factory-escalations)). Each takes `--json`. `list` prints one `id<TAB>open|answered<TAB>item<TAB>trigger<TAB>first question line` line per record, oldest first, or `{"escalations": [...]}`; `show` prints the record as Markdown with `<details>` sections, or as one JSON document; `answer` stores the answer, prints where the item went, or `{"escalation", "work_item": {"id", "status"}}`, and moves the item to `ready` when no other record on it is open. An empty, too long or second answer, an answer to an item no longer `escalated`, and an unreadable `@FILE` exit 2, and an unknown id exits 3. `tests/golden/escalation-show.json` pins `escalations show --json`.
+
 `factory plan <repo> (--idea TEXT|@FILE | --prd @FILE) [--answer Q=A ...] [--approve] [--ref REF] [--repository NAME] [--plans-dir DIR] [--json] [--allow-unpublished] [--budget-usd N]` takes an idea to tickets in the work-item store, behind a human approval (`pipelines/plan_loop.py`, [plan-loop.md](plan-loop.md)). product-architect writes a PRD that is stored at `data/plans/<run-id>.md` and printed; `--approve` on a second invocation with `--prd @FILE`, with every open question answered by `--answer`, runs story-breakdown and files the tickets in `todo` with parent `prd:<run-id>`, in one `WorkItems.add_many` transaction. It never moves a ticket to `ready`. One pipeline run id covers both agents and the store events, whose actor is `pipeline:plan_loop`. Under `--json`, stdout carries one document with `status` (`awaiting_answers`, `awaiting_approval` or `filed`), `tickets` and `conflicts`. It exits 0 when the PRD waits or the tickets are filed, 1 when `--approve` did not reach `filed` or the PRD is already filed, 2 for usage (an unknown or empty answer included), 3 for a missing repository or file, and 4 when `ANTHROPIC_API_KEY` is not set and a model call is needed. `tests/golden/plan.json` pins the document.
 
-`factory build <id> [--repo PATH] [--dry-run] [--out-dir DIR] [--work-dir DIR] [--json] [--allow-unpublished] [--budget-usd N]` takes one `ready` work item to a reviewed pull request (`pipelines/build_loop.py`, [build-loop.md](build-loop.md)). The feature-coder builds the ticket in a clone behind its file policy, the suite runs in the sandbox and the review panel reviews the diff, with one more coder round when the panel asks for changes. When the panel ships, `github.create_pr` opens the pull request on behalf of the judge and the item moves to `in_review`; every other end after preflight moves it to `blocked`. One pipeline run id covers every agent, the outside write and the store events, whose actor is `pipeline:build_loop`. The pull request's body names the work item, and `github.create_pr` adds the pipeline run id. The report goes to `data/builds/<run-id>.json`, and under `--json` it is the one document on stdout. It exits 0 when the pull request was opened or, in a dry run, would have been, 1 when the run stopped (a refused write, a `blocked` coder, a failed suite, a second request for changes, a budget stop), 2 for usage (an item that is not `ready`, a kind the loop does not take, a dirty repository, an `origin` that is not the ticket's), 3 for an unknown item, agent or ref, and 4 when `ANTHROPIC_API_KEY` or `GH_TOKEN` is not set, a dry run included, or the sandbox is unavailable. `tests/golden/build.json` pins the document.
+`factory build <id> [--repo PATH] [--dry-run] [--out-dir DIR] [--work-dir DIR] [--json] [--allow-unpublished] [--budget-usd N]` takes one `ready` work item to a reviewed pull request (`pipelines/build_loop.py`, [build-loop.md](build-loop.md)). The feature-coder builds the ticket in a clone behind its file policy, the suite runs in the sandbox and the review panel reviews the diff, with one more coder round when the panel asks for changes. When the panel ships, `github.create_pr` opens the pull request on behalf of the judge and the item moves to `in_review`; a stop a person can answer writes an escalation record and moves it to `escalated`, and every other end after preflight moves it to `blocked` ([Escalations](#escalations)). One pipeline run id covers every agent, the outside write and the store events, whose actor is `pipeline:build_loop`. The pull request's body names the work item, and `github.create_pr` adds the pipeline run id. The report goes to `data/builds/<run-id>.json`, and under `--json` it is the one document on stdout. It exits 0 when the pull request was opened or, in a dry run, would have been, 1 when the run stopped (a refused write, a `blocked` coder, a failed suite, a second request for changes, a budget stop), 2 for usage (an item that is not `ready`, a kind the loop does not take, a dirty repository, an `origin` that is not the ticket's), 3 for an unknown item, agent or ref, and 4 when `ANTHROPIC_API_KEY` or `GH_TOKEN` is not set, a dry run included, or the sandbox is unavailable. `tests/golden/build.json` pins the document.
 
 `factory incident <repo> --event JSON|@FILE [--ref REF] [--repository NAME] [--out-dir DIR] [--work-dir DIR] [--json] [--allow-unpublished] [--budget-usd N]` takes one Sentry issue, given as the JSON document `sentry.read_issue` returns (the command never calls Sentry), to an incident ticket (`pipelines/incident.py`, [incident.md](incident.md)). The release is `--ref`, else the event's `release` as a tag or commit, else `v<release>`; without one it exits 2 before any agent runs. In a throwaway clone at that commit, triage-diagnostics diagnoses the event with read-only tools, test-writer writes a reproduction test in `reproduce` mode, and the test runs in the offline sandbox. The test reproduces the event when pytest exits 1 with the event's exception raised from the file of its innermost in-app frame. The pipeline files one `incident` ticket with actor `pipeline:incident`, in `ready` when the event reproduced and in `todo` otherwise. The stack trace, the steps, the suspected paths and the confidence are sections of the body, in the fixed order of `BODY_SECTIONS`, and the suspected paths are also `impacted_paths`; no Ticket field was added. It exits 0 whenever a ticket is filed, 1 when the run fails, 2 for usage, 3 for a missing repository, file, agent or ref, and 4 for a missing key or sandbox. `tests/golden/incident.json` pins the document.
 
-`tests/test_golden_cli.py` pins the `--json` document of `list`, `eval`, `publish-check`, `review`, `triage`, `fix`, `build`, `incident`, `plan`, `cost`, `deps`, `run` and `ticket show` against files in `tests/golden/`, with the per-run fields (`duration_ms`, `git_sha`, `pipeline_run_id`, `eval_run_id`, `run_id`) replaced by fixed values. `pytest --update-golden` rewrites those files instead of comparing; read the diff before committing it. A new command gets one test and one file, as `tests/golden/README.md` describes. CI (`.github/workflows/ci.yml`) runs `pytest -m "not live and not live_jev" --cov --cov-fail-under=85`; the floor lives in the workflow command, not in `addopts`, so a local `pytest --cov` never fails on it. `.github/workflows/live.yml` runs the `live` and `live_jev` tests, by hand only (`gh workflow run live.yml`), with the keys from the repository secrets `ANTHROPIC_API_KEY` and `TYPESAFE_API_KEY`.
+`tests/test_golden_cli.py` pins the `--json` document of `list`, `eval`, `publish-check`, `review`, `triage`, `fix`, `build`, `incident`, `plan`, `cost`, `deps`, `run`, `ticket show` and `escalations show` against files in `tests/golden/`, with the per-run fields (`duration_ms`, `git_sha`, `pipeline_run_id`, `eval_run_id`, `run_id`) replaced by fixed values. `pytest --update-golden` rewrites those files instead of comparing; read the diff before committing it. A new command gets one test and one file, as `tests/golden/README.md` describes. CI (`.github/workflows/ci.yml`) runs `pytest -m "not live and not live_jev" --cov --cov-fail-under=85`; the floor lives in the workflow command, not in `addopts`, so a local `pytest --cov` never fails on it. `.github/workflows/live.yml` runs the `live` and `live_jev` tests, by hand only (`gh workflow run live.yml`), with the keys from the repository secrets `ANTHROPIC_API_KEY` and `TYPESAFE_API_KEY`.
 
 ## Exit codes
 
