@@ -1,0 +1,200 @@
+# Eval cases for documentation-agent. Each one gives the agent a docs ticket for a fixture from
+# fixtures/src/ whose head is a merged change the docs do not cover: a new function, a new class, a
+# renamed function and a new module. The sandbox_tests grader checks the work tree the agent leaves
+# first: the whole suite must pass, no test file may change, and expected.run.doc_drift runs the
+# deterministic drift check (evals.doc_drift) over the named source files and docs: every public
+# name has a docstring and is named in a docs file, no docs file names a name that is gone, and no
+# code changed outside docstrings and comments. The rubric then checks the answer itself: required
+# fields first, then a small model scores the criteria below, which restate what they need because
+# the model never sees the ticket. `repo_path` is not in the payload: the eval runner fills it in
+# with a private copy of the built fixture repository.
+cases:
+  - id: document-new-function
+    fixture: docs-new-function
+    payload:
+      ticket:
+        kind: docs
+        title: Document slugify
+        body: >-
+          The change base..head added slugify to textkit/words.py. Document it in its docstring
+          and in the README, next to words.
+        acceptance:
+          - slugify has a docstring that says what it returns and that it raises ValueError when
+            the text has no words.
+          - The README names slugify and its sep argument.
+          - No code or test changes.
+        repo: acme/textkit
+        ref: head
+        impacted_paths: [textkit/words.py]
+      depends_on: []
+    expected:
+      verdict: null
+      run:
+        suite: pass
+        tests: unchanged
+        doc_drift:
+          paths: [textkit/words.py]
+          docs: [README.md, "docs/**/*.md"]
+      rubric:
+        criteria:
+          - id: names-the-change
+            text: >-
+              The summary says slugify in textkit/words.py was documented, in its docstring and in
+              README.md, and that it follows the change that added it.
+            required: true
+            floor: 0.6
+          - id: says-what-and-why
+            text: >-
+              docs_changed has an entry for README.md and one for textkit/words.py, and each says
+              what now describes slugify and that it was added by the change.
+          - id: nothing-invented
+            text: >-
+              The answer claims no behaviour slugify does not have: it joins the words of the text
+              with sep, which defaults to "-", and raises ValueError when there are none.
+        threshold: 0.7
+        required_fields: [summary, docs_changed, files_changed]
+        empty_fields: [blocked_reason]
+    grader: sandbox_tests
+
+  - id: document-new-class
+    fixture: docs-new-class
+    payload:
+      ticket:
+        kind: docs
+        title: Document Shelf
+        body: >-
+          The change base..head added the Shelf class to shelf/books.py. Document the class and its
+          add and find methods in their docstrings and in docs/api.md.
+        acceptance:
+          - Shelf, Shelf.add and Shelf.find have docstrings; add's says it raises ValueError for a
+            bad ISBN.
+          - docs/api.md describes Shelf next to isbn_ok.
+          - No code or test changes.
+        repo: acme/shelf
+        ref: head
+        impacted_paths: [shelf/books.py]
+      depends_on: []
+    expected:
+      verdict: null
+      run:
+        suite: pass
+        tests: unchanged
+        doc_drift:
+          paths: [shelf/books.py]
+          docs: [README.md, "docs/**/*.md"]
+      rubric:
+        criteria:
+          - id: names-the-change
+            text: >-
+              The summary says the Shelf class in shelf/books.py and its add and find methods were
+              documented, in their docstrings and in docs/api.md.
+            required: true
+            floor: 0.6
+          - id: says-what-and-why
+            text: >-
+              docs_changed has an entry for docs/api.md and one for shelf/books.py, and each says
+              what now describes Shelf and that the class was added by the change.
+          - id: nothing-invented
+            text: >-
+              The answer claims no behaviour Shelf does not have, such as removing books, sorting
+              them or a limit on how many it holds.
+        threshold: 0.7
+        required_fields: [summary, docs_changed, files_changed]
+        empty_fields: [blocked_reason]
+    grader: sandbox_tests
+
+  - id: document-renamed-function
+    fixture: docs-renamed-function
+    payload:
+      ticket:
+        kind: docs
+        title: The docs still call read_config load
+        body: >-
+          The change base..head renamed load in settings/loader.py to read_config. The README and
+          docs/format.md still say load. Bring them up to date.
+        acceptance:
+          - No docs file names load as a function any more.
+          - The README and docs/format.md name read_config where they named load.
+          - No code or test changes.
+        repo: acme/settings
+        ref: head
+        impacted_paths: [settings/loader.py]
+      depends_on: []
+    expected:
+      verdict: null
+      run:
+        suite: pass
+        tests: unchanged
+        doc_drift:
+          paths: [settings/loader.py]
+          docs: [README.md, "docs/**/*.md"]
+      rubric:
+        criteria:
+          - id: names-the-change
+            text: >-
+              The summary says load was renamed to read_config in settings/loader.py and that
+              README.md and docs/format.md now say read_config.
+            required: true
+            floor: 0.6
+          - id: says-what-and-why
+            text: >-
+              docs_changed has an entry for README.md and one for docs/format.md, and each gives
+              the rename as the reason.
+          - id: nothing-invented
+            text: >-
+              The answer claims no change beyond the rename in the docs, such as a new argument or
+              a different error from read_config.
+        threshold: 0.7
+        required_fields: [summary, docs_changed, files_changed]
+        empty_fields: [blocked_reason]
+    grader: sandbox_tests
+
+  - id: document-new-module
+    fixture: docs-new-module
+    payload:
+      ticket:
+        kind: docs
+        title: Document units.mass
+        body: >-
+          The change base..head added the module units/mass.py with kg_to_lb, lb_to_kg and
+          POUNDS_PER_KILOGRAM. Document the module, its functions and its constant, in docstrings
+          and in the README next to units.length.
+        acceptance:
+          - units/mass.py has a module docstring, and kg_to_lb and lb_to_kg have docstrings that
+            say they raise ValueError for a negative mass.
+          - The README has a section on units.mass that names kg_to_lb, lb_to_kg and
+            POUNDS_PER_KILOGRAM.
+          - No code or test changes.
+        repo: acme/units
+        ref: head
+        impacted_paths: [units/mass.py]
+      depends_on: []
+    expected:
+      verdict: null
+      run:
+        suite: pass
+        tests: unchanged
+        doc_drift:
+          paths: [units/mass.py, units/length.py]
+          docs: [README.md, "docs/**/*.md"]
+      rubric:
+        criteria:
+          - id: names-the-change
+            text: >-
+              The summary says the new module units/mass.py was documented: a module docstring,
+              docstrings for kg_to_lb and lb_to_kg, and a README section that names them and
+              POUNDS_PER_KILOGRAM.
+            required: true
+            floor: 0.6
+          - id: says-what-and-why
+            text: >-
+              docs_changed has an entry for README.md and one for units/mass.py, and each says the
+              module was added by the change.
+          - id: nothing-invented
+            text: >-
+              The answer claims no behaviour units.mass does not have, such as rounding, other
+              units or accepting a negative mass.
+        threshold: 0.7
+        required_fields: [summary, docs_changed, files_changed]
+        empty_fields: [blocked_reason]
+    grader: sandbox_tests

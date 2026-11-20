@@ -548,7 +548,7 @@ def test_refactor_tickets_go_to_the_guarded_refactorer_with_the_behaviour_check(
     assert refactor_agents.coder.sandbox_profile == "offline"
     assert refactor_agents.coder.guard is not None and refactor_agents.coder.files is not None
     assert KIND_CHECKS["refactor"] is BehaviourCheck
-    assert set(KIND_CHECKS) == {"refactor"}
+    assert set(KIND_CHECKS) == {"refactor", "docs"}
 
 
 def test_a_refactor_that_keeps_behaviour_ships_with_both_probes_in_the_report(

@@ -19,7 +19,9 @@ work item. The flow (docs/build-loop.md has the options and outputs):
    sandbox; a failure ends the run with `SuiteFailedError`. A kind with a check in `KIND_CHECKS`
    adds its own: for `refactor`, `pipelines.behaviour.BehaviourCheck` probes the suite before the
    coder's first round and after each passing suite, and refuses a change to a test, to a test's
-   state or to coverage with its own `BehaviourError`.
+   state or to coverage with its own `BehaviourError`. For `docs`, `pipelines.docs_check.DocsCheck`
+   refuses a round that changed source code outside its comments and docstrings with its own
+   `DocsCheckError`.
 5. The review panel reviews the change from the ticket's `ref` to the coder's commit. When it asks
    for changes the coder runs once more, with the merged findings appended to the ticket, and steps
    3 to 5 repeat. A second request for changes ends the run with `ChangesRequestedError`.
@@ -37,8 +39,10 @@ Escalations) writes an escalation record and moves the item to `escalated` in on
 answer gets the answers in its ticket body (`runtime.escalations.ticket_for_run`).
 
 A dry run (`dry_run=True`) runs every step, reads included, but makes no outside write and moves no item; it still links the run,
-so the item's cost counts it. The report carries the planned pull request with a null `url`. The report, `<pipeline run id>.json`, is written last, however the run ended
-after preflight.
+so the item's cost counts it. The report carries the planned pull request with a null `url`, and
+the change it would have opened is written as `<pipeline run id>.patch`, which `git apply` takes at
+the ticket's `ref`, next to the report; the pull request's `patch` names it. The report,
+`<pipeline run id>.json`, is written last, however the run ended after preflight.
 """
 
 import dataclasses
@@ -65,6 +69,13 @@ from pipelines.behaviour import (
     CoverageUnmeasuredError,
     KindCheck,
     TestFileChangedError,
+)
+from pipelines.docs_check import (
+    CodeChangedError,
+    DocsCheck,
+    SourceFileActionError,
+    UncheckedFileError,
+    UnparsableSourceError,
 )
 from pipelines.file_policy import GUARDED_TOOL, FilePolicy, FilePolicyGuard, check_changed
 from pipelines.ids import new_pipeline_run_id
@@ -100,11 +111,14 @@ CODERS: Mapping[str, tuple[str, str]] = {
     "feature": FEATURE_CODER,
     "bug": FEATURE_CODER,
     "refactor": ("refactorer", "^0.1"),
-    "docs": FEATURE_CODER,  # until the docs writer (#97) exists
+    "docs": ("documentation-agent", "^0.1"),
 }
 """The coder for each ticket kind the build loop takes (docs/CONVENTIONS.md, Work items)."""
 
-KIND_CHECKS: Mapping[str, Callable[[], KindCheck]] = {"refactor": BehaviourCheck}
+KIND_CHECKS: Mapping[str, Callable[[], KindCheck]] = {
+    "refactor": BehaviourCheck,
+    "docs": DocsCheck,
+}
 """The extra checks a ticket kind's rounds go through, made once per run (`pipelines.behaviour`)."""
 
 OTHER_KINDS: Mapping[str, str] = {
@@ -167,6 +181,10 @@ ESCALATE_ON: tuple[tuple[type[FactoryError], Trigger], ...] = (
     (BehaviourChangedError, "check_failed"),
     (CoverageDroppedError, "check_failed"),
     (CoverageUnmeasuredError, "check_failed"),
+    (CodeChangedError, "check_failed"),
+    (UnparsableSourceError, "check_failed"),
+    (SourceFileActionError, "check_failed"),
+    (UncheckedFileError, "check_failed"),
 )
 """The stops a person can answer and the escalation trigger of each; every other stop is `blocked`.
 
@@ -349,6 +367,8 @@ class BuildResult:
             lines.append(f"pull request {pull['url']}")
         elif pull is not None:
             lines.append(f"dry run: would open a pull request from {pull['branch']}")
+            if pull.get("patch") is not None:
+                lines.append(f"patch {pull['patch']}")
         if doc["stopped"] is not None:
             lines.append(f"stopped: {doc['stopped']['message']}")
             if doc["stopped"]["hint"]:
@@ -588,7 +608,11 @@ def run_build(
             rounds=rounds,
             workspace=workspace,
         )
-        if not dry_run:
+        if dry_run:
+            patch_path = out / f"{run_id}.patch"
+            patch_path.write_bytes(diff_patch(root, head_sha, pull["commit"]))
+            pull["patch"] = str(patch_path)
+        else:
             items.move(
                 item.id,
                 "in_review",
@@ -838,6 +862,7 @@ def _build(
         "commit": previous,
         "title": ticket.title,
         "body": done["body"],
+        "patch": None,
     }
 
 

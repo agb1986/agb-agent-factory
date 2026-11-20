@@ -86,6 +86,26 @@ class ExpectedCoverage(_Strict):
         return self
 
 
+class ExpectedDocDrift(_Strict):
+    """What `evals.doc_drift.check_doc_drift` compares, for an agent that writes docs.
+
+    `paths` are the Python files whose public names must have docstrings and be named in the docs;
+    `docs` are globs, matched with `PurePosixPath.full_match`, for the docs files that must name
+    them, which may include a file the agent is expected to create.
+    """
+
+    paths: Annotated[tuple[str, ...], Field(min_length=1)]
+    docs: Annotated[tuple[Annotated[str, Field(min_length=1)], ...], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def _python_paths(self) -> ExpectedDocDrift:
+        if len(set(self.paths)) != len(self.paths):
+            raise ValueError(f"paths: duplicates in {list(self.paths)}")
+        if bad := [path for path in self.paths if not path.endswith(".py")]:
+            raise ValueError(f"paths: not Python files: {', '.join(bad)}")
+        return self
+
+
 class ExpectedRun(_Strict):
     """What running the tests in the sandbox must show, for an agent that writes tests or code.
 
@@ -98,6 +118,8 @@ class ExpectedRun(_Strict):
     `coverage` is the line coverage the agent's changes must add (see `ExpectedCoverage`).
     `public_api` lists Python files, relative to the repository, whose public names and signatures
     must be the same in the work tree as at HEAD (see `evals.public_api`), for a refactor.
+    `doc_drift` is what the docs and docstrings must say about chosen files (see
+    `ExpectedDocDrift` and `evals.doc_drift`), for a docs change.
     """
 
     new_tests: Literal["fail", "pass"] | None = None
@@ -107,6 +129,7 @@ class ExpectedRun(_Strict):
     tests: Literal["changed", "unchanged"] | None = None
     coverage: ExpectedCoverage | None = None
     public_api: Annotated[tuple[str, ...], Field(min_length=1)] | None = None
+    doc_drift: ExpectedDocDrift | None = None
 
     @model_validator(mode="after")
     def _base_needs_new_tests(self) -> ExpectedRun:

@@ -43,6 +43,10 @@ REQUIRED = {
     "refactor-duplicate",
     "refactor-deprecated",
     "refactor-magic-numbers",
+    "docs-new-function",
+    "docs-new-class",
+    "docs-renamed-function",
+    "docs-new-module",
 }
 CLEAN = {
     "clean-refactor",

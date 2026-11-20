@@ -1,0 +1,17 @@
+fixture: docs-new-class
+summary: >-
+  Adds the public Shelf class to shelf/books.py with no docstrings, and docs/api.md does not
+  mention it.
+defects:
+  - id: shelf-undocumented
+    file: shelf/books.py
+    line_start: 16
+    line_end: 26
+    severity: minor
+    category: documentation
+    title: New public class Shelf and its methods have no docstrings and no API entry
+    snippet: "class Shelf:"
+    description: >-
+      Shelf stores titles by ISBN: add refuses an ISBN with a bad check digit with ValueError, and
+      both add and find ignore hyphens. None of that is written down: the class and its methods
+      have no docstrings and docs/api.md covers only isbn_ok.

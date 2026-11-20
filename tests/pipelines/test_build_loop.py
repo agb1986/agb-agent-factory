@@ -296,14 +296,19 @@ def test_the_agents_resolve_to_the_guarded_feature_coder_and_the_full_panel(
     assert agents.panel.judge.address.startswith("judge@")
 
 
-@pytest.mark.parametrize("kind", ["feature", "bug", "docs"])
-def test_every_code_kind_but_refactor_goes_to_the_feature_coder(kind: str) -> None:
+@pytest.mark.parametrize("kind", ["feature", "bug"])
+def test_feature_and_bug_tickets_go_to_the_feature_coder(kind: str) -> None:
     assert coder_for(kind) == FEATURE_CODER
 
 
 def test_a_refactor_ticket_goes_to_the_refactorer() -> None:
     # The refactor path itself is tested in tests/pipelines/test_behaviour.py.
     assert coder_for("refactor") == ("refactorer", "^0.1")
+
+
+def test_a_docs_ticket_goes_to_the_documentation_agent() -> None:
+    # The docs path itself is tested in tests/pipelines/test_docs_check.py.
+    assert coder_for("docs") == ("documentation-agent", "^0.1")
 
 
 @pytest.mark.parametrize(("kind", "hint"), [("incident", "factory hotfix"), ("research", "run")])
@@ -772,6 +777,32 @@ def test_a_dry_run_links_the_run_moves_nothing_and_writes_nothing(
     assert all(e.actor != ACTOR for e in WorkItems(trace).events(item_id))
     assert gh.writes() == [] and _branches(repo.bare) == ""
     assert "dry run: would open a pull request from factory/" in result.text()
+
+
+def test_a_dry_run_writes_the_change_as_a_patch_that_applies_at_the_ref(
+    agents: BuildAgents, repo: GithubRepo, trace: Trace, tmp_path: Path
+) -> None:
+    item_id = _ready(trace)
+    result = _build(agents, repo, trace, tmp_path, item_id, dry_run=True)
+
+    patch = tmp_path / "out" / f"{RUN_ID}.patch"
+    assert result.document["pull_request"]["patch"] == str(patch)
+    assert f"patch {patch}" in result.text()
+    text = patch.read_text(encoding="utf-8")
+    assert "diff --git a/widgets.py b/widgets.py" in text
+    assert "+def size() -> int:" in text
+    head = git(repo.root, "rev-parse", "HEAD")
+    git(repo.root, "apply", "--check", str(patch))
+    assert git(repo.root, "rev-parse", "HEAD") == head
+    assert git(repo.root, "status", "--porcelain") == ""
+
+
+def test_a_run_that_is_not_dry_writes_no_patch(
+    agents: BuildAgents, repo: GithubRepo, trace: Trace, tmp_path: Path
+) -> None:
+    result = _build(agents, repo, trace, tmp_path, _ready(trace))
+    assert result.document["pull_request"]["patch"] is None
+    assert not (tmp_path / "out" / f"{RUN_ID}.patch").exists()
 
 
 def test_a_dry_run_that_stops_leaves_the_item_ready(
