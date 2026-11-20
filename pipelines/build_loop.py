@@ -122,7 +122,7 @@ KIND_CHECKS: Mapping[str, Callable[[], KindCheck]] = {
 """The extra checks a ticket kind's rounds go through, made once per run (`pipelines.behaviour`)."""
 
 OTHER_KINDS: Mapping[str, str] = {
-    "incident": "an incident goes to `factory hotfix` (#109), not the build loop",
+    "incident": "an incident goes to `factory hotfix`, which fixes it against its reproduction test",
     "research": "research has no pipeline: run the research agent with `factory run`",
 }
 """Where each ticket kind the build loop refuses goes instead."""
@@ -192,13 +192,16 @@ docs/CONVENTIONS.md (Escalations) has the full table, with the reason for each r
 """
 
 
-def stop_trigger(exc: BaseException) -> Trigger | None:
+def stop_trigger(
+    exc: BaseException,
+    table: Sequence[tuple[type[FactoryError], Trigger]] = ESCALATE_ON,
+) -> Trigger | None:
     """Return the escalation trigger for a stop on `exc`, or None when the item goes to `blocked`.
 
-    The first row of `ESCALATE_ON` whose class `exc` is an instance of wins, so a subclass of a
-    listed error escalates the same way.
+    The first row of `table` (default `ESCALATE_ON`) whose class `exc` is an instance of wins, so a
+    subclass of a listed error escalates the same way. The hotfix pipeline passes its own table.
     """
-    for cls, trigger in ESCALATE_ON:
+    for cls, trigger in table:
         if isinstance(exc, cls):
             return trigger
     return None

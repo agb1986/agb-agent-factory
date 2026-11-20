@@ -78,6 +78,10 @@ It is checked twice:
 
 A refusal ends the run with `TestFileWriteError` (exit 1) rather than returning a denial to the fixer: a fixer that wants to change a test has either found a wrong test or is working around it, and both need a person. It also writes one trace row, tagged `fix:test_write_refused`, with `kind` `llm`, the fixer as `agent_ref`, cost 0, the message as `error`, and `decision_json` `{"allow": false, "path", "reason", "check"}`, where `check` is `hook` or `post-check`. The convention is in [CONVENTIONS.md](CONVENTIONS.md#tools).
 
+## The fix stage
+
+`fix_and_review` in `pipelines/fix_loop.py` is the part of `run_fix` after the failing tests are committed: the fixer behind its file policy and the protected test files, the commit of its work, the suite in the sandbox and the panel's review. It returns a `FixStage` and raises `FixError`, `TestFileWriteError` or `SuiteFailedError` on a stop. `run_fix` calls it after the test-writer; the hotfix pipeline (`pipelines/hotfix.py`, [hotfix.md](hotfix.md)) calls it with the ticket's reproduction test as the failing test and `fixer_must_change=True`, so a fixer that changes nothing stops the hotfix. Neither pipeline copies the steps.
+
 ## Why a clone and not a worktree
 
 The agents need a work tree they may write to, and the sandbox mounts only that work tree, read-write, with its `.git` read-only. A `git worktree` would share the source repository's `.git`: its commits, refs and admin entries land in the source, and its `.git` file points to a directory outside the work tree, where the sandbox cannot follow. A clone with `--no-hardlinks` shares nothing with the source and is deleted whole at the end.

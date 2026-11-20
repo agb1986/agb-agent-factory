@@ -287,6 +287,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_ticket_parser(sub)
     _add_escalations_parser(sub)
     _add_build_parser(sub)
+    _add_hotfix_parser(sub)
     return parser
 
 
@@ -492,6 +493,47 @@ def _add_build_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     )
 
 
+def _add_hotfix_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add `factory hotfix` to `sub`."""
+    hotfix_parser = sub.add_parser(
+        "hotfix",
+        help="fix one reproduced incident ticket and open its `hotfix` pull request; "
+        "a person merges and deploys",
+        epilog="example: factory hotfix wi-4 --repo . --dry-run --json",
+    )
+    hotfix_parser.add_argument(
+        "id", help="the work item id, `wi-<n>`; a ready, reproduced incident ticket"
+    )
+    hotfix_parser.add_argument(
+        "--repo",
+        help="the git repository to fix; it gains objects but no branch or tag "
+        "(default: the ticket's repo when it is a path, else the working directory)",
+    )
+    hotfix_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="run every agent but open no pull request and move no work item",
+    )
+    hotfix_parser.add_argument("--out-dir", help="where the report goes (default: data/hotfixes)")
+    hotfix_parser.add_argument(
+        "--work-dir",
+        help="directory for the throwaway clone (default: the system temporary directory)",
+    )
+    hotfix_parser.add_argument(
+        "--budget-usd",
+        type=float,
+        help="stop the run once it has spent this many dollars (default: the pipeline default)",
+    )
+    hotfix_parser.add_argument(
+        "--json", action="store_true", help="print one JSON document on stdout instead of text"
+    )
+    hotfix_parser.add_argument(
+        "--allow-unpublished",
+        action="store_true",
+        help="also use agent versions that have not passed `factory publish-check`",
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the `factory` command and return its exit code.
 
@@ -521,6 +563,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _plan(args)
         if args.command == "build":
             return _build(args)
+        if args.command == "hotfix":
+            return _hotfix(args)
         if args.command == "incident":
             return _incident(args)
         if args.command == "run":
@@ -653,6 +697,22 @@ def _plan(args: argparse.Namespace) -> int:
 def _build(args: argparse.Namespace) -> int:
     """Build one ready work item and open its pull request; the report goes to stdout."""
     from pipelines.build_loop import command  # imported here: it pulls in the Anthropic SDK
+
+    return command(
+        args.id,
+        repo=args.repo,
+        dry_run=args.dry_run,
+        out_dir=args.out_dir,
+        work_dir=args.work_dir,
+        budget_usd=args.budget_usd,
+        as_json=args.json,
+        allow_unpublished=args.allow_unpublished,
+    )
+
+
+def _hotfix(args: argparse.Namespace) -> int:
+    """Fix one reproduced incident and open its `hotfix` pull request; the report goes to stdout."""
+    from pipelines.hotfix import command  # imported here: it pulls in the Anthropic SDK
 
     return command(
         args.id,

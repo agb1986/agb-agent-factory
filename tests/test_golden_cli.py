@@ -23,7 +23,7 @@ from factory import cli
 from factory.cli import main
 from factory.exit import ExitCode
 from fixtures.build import build
-from pipelines import build_loop, fix_loop, incident, plan_loop, review_panel, triage
+from pipelines import build_loop, fix_loop, hotfix, incident, plan_loop, review_panel, triage
 from registry import AgentRef
 from registry.common_schemas import Ticket
 from registry.spec import LLMSpec
@@ -35,6 +35,8 @@ from tests.gh_fake import FakeGh, github_repo
 from tests.pipelines.test_build_loop import FULL, PULL_JSON, REPO_JSON, BuildRunner
 from tests.pipelines.test_build_loop import _ticket as build_ticket
 from tests.pipelines.test_fix_loop import FINDING, FakeSandbox, FixRunner
+from tests.pipelines.test_hotfix import SequencedSandbox, hotfix_repo, hotfix_ticket, route_gh
+from tests.pipelines.test_hotfix import _runner as hotfix_runner
 from tests.pipelines.test_incident import FakeSandbox as IncidentSandbox
 from tests.pipelines.test_incident import IncidentRunner
 from tests.pipelines.test_incident import _event as incident_event
@@ -367,6 +369,38 @@ def test_build_json(
         text = text.replace(round_["commit"], "<commit>")
     text = text.replace(raw["head"], "<head>").replace(str(tmp_path), "<tmp>")
     golden("build", _normalised(json.loads(text)))
+
+
+def test_hotfix_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    golden: Golden,
+) -> None:
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(tmp_path / "traces.duckdb"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(hotfix, "run", hotfix_runner())
+    monkeypatch.setattr(hotfix, "run_jev", FakeJev())
+    monkeypatch.setattr(hotfix, "DockerSandbox", SequencedSandbox)
+    route_gh(FakeGh(tmp_path, monkeypatch))
+    repo = hotfix_repo(tmp_path)
+    with Trace(tmp_path / "traces.duckdb") as trace:
+        items = WorkItems(trace)
+        item = items.add(hotfix_ticket())
+        items.ready()
+    out, work = tmp_path / "out", tmp_path / "work"
+    work.mkdir()
+    argv = ["hotfix", item.id, "--repo", str(repo.root), "--out-dir", str(out)]
+    assert main([*argv, "--work-dir", str(work), "--allow-unpublished", "--json"]) == ExitCode.OK
+    raw = json.loads(capsys.readouterr().out)
+    # The run id is in the branch and the body, the paths are under tmp_path, the commits are dated
+    # now and the pull request opens now, so the time from the event to it grows by the second.
+    raw["timing"] |= {"pr_opened_at": "<now>", "time_to_pr_seconds": 0}
+    text = json.dumps(raw).replace(raw["pipeline_run_id"], "pipeline-run-1")
+    for commit in (raw["reproduction"]["commit"], raw["fix"]["commit"]):
+        text = text.replace(commit, "<commit>")
+    text = text.replace(raw["head"], "<head>").replace(str(tmp_path), "<tmp>")
+    golden("hotfix", _normalised(json.loads(text)))
 
 
 # --- cost
