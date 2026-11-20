@@ -1,0 +1,19 @@
+fixture: crash-loader-caller
+summary: >-
+  Drops the loader's check that skips a feed line with no price, so the line reaches line_total
+  in feed/pricing.py, where int("") raises ValueError. The crash is raised in pricing.py but the
+  fault is in feed/loader.py, one frame up the call chain. The tests only load complete lines. A
+  triage-diagnostics fixture for a culprit above the raising frame.
+defects:
+  - id: priceless-line-not-skipped
+    file: feed/loader.py
+    line_start: 10
+    line_end: 11
+    severity: major
+    category: logic
+    title: load_items keeps feed lines with no price
+    snippet: "items.append"
+    description: >-
+      The `if not price: continue` check is gone, so a line such as "C3,,4" becomes an item whose
+      price is empty, and feed_total fails with ValueError in line_total. Skip such lines in the
+      loader again.

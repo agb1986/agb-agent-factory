@@ -16,6 +16,10 @@ carry `expected.rubric`, for an agent that writes code and prose about it: the r
 after the commands, and its judge scores the prose instead of the LLM judge. A rubric case may also set
 `expected.citations_resolve`: `evals.graders.citations` then fetches the pages the answer cites,
 through the fetcher `grade` is given, and fails the case when a quote is not in its page.
+The `incident` grader, `evals.graders.incident`, checks a triage-diagnostics answer: its suspected
+paths must name the planted fault and its reproduction test must fail at the fixture's `head` with
+the event's exception. It needs the repository path too, and calls no judge: an answer that
+passes its checks passes.
 """
 
 from collections.abc import Mapping
@@ -25,6 +29,7 @@ from typing import Any
 
 from evals.cases import SEVERITIES, Case, Expected, ExpectedDefect
 from evals.graders.citations import Fetcher, check_citations, web_fetcher
+from evals.graders.incident import check_incident
 from evals.graders.llm_judge import Judge, JudgeVerdict
 from evals.graders.rubric import check_output
 from evals.graders.sandbox_tests import check_run
@@ -128,7 +133,8 @@ def grade(
     rubric) to `rubric_judge` after the checks of the rubric, and every other case to `judge`.
     Raises `UsageError` for `sandbox_tests` without a `repo_path`, for `jev` without a `jev_judge`,
     for a rubric without a `rubric_judge`, and for a rubric with `paths_exist` without a
-    `repo_path`.
+    `repo_path`. The `incident` grader runs the checks of `expected.incident` in a copy of
+    `repo_path`, raises `UsageError` without it, and calls no judge: passing its checks passes.
 
     A case with `expected.citations_resolve` has it checked once the other checks have passed and
     before a judge is called; the pages come from `fetcher`, which defaults to `web.fetch`. A page
@@ -146,6 +152,11 @@ def grade(
             raise UsageError("the sandbox_tests grader needs the repository path to run tests in")
         ran = check_run(case.expected.run, actual, repo_path)
         checks = Deterministic(checks.passed and not ran, (*checks.failures, *ran))
+    if case.grader == "incident" and case.expected.incident is not None:
+        if repo_path is None:
+            raise UsageError("the incident grader needs the repository path to run the test in")
+        found = check_incident(case.expected.incident, actual, repo_path)
+        checks = Deterministic(checks.passed and not found, (*checks.failures, *found))
     if case.expected.rubric is not None:
         found = check_output(case.expected.rubric, actual, repo_path)
         checks = Deterministic(checks.passed and not found, (*checks.failures, *found))
@@ -157,6 +168,8 @@ def grade(
         checks = Deterministic(not cited, cited)
     if not checks.passed:
         return Grade(False, 0.0, "; ".join(checks.failures), checks)
+    if case.grader == "incident":
+        return Grade(True, 1.0, "the incident checks passed", checks)
     chosen = judge
     if case.grader == "jev" and jev_judge is not None:
         chosen = jev_judge
