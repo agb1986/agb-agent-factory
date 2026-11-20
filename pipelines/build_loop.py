@@ -122,7 +122,7 @@ KIND_CHECKS: Mapping[str, Callable[[], KindCheck]] = {
 """The extra checks a ticket kind's rounds go through, made once per run (`pipelines.behaviour`)."""
 
 OTHER_KINDS: Mapping[str, str] = {
-    "incident": "an incident goes to `factory hotfix` (#109), not the build loop",
+    "incident": "an incident goes to `factory hotfix`, which fixes it against its reproduction test",
     "research": "research has no pipeline: run the research agent with `factory run`",
 }
 """Where each ticket kind the build loop refuses goes instead."""

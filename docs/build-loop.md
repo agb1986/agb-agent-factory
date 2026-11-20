@@ -23,7 +23,7 @@ factory build wi-4 --repo ./widgets --json
 
 `ANTHROPIC_API_KEY` and `GH_TOKEN` must be set, a dry run included, since a dry run still reads the target repository. Docker must be reachable and the sandbox image present, as for `factory fix`. `TYPESAFE_API_KEY` is used by triage and the judge gate of the panel. Without it both report `jev_error`, and the reviewers and the judge run anyway.
 
-The ticket's kind picks the coder from the fixed table `CODERS`. `feature` and `bug` use `feature-coder@^0.1`. `refactor` uses `refactorer@^0.1` and goes through [the behaviour check](#the-behaviour-check-refactor). `docs` uses `documentation-agent@^0.1` and goes through [the docs check](#the-docs-check-docs). `incident` is refused with a pointer to the hotfix pipeline (#109), and `research` is refused with a pointer to `factory run`.
+The ticket's kind picks the coder from the fixed table `CODERS`. `feature` and `bug` use `feature-coder@^0.1`. `refactor` uses `refactorer@^0.1` and goes through [the behaviour check](#the-behaviour-check-refactor). `docs` uses `documentation-agent@^0.1` and goes through [the docs check](#the-docs-check-docs). `incident` is refused with a pointer to `factory hotfix` ([hotfix.md](hotfix.md)), and `research` is refused with a pointer to `factory run`.
 
 ## Flow
 
@@ -182,4 +182,5 @@ FACTORY_LIVE=1 uv run pytest tests/live/test_build_loop_live.py -m "live and liv
 - A `refactor` run probes the whole suite twice more than the other kinds do, under a line tracer, which is slower than the plain suite. Each probe has the sandbox's 600 s limit.
 - The behaviour check has the coverage gap described above, and the loop does not compare public signatures.
 - The docs check refuses a code change, not a wrong or missing doc. `docs/**` is allowed whole, so a file such as `docs/conf.py` under it may change freely.
+- An incident ticket never goes through the build loop. `factory hotfix` takes it, with the reproduction test as the finding and one panel round ([hotfix.md](hotfix.md)).
 - The same limits as the fix loop apply to the clone, the sandbox and the user's own git filters ([fix-loop.md](fix-loop.md#known-limits)).

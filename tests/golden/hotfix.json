@@ -1,0 +1,266 @@
+{
+  "pipeline_run_id": "pipeline-run-1",
+  "work_item": {
+    "id": "wi-1",
+    "status_before": "ready",
+    "status_after": "in_review",
+    "ticket": {
+      "kind": "incident",
+      "title": "ZeroDivisionError in average_rating for a product with no ratings",
+      "body": "## Event\n\n- Sentry issue: SHOP-7A\n- Title: ZeroDivisionError: division by zero\n- Level: error\n- Release: head (commit f2135236fa26e762b00eeeca7f52d1d83dcbc3d4)\n- Exception: ZeroDivisionError: division by zero\n- Crash file: reviews/scores.py\n- Events: 214, 61 users; first seen 2026-11-18T09:12:44Z, last seen 2026-11-20T15:02:10Z\n- Latest event: 9b2f6c1e4d8a4f37a0c1b2d3e4f5a6b7\n\n## Summary\n\naverage_rating divides by len(ratings), which is 0 for a product without ratings. product_line passes the empty list straight through.\n\n## Stack trace\n\n```text\nTraceback (most recent call last):\n  File \"/app/reviews/listing.py\", line 8, in product_line\n  File \"/app/reviews/scores.py\", line 7, in average_rating\nZeroDivisionError: division by zero\n```\n\n## Reproduction steps\n\n1. Load a product with no ratings.\n2. Call product_line with its name and the empty list.\n3. average_rating raises ZeroDivisionError.\n\n## Suspected paths\n\n- `reviews/scores.py`\n- `reviews/listing.py`\n\n## Culprit\n\n`reviews/scores.py` lines 6-7: it divides by the number of ratings without checking for none.\n\n## Confidence\n\n- Confidence: 0.90\n- Reproduced: yes\n- Diagnosis confidence: 0.75\n\n## Reproduction test\n\n`tests/test_no_ratings.py` fails at head with ZeroDivisionError raised from `reviews/scores.py`.\n\n`tests/test_no_ratings.py`:\n\n```python\nfrom reviews.listing import product_line\n\n\ndef test_a_product_with_no_ratings_has_a_line() -> None:\n    assert product_line(\"Travel mug\", []) == \"Travel mug: no ratings\"\n```\n",
+      "acceptance": [
+        "tests/test_no_ratings.py passes, where it fails at head with ZeroDivisionError.",
+        "The whole test suite passes."
+      ],
+      "repo": "acme/widgets",
+      "ref": "main",
+      "impacted_paths": [
+        "reviews/scores.py",
+        "reviews/listing.py"
+      ]
+    }
+  },
+  "repo_path": "<tmp>/widgets",
+  "head": "<head>",
+  "dry_run": false,
+  "fixer": "fixer@0.1.1",
+  "finding": {
+    "file": "reviews/scores.py",
+    "line_start": 6,
+    "line_end": 7,
+    "severity": "major",
+    "category": "crash",
+    "title": "ZeroDivisionError in average_rating for a product with no ratings",
+    "body": "average_rating divides by len(ratings), which is 0 for a product without ratings. product_line passes the empty list straight through.\n\nCulprit: it divides by the number of ratings without checking for none.\n\nThe stack trace of the event:\n\n```text\nTraceback (most recent call last):\n  File \"/app/reviews/listing.py\", line 8, in product_line\n  File \"/app/reviews/scores.py\", line 7, in average_rating\nZeroDivisionError: division by zero\n```\n\n`tests/test_no_ratings.py` fails at head with ZeroDivisionError raised from `reviews/scores.py`.\n\n`tests/test_no_ratings.py`:\n\n```python\nfrom reviews.listing import product_line\n\n\ndef test_a_product_with_no_ratings_has_a_line() -> None:\n    assert product_line(\"Travel mug\", []) == \"Travel mug: no ratings\"\n```\n\n`tests/test_no_ratings.py` fails at this commit with ZeroDivisionError raised from `reviews/scores.py`, the way the event did. Make it pass by changing the code, not the test, and keep the whole suite passing.",
+    "suggested_fix": null
+  },
+  "reproduction": {
+    "test_files": [
+      "tests/test_no_ratings.py"
+    ],
+    "exception": "ZeroDivisionError",
+    "crash_file": "reviews/scores.py",
+    "commit": "<commit>",
+    "reproduced": true,
+    "run": {
+      "argv": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "-p",
+        "no:cacheprovider",
+        "tests/test_no_ratings.py"
+      ],
+      "exit_code": 1,
+      "passed": false,
+      "seconds": 0.1,
+      "output_tail": "tests/test_no_ratings.py F\nreviews/scores.py:7: in average_rating\n    return round(total / len(ratings), 1)\nE   ZeroDivisionError: division by zero\n1 failed in 0.02s\n"
+    }
+  },
+  "fix": {
+    "fixer": {
+      "run_id": "run-1",
+      "output": {
+        "files_changed": [
+          {
+            "path": "reviews/scores.py",
+            "action": "modified",
+            "summary": "A fix."
+          }
+        ],
+        "commands_run": [],
+        "nothing_to_fix": false,
+        "suite_passes": true,
+        "summary": "The loop now runs to len(values)."
+      }
+    },
+    "commit": "<commit>",
+    "files_changed": [
+      {
+        "path": "reviews/scores.py",
+        "action": "modified",
+        "by": "fixer"
+      },
+      {
+        "path": "tests/test_no_ratings.py",
+        "action": "created",
+        "by": "reproduction"
+      }
+    ],
+    "suite": {
+      "argv": [
+        "python",
+        "-m",
+        "pytest",
+        "-q"
+      ],
+      "exit_code": 0,
+      "passed": true,
+      "seconds": 0.1,
+      "output_tail": "6 passed in 0.02s\n"
+    },
+    "panel": {
+      "pipeline_run_id": "pipeline-run-1",
+      "base": "<head>",
+      "head": "<commit>",
+      "reviewers": [
+        {
+          "agent": "code-reviewer",
+          "version": "1.2.0",
+          "ref": "code-reviewer@1.2.0",
+          "status": "ok",
+          "verdict": "request_changes",
+          "finding_count": 1,
+          "error": null
+        },
+        {
+          "agent": "security-reviewer",
+          "version": "1.1.0",
+          "ref": "security-reviewer@1.1.0",
+          "status": "ok",
+          "verdict": "approve",
+          "finding_count": 0,
+          "error": null
+        },
+        {
+          "agent": "perf-reviewer",
+          "version": "0.3.0",
+          "ref": "perf-reviewer@0.3.0",
+          "status": "ok",
+          "verdict": "approve",
+          "finding_count": 0,
+          "error": null
+        }
+      ],
+      "judge": {
+        "ref": "judge@2.1.0",
+        "output": {
+          "scores": {
+            "correctness_risk": {
+              "value": 0.1,
+              "justification": "Checked."
+            },
+            "maintainability": {
+              "value": 0.9,
+              "justification": "Checked."
+            },
+            "security_risk": {
+              "value": 0.0,
+              "justification": "Checked."
+            },
+            "test_coverage": {
+              "value": 0.8,
+              "justification": "Checked."
+            }
+          },
+          "merged_findings": [
+            {
+              "file": "shop/shipping.py",
+              "line_start": 12,
+              "line_end": 12,
+              "severity": "major",
+              "category": "logic",
+              "title": "Problem",
+              "body": "It is wrong.",
+              "suggested_fix": null,
+              "sources": [
+                "code-reviewer@1.2.0"
+              ]
+            }
+          ],
+          "rationale": "The comparison is flipped."
+        }
+      },
+      "weighted_score": 0.9050000000000001,
+      "ship": true,
+      "total_cost_usd": 1.5,
+      "duration_ms": 0,
+      "triage": {
+        "status": "ok",
+        "ref": "diff-triage@0.3.0",
+        "decision": {
+          "skip": false,
+          "escalate": false,
+          "route": [
+            "code-reviewer",
+            "security-reviewer"
+          ],
+          "reason": "reviewers=code-security"
+        },
+        "probabilities": {
+          "needs_review": {
+            "p": 0.8
+          },
+          "reviewers": {
+            "answer": "code-security",
+            "probs": {
+              "code": 0.1,
+              "code-security": 0.7,
+              "code-perf": 0.1,
+              "all": 0.1
+            },
+            "confidence": 0.9
+          }
+        },
+        "truncated": false,
+        "route_only": true,
+        "error": null
+      },
+      "judge_gate": {
+        "status": "ok",
+        "ref": "judge-gate@0.1.0",
+        "decision": {
+          "skip": false,
+          "escalate": false,
+          "route": [],
+          "reason": "no_gate"
+        },
+        "probabilities": {
+          "clear_cut": {
+            "p": 0.2
+          },
+          "verdict": {
+            "answer": "request_changes",
+            "probs": {
+              "ship": 0.1,
+              "request_changes": 0.8,
+              "unclear": 0.1
+            },
+            "confidence": 0.9
+          }
+        },
+        "truncated": false,
+        "path": "escalated",
+        "verdict": null,
+        "judge_cost_estimate_usd": null,
+        "error": null
+      }
+    }
+  },
+  "outcome": "shipped",
+  "stopped": null,
+  "pull_request": {
+    "outcome": "written",
+    "action": "create",
+    "url": "https://github.com/acme/widgets/pull/7",
+    "branch": "factory/pipeline-run-1",
+    "commit": "<commit>",
+    "title": "ZeroDivisionError in average_rating for a product with no ratings",
+    "labels": [
+      "hotfix"
+    ],
+    "body": "## Event\n\n- Sentry issue: SHOP-7A\n- Title: ZeroDivisionError: division by zero\n- Level: error\n- Release: head (commit f2135236fa26e762b00eeeca7f52d1d83dcbc3d4)\n- Exception: ZeroDivisionError: division by zero\n- Crash file: reviews/scores.py\n- Events: 214, 61 users; first seen 2026-11-18T09:12:44Z, last seen 2026-11-20T15:02:10Z\n- Latest event: 9b2f6c1e4d8a4f37a0c1b2d3e4f5a6b7\n\n## Summary\n\naverage_rating divides by len(ratings), which is 0 for a product without ratings. product_line passes the empty list straight through.\n\n## Stack trace\n\n```text\nTraceback (most recent call last):\n  File \"/app/reviews/listing.py\", line 8, in product_line\n  File \"/app/reviews/scores.py\", line 7, in average_rating\nZeroDivisionError: division by zero\n```\n\n## Reproduction steps\n\n1. Load a product with no ratings.\n2. Call product_line with its name and the empty list.\n3. average_rating raises ZeroDivisionError.\n\n## Suspected paths\n\n- `reviews/scores.py`\n- `reviews/listing.py`\n\n## Culprit\n\n`reviews/scores.py` lines 6-7: it divides by the number of ratings without checking for none.\n\n## Confidence\n\n- Confidence: 0.90\n- Reproduced: yes\n- Diagnosis confidence: 0.75\n\n## Reproduction test\n\n`tests/test_no_ratings.py` fails at head with ZeroDivisionError raised from `reviews/scores.py`.\n\n`tests/test_no_ratings.py`:\n\n```python\nfrom reviews.listing import product_line\n\n\ndef test_a_product_with_no_ratings_has_a_line() -> None:\n    assert product_line(\"Travel mug\", []) == \"Travel mug: no ratings\"\n```\n\n## Acceptance\n\n- tests/test_no_ratings.py passes, where it fails at head with ZeroDivisionError.\n- The whole test suite passes.\n\n## What the fixer did\n\nThe loop now runs to len(values).\n\n- modified `reviews/scores.py`: A fix.\n\nWork item `wi-1`. A person merges and deploys this; the factory does not.\n\nPipeline run `pipeline-run-1`.\n\n\ud83e\udd16 Written by agb-agent-factory.\n\n<!-- factory:github.create_pr branch-factory/pipeline-run-1 pipeline_run_id=pipeline-run-1 -->"
+  },
+  "board_error": null,
+  "timing": {
+    "event_time": "2026-11-20T15:02:10+00:00",
+    "event_time_source": "last_seen",
+    "pr_opened_at": "<now>",
+    "time_to_pr_seconds": 0
+  },
+  "report_path": "<tmp>/out/pipeline-run-1.json",
+  "total_cost_usd": 1.5,
+  "duration_ms": 0
+}
