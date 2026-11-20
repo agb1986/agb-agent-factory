@@ -102,7 +102,7 @@ There is no command for it yet.
 
 `WorkItems.add_many(batch, parent=..., actor=..., pipeline_run_id=..., reason=...)` writes several
 items in one transaction, for a caller that has a whole plan (#92). Each `NewItem` holds a ticket, a
-size and `depends_on` as indexes into the batch, which an item may name only if it is earlier in the
-list; those become the new `wi-<n>` ids. The whole batch is checked before anything is written, the
+size and `depends_on` as indexes into the batch: any position but its own, earlier or later, as
+long as the graph stays acyclic. Those become the new `wi-<n>` ids. The whole batch is checked before anything is written, the
 acyclic check runs over the full graph, and any error rolls back, so either every item is stored,
 with its creation event, or none is. `add` is the one-item case.
