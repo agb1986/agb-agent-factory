@@ -687,6 +687,7 @@ def run_build(
                         pipeline_run_id=run_id,
                         dry_run=dry_run,
                         summary_agent=agents.summary,
+                        outside=context,
                         runner=runner,
                     )
             if escalation is None:

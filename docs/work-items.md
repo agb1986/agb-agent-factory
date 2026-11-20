@@ -132,6 +132,7 @@ outputs and the end of the suite output. The rules, and the table of which stop 
 | `factory escalations list [--open]` | Every record, oldest first, or only the unanswered ones |
 | `factory escalations show <id>` | One record as Markdown, its summary first when it has one, then the diff, the outputs and the suite tail in `<details>` sections; `--json` adds `summary` (null when there is none) |
 | `factory escalations answer <id> --text TEXT\|@FILE` | Store the answer and, when no other record on the item is open, move the item to `ready` |
+| `factory escalations answer <id> --from-issue` | The same, taking the answer from the latest reply on the ticket's GitHub issue by an owner, member or collaborator |
 
 When a run writes a record, the escalation-summary agent (#94) also writes a summary of it: one
 paragraph on what is blocked and what the person must decide, and up to four options, each with
@@ -153,6 +154,14 @@ The next `factory build` gives the coder the ticket with the answer appended to 
 and never replaced. An answer to an item a person has already moved on by hand is refused, and
 the record stays open. Exit codes are as above: 2 for a bad or refused answer or an unreadable
 file, 3 for an unknown id.
+
+A real run also posts each escalation to the ticket's GitHub issue with `notify.issue` (#95): the
+first escalation opens the issue, a later one comments on it, and a rerun edits its own post. The
+issue's number is stored on the item, and `factory ticket show` prints it. A person can then
+answer on GitHub and store that reply with `--from-issue`, which only reads the issue. Only a
+comment made after the post by the repository's owner, a member or a collaborator counts, and a
+factory post never does. The rules are in
+[CONVENTIONS.md](CONVENTIONS.md#posting-to-github).
 
 Code uses `runtime.escalations`:
 

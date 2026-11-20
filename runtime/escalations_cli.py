@@ -57,36 +57,60 @@ def show(escalation_id: str, *, as_json: bool = False) -> int:
     return 0
 
 
-def answer(escalation_id: str, text: str, *, as_json: bool = False) -> int:
-    """Store the answer `text`, or the file `@path` names, and print where the item went. Returns 0.
+def answer(
+    escalation_id: str, text: str | None, *, from_issue: bool = False, as_json: bool = False
+) -> int:
+    """Store the answer `text`, the file `@path` names, or the issue's reply; print where the item went.
 
-    The source is `cli` for text and `file:<path>` for a file. JSON is
-    `{"escalation": {...}, "work_item": {"id", "status"}}`; text is one line saying whether the
-    item moved to `ready` or still waits on other open records. Raises `UsageError` for an
-    unreadable file and whatever `escalations.answer` raises: exit 2 for an empty or too-long
-    answer, a record already answered or an item no longer escalated, exit 3 for an unknown id.
+    Returns 0. The source is `cli` for text, `file:<path>` for a file and
+    `github:<owner/name>#<N> comment <id>` for `from_issue`, which takes the latest qualifying
+    comment on the ticket's GitHub issue (`runtime.notify.answer_from_issue`) instead of `text`.
+    JSON is `{"escalation": {...}, "work_item": {"id", "status"}}`, plus `"comment": {"id",
+    "author", "url"}` for `from_issue`; text is one line saying whether the item moved to `ready`
+    or still waits on other open records. Raises `UsageError` for an unreadable file and whatever
+    `escalations.answer` raises: exit 2 for an empty or too-long answer, a record already
+    answered or an item no longer escalated, exit 3 for an unknown id. With `from_issue` it also
+    exits 2 when the item has no issue or no comment answers the record.
     """
-    source = "cli"
-    if text.startswith("@"):
-        path = Path(text[1:])
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            raise UsageError(f"cannot read the answer from {path}: {exc}") from exc
-        source = f"file:{path}"
+    comment = None
     with Trace() as trace:
-        record = escalations.answer(trace, escalation_id, text, source)
+        if from_issue:
+            from runtime.notify import answer_from_issue
+
+            answered = answer_from_issue(trace, escalation_id)
+            record, comment = answered.record, answered.comment
+        else:
+            record = escalations.answer(trace, escalation_id, *_text_and_source(text))
         item = WorkItems(trace).get(record.work_item_id)
         others = escalations.list_escalations(trace, work_item_id=item.id, open_only=True)
         still_open = [other.id for other in others]
     if as_json:
-        document = {
+        document: dict[str, object] = {
             "escalation": record.to_json(),
             "work_item": {"id": item.id, "status": item.status},
         }
+        if comment is not None:
+            document["comment"] = {
+                "id": comment.comment_id,
+                "author": comment.author,
+                "url": comment.url,
+            }
         print(json.dumps(document))
     elif still_open:
         print(f"{record.id} answered; {item.id} stays {item.status}: {', '.join(still_open)} open")
     else:
         print(f"{record.id} answered; {item.id} is {item.status}")
     return 0
+
+
+def _text_and_source(text: str | None) -> tuple[str, str]:
+    """Return the answer and its source for `--text`: the text and `cli`, or a file's text."""
+    if text is None:
+        raise UsageError("give the answer with --text TEXT|@FILE or --from-issue")
+    if not text.startswith("@"):
+        return text, "cli"
+    path = Path(text[1:])
+    try:
+        return path.read_text(encoding="utf-8"), f"file:{path}"
+    except (OSError, UnicodeDecodeError) as exc:
+        raise UsageError(f"cannot read the answer from {path}: {exc}") from exc

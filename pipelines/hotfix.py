@@ -410,6 +410,7 @@ def _stop_item(
     suite_tail: str,
     budget: Budget,
     summary_agent: LLMSpec | None,
+    outside: OutsideContext,
     runner: Runner,
 ) -> tuple[str | None, dict[str, Any] | None, AfterEscalation | None]:
     """Move the item out of `in_progress` for a run that did not open its pull request.
@@ -418,7 +419,7 @@ def _stop_item(
     `agent_outputs` and `suite_tail`, and moves the item to `escalated`; any other end, and a stop
     whose record cannot be written, moves it to `blocked`. The reason is
     `<ErrorClass>: <message>; report <path>`. Right after the record is written,
-    `after_escalation` runs once with `budget`, `summary_agent` and `runner`; it never raises and
+    `after_escalation` runs once with `budget`, `summary_agent`, `outside` and `runner`; it never raises and
     changes nothing above. Returns the escalation's id or None, the stop of a write that failed or
     None, and what `after_escalation` did or None, for the report. Every stop goes through here.
     """
@@ -454,6 +455,7 @@ def _stop_item(
                 pipeline_run_id=pipeline_run_id,
                 dry_run=False,
                 summary_agent=summary_agent,
+                outside=outside,
                 runner=runner,
             )
             return record.id, None, after
@@ -709,6 +711,7 @@ def run_hotfix(
                 suite_tail=_stop_suite_tail(stop_exc, reproduction, fix),
                 budget=budget,
                 summary_agent=agents.summary,
+                outside=context,
                 runner=runner,
             )
         document = {

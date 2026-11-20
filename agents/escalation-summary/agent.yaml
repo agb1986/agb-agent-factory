@@ -10,7 +10,7 @@ schemas: schemas.py
 input_model: EscalationSummaryInput
 output_model: EscalationSummaryOutput
 tools:
-  allow: []
+  allow: [notify.issue]
   deny: []
 limits:
   max_tool_turns: 1

@@ -19,6 +19,9 @@ from runtime.trace import (
 
 T0 = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
 
+LATEST = MIGRATIONS[-1][0]
+"""The store's schema version: the last migration's number, which may skip one (#94 owns 7)."""
+
 
 def row(run_id: str, **kw: Any) -> TraceRow:
     base = TraceRow(
@@ -42,7 +45,7 @@ def test_ensure_schema_twice_is_a_noop(trace: Trace) -> None:
     trace.ensure_schema()
     trace.record(row("r1"))
     trace.ensure_schema()
-    assert trace.schema_version() == len(MIGRATIONS)
+    assert trace.schema_version() == LATEST
     assert trace._connect().execute("SELECT count(*) FROM schema_version").fetchone() == (
         len(MIGRATIONS),
     )
@@ -139,12 +142,12 @@ def test_second_migration_bumps_schema_version(tmp_path: Path) -> None:
     path = tmp_path / "t.duckdb"
     with Trace(path) as t:
         t.ensure_schema()
-        assert t.schema_version() == len(MIGRATIONS)
-    extra = (len(MIGRATIONS) + 1, "ALTER TABLE traces ADD COLUMN model VARCHAR")
+        assert t.schema_version() == LATEST
+    extra = (LATEST + 1, "ALTER TABLE traces ADD COLUMN model VARCHAR")
     with Trace(path, migrations=(*MIGRATIONS, extra)) as t:
         t.ensure_schema()
         t.ensure_schema()
-        assert t.schema_version() == len(MIGRATIONS) + 1
+        assert t.schema_version() == LATEST + 1
         assert t._connect().execute("SELECT count(*) FROM schema_version").fetchone() == (
             len(MIGRATIONS) + 1,
         )
@@ -154,11 +157,11 @@ def test_second_migration_bumps_schema_version(tmp_path: Path) -> None:
 def test_failed_migration_rolls_back(tmp_path: Path) -> None:
     import duckdb
 
-    bad = (len(MIGRATIONS) + 1, "ALTER TABLE no_such_table ADD COLUMN x VARCHAR")
+    bad = (LATEST + 1, "ALTER TABLE no_such_table ADD COLUMN x VARCHAR")
     with Trace(tmp_path / "t.duckdb", migrations=(*MIGRATIONS, bad)) as t:
         with pytest.raises(duckdb.Error):
             t.ensure_schema()
-        assert t.schema_version() == len(MIGRATIONS)
+        assert t.schema_version() == LATEST
 
 
 def test_data_survives_reopen(tmp_path: Path) -> None:

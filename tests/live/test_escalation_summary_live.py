@@ -6,7 +6,8 @@ every eval case to the agent, which makes one request per case, and checks that 
 option's evidence is a span of the record and no dollar figure is invented. Each run must be
 traced under its own run id with a cost. It then raises a record in a throwaway trace and checks
 that `runtime.after_escalation.after_escalation` stores a summary for it under the run's budget.
-It was not run as part of #94.
+The hook's outside target is a repository other than the ticket's, so its notify step is refused
+before it reads GitHub; nothing is posted. It was not run as part of #94 or #95.
 """
 
 from pathlib import Path
@@ -21,9 +22,11 @@ from runtime.after_escalation import SUMMARY_AGENT, after_escalation
 from runtime.budget import Budget
 from runtime.escalation_summary import ungrounded
 from runtime.escalations import get_summary
+from runtime.outside import OutsideContext
 from runtime.runner import run
 from runtime.trace import Trace
-from tests.runtime.test_escalation_summary import raise_one
+from tests.runtime.test_escalation_summary import OTHER, raise_one
+from tools.github import Repository
 
 CASES = AGENTS_DIR / "escalation-summary" / "evals" / "cases.yaml"
 
@@ -78,6 +81,12 @@ def test_a_raised_record_gets_a_stored_summary_under_the_budget(tmp_path: Path) 
             pipeline_run_id="p1",
             dry_run=False,
             summary_agent=spec,
+            outside=OutsideContext(
+                target=Repository.parse(OTHER),
+                repo_path=tmp_path,
+                pipeline_run_id="p1",
+                trace=trace,
+            ),
         )
         stored = get_summary(trace, record.id)
         [row] = (
@@ -94,3 +103,5 @@ def test_a_raised_record_gets_a_stored_summary_under_the_budget(tmp_path: Path) 
     assert row[3] is None
     assert row[2] is not None and row[2] > 0
     assert budget.spent == pytest.approx(row[2])
+    assert not after.notify.done
+    assert after.notify.post is not None and after.notify.post["outcome"] == "refused"

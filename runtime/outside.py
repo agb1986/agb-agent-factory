@@ -29,7 +29,9 @@ Callers: `factory build` (#87) and `factory hotfix` (#109) call `github.create_p
 `factory review --pr N --comment` (#100) calls `github.comment_pr`, each for the resolved `judge`
 manifest. When the judge gate skips the judge, the pipeline still resolves the `judge` manifest and
 passes it as `agent`, because the manifest is the authority, not the run; `parent_run_id` is then
-None. `notify.issue` (#95) will be called the same way for `escalation-summary`.
+None. `notify.issue` (#95) is called the same way for `escalation-summary`, from
+`runtime.notify.notify_escalation`; its target is the ticket, so a pipeline run posts once per
+ticket.
 """
 
 import json
@@ -58,7 +60,7 @@ TAG_PREFIX = "outside:"
 COUNTED_OUTCOMES = frozenset({"written", "dry_run", "failed"})
 """The outcomes of an earlier call that make a later one on the same target a repeat."""
 
-_TARGET_KEYS = ("pr", "issue", "branch")
+_TARGET_KEYS = ("pr", "issue", "branch", "ticket")
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +116,7 @@ def planned_target(name: str, context: OutsideContext, arguments: Mapping[str, A
         "pr": arguments.get("pr"),
         "issue": arguments.get("issue"),
         "branch": branch_for(context.pipeline_run_id) if name == "github.create_pr" else None,
+        "ticket": arguments.get("ticket"),
     }
 
 
