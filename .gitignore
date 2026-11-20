@@ -28,3 +28,7 @@ secrets.env
 .idea/
 .vscode/
 .DS_Store
+
+# Scratchpads
+sp.md
+sp-output.md
