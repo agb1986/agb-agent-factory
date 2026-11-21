@@ -11,8 +11,8 @@ and `triage-saving-<run>-<fixture>-no-triage`, where `<run>` is a fresh token pe
 with-triage runs write `triage:decision` rows that `scripts/shadow_report.py` reads too, so pass
 `--trace-db` with a separate store to keep them out of the shadow report.
 
-While `runtime.gates.ROUTE_ONLY` holds, the with-triage run still runs every reviewer, so the two
-runs cost about the same and the saving is projected. A fixture whose `Decision` skips at the
+The with-triage run leaves `run_panel`'s `act_on_triage` off, so it still runs every reviewer, the
+two runs cost about the same and the saving is projected. A fixture whose `Decision` skips at the
 manifest's skip gate would have cost only its triage, so the projected saving is the reviewers'
 and the judge's cost in the with-triage runs of the would-skip fixtures, less the triage agent's
 cost over every fixture. Every number is read back from the trace rows after the runs: the cost of

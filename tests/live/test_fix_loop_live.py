@@ -4,7 +4,8 @@ Skipped unless both `ANTHROPIC_API_KEY` and `TYPESAFE_API_KEY` are set, and also
 the sandbox image, since the test-writer, the fixer and the suite run there. It fixes the
 `off-by-one` finding of the `off-by-one-red` fixture, whose head fails one test on purpose: the
 test-writer and the fixer run in a clone with the action guard on, the suite runs in the sandbox,
-and the review panel, with triage in route-only mode and the judge gate, reviews the clone's diff.
+and the review panel, with triage logged but not acted on and the judge gate, reviews the clone's
+diff.
 
 It checks that the panel approved and a patch was written, that the source repository was not
 touched, that the patch applies to it and makes the whole suite pass, the planted test included,
@@ -142,12 +143,13 @@ def test_the_loop_fixes_the_planted_defect_and_the_panel_approves(tmp_path: Path
     assert all(row[4] is not None and row[4] > 0 for row in llm_rows), llm_rows
     assert total == pytest.approx(result.total_cost_usd)
 
-    # Triage ran on the sandbox diff in route-only mode: logged, and every reviewer still ran.
+    # Triage ran on the sandbox diff: logged, and every reviewer still ran, since the fix loop
+    # never lets triage act.
     tags = [row[2] for row in rows]
     assert tags.count(TRIAGE_TAG) == 1
     assert tags.count(JUDGE_GATE_TAG) == 1
     triage = result.panel.triage
     assert triage.status == "ok", triage.error
-    assert result.to_json()["panel"]["triage"]["route_only"] is True
+    assert result.to_json()["panel"]["triage"]["may_act"] is False
     assert len(result.panel.reviewers) == len(panel.reviewers)
     assert all(reviewer.review is not None for reviewer in result.panel.reviewers)

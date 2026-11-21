@@ -8,7 +8,7 @@ Source: the "agb-tools -> factory" handover (v2, with Jev) in [HANDOVER-v2.md](H
 - **Anthropic SDK, not a hand-rolled loop.** Reviewers, judge and triage run on the Anthropic SDK Tool Runner (`client.beta.messages.tool_runner`) with scoped tools. Per-turn hooks give logging, approval gates and the action guard. The fixer may use the Claude Agent SDK or Managed Agents instead; that decision is its own ticket.
 - **Structured outputs replace `submit_result`.** Forcing `tool_choice` on the last turn returns 400 on current models. The output schema goes in `output_config.format` and the SDK parses it.
 - **No `temperature`.** Current models reject it. Use `output_config.effort` where cost or speed matters.
-- **Jev is a cost optimisation on top of a working pipeline, not the foundation.** It runs route-only until calibration data exists, and skipping review needs two weeks of shadow mode plus a measured recall of at least 0.98 on risky diffs. A truncated diff always forces review.
+- **Jev is a cost optimisation on top of a working pipeline, not the foundation.** It ran route-only until calibration data existed, and skipping review needed two weeks of shadow mode plus a measured recall of at least 0.98 on risky diffs. The shadow window closed on 2026-11-20 with no would-skip finding, and on 2026-11-21 route-only was turned off for `factory review`, with a permanent 5% sample of would-skip runs still reviewed ([jev-calibration.md](jev-calibration.md#after-the-shadow-period)). A truncated diff always forces review.
 - **Jev transport is isolated.** Everything that talks to Jev lives in `runtime/jev_runner.py`, so moving between raw HTTP, OpenRouter and a future Python SDK touches one file.
 
 ## Stack
@@ -48,7 +48,7 @@ Python 3.14 managed by uv. `anthropic`, `pydantic>=2`, `pyyaml`, `packaging`, `d
 | 1 Scaffold | Phase 1 | #1 to #7 | Conventions, package, tools registry, resolver, Tool Runner runtime, trace with cost, first reviewer end to end |
 | 2 Evals | Phase 2 | #8 to #10 | Eval runner, fixture repositories with planted defects, publish gate |
 | 3 Review panel | Phase 3 | #11 to #14 | Judge, security and performance reviewers, parallel panel pipeline |
-| 4 Jev gate | Phase 4 | #15 to #20 | Timeboxed spike, `JevSpec`, `jev_runner.py`, gates, triage route-only, judge gate, calibration and shadow mode |
+| 4 Jev gate | Phase 4 | #15 to #20 | Timeboxed spike, `JevSpec`, `jev_runner.py`, gates, triage (route-only, then acting on `factory review` from 2026-11-21), judge gate, calibration and shadow mode |
 | 5 Fix loop | Phase 5 | #21 to #24 | Fixer runtime decision, test-writer and fixer agents, action guard, sandboxed fix loop |
 | 6 Harden | Phase 6 | #25 to #30 | Retries and cost guard, async, test harness and CI, deployment, release hygiene, `agb factory` wrapper |
 

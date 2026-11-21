@@ -128,11 +128,24 @@ def review_body(result: PanelResult, pull: PullRequest) -> str:
     """Return the review's summary: the verdict and score, the judge's rationale and the scores.
 
     When the judge gate skipped the judge there is no score or rationale, so the body says so and
-    gives the gate's verdict and what each reviewer found. Reviewers that failed are named.
+    gives the gate's verdict and what each reviewer found. When triage skipped the review, no
+    reviewer looked at the change: the body says so, names the gate that skipped and says how to
+    force a full review, so that it cannot read as a review that found nothing. Reviewers that
+    failed are named.
     """
     verdict = "ship" if result.ship else "do not ship"
     sections = []
-    if result.judgement is not None and result.assessment is not None:
+    if result.skipped:
+        sections.append("## Review: skipped by triage")
+        sections.append(
+            f"Triage judged this change low risk ({result.triage.skip_reason()}), so no reviewer "
+            "and no judge looked at it. This is not a review that found nothing."
+        )
+        sections.append(
+            f"To force a full review, run `factory review --pr {pull.number} --comment "
+            "--no-triage`."
+        )
+    elif result.judgement is not None and result.assessment is not None:
         output = result.judgement.model_dump(mode="json")
         found = len(output["merged_findings"])
         sections.append(f"## Review: {verdict} (weighted score {result.assessment.score:.2f})")

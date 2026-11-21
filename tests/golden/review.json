@@ -20,15 +20,6 @@
       "verdict": "approve",
       "finding_count": 0,
       "error": null
-    },
-    {
-      "agent": "perf-reviewer",
-      "version": "0.3.0",
-      "ref": "perf-reviewer@0.3.0",
-      "status": "ok",
-      "verdict": "approve",
-      "finding_count": 0,
-      "error": null
     }
   ],
   "judge": {
@@ -72,11 +63,11 @@
   },
   "weighted_score": 0.9050000000000001,
   "ship": true,
-  "total_cost_usd": 1.25,
+  "total_cost_usd": 1.0,
   "duration_ms": 0,
   "triage": {
     "status": "ok",
-    "ref": "diff-triage@0.3.0",
+    "ref": "diff-triage@0.4.0",
     "decision": {
       "skip": false,
       "escalate": false,
@@ -102,7 +93,10 @@
       }
     },
     "truncated": false,
-    "route_only": true,
+    "route_only": false,
+    "may_act": true,
+    "sampled": false,
+    "outcome": "routed",
     "error": null
   },
   "judge_gate": {

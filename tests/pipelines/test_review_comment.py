@@ -34,6 +34,7 @@ from tests.pipelines.test_review_panel import (
     _finding,
     _judgement,
 )
+from tests.pipelines.test_triage_wiring import SKIPPABLE
 from tools._common import OutsideWriteRefused, ToolInputError, ToolNotFoundError
 from tools.github import marker
 
@@ -213,6 +214,34 @@ def test_a_skipped_judge_gives_a_body_without_a_score_and_no_comments(
     assert "- code-reviewer@1.2.0: " in body
 
 
+def test_a_review_triage_skipped_says_no_reviewer_looked_and_how_to_force_one(
+    panel: Panel, pull: Pull, tmp_path: Path
+) -> None:
+    assert panel.triage is not None
+    with Trace(tmp_path / "unit.duckdb") as trace:
+        result = run_panel(
+            panel,
+            pull.root,
+            pull.base,
+            pull.head,
+            trace,
+            runner=FakeRunner(),
+            jev_runner=FakeJev(SKIPPABLE),
+            act_on_triage=True,
+            sample=lambda: False,
+        )
+    assert result.skipped is True
+    assert finding_comments(result) == []
+    body = review_body(result, PullRequest(7, pull.base, pull.head))
+    assert body.startswith("## Review: skipped by triage\n\n")
+    assert "(low_risk: needs_review p=0.020)" in body
+    assert "no reviewer and no judge looked at it" in body
+    assert "`factory review --pr 7 --comment --no-triage`" in body
+    assert "found nothing." in body
+    assert "weighted score" not in body
+    assert body.endswith(f"Reviewed commit `{pull.head[:12]}`.")
+
+
 def test_comment_text_and_failure_section() -> None:
     created = {"outcome": "written", "action": "create", "url": "https://r/1"}
     assert comment_text(created) == "comment: created the review at https://r/1"
@@ -245,7 +274,8 @@ def test_without_comment_the_document_has_no_comment_and_nothing_is_written(
     document = _document(capsys)
     assert document["comment"] is None
     assert document["base"] == pull.base and document["head"] == pull.head
-    assert len(runner.calls) == 4
+    # The fake triage routes to code and security, so two reviewers and the judge run.
+    assert len(runner.calls) == 3
     assert fake.writes() == []
 
 
