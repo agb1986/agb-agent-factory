@@ -1,5 +1,5 @@
 name: diff-triage
-version: 0.3.0
+version: 0.4.0
 kind: jev
 team: sre
 description: Decides whether a diff needs human-quality review, and which reviewers should see it.
@@ -51,6 +51,11 @@ routing:
     route: [code-reviewer, security-reviewer, perf-reviewer]
   - when: unsure
     route: [code-reviewer, security-reviewer, perf-reviewer]
+
+# 2026-11-21, 0.4.0: route-only off (#20 stage 4). The shadow window (2026-10-30 to 2026-11-20,
+# 17 runs, 2 would skip, no finding on either) passed, so `factory review` now honours skip and
+# route. A 5% sample of would-skip runs still gets the full panel (docs/jev-calibration.md).
+act_on_decision: true
 
 evals:
   min_pass_rate: 0.9

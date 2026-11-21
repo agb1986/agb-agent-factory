@@ -243,6 +243,9 @@ class JevSpec(AgentSpecBase):
     `jev-1.14.0`, never an alias, because gate thresholds are tuned against one version. Cross
     references are checked together: every gate names a real question and a rule that question's
     type supports, and every routing entry names a real gate or a real answer.
+
+    `act_on_decision` is off by default: a pipeline then logs the `Decision` and runs everything.
+    With it on, a pipeline that is allowed to act honours `skip` and `route` (#20).
     """
 
     kind: Literal["jev"]
@@ -252,6 +255,7 @@ class JevSpec(AgentSpecBase):
     questions: tuple[Question, ...] = Field(min_length=1)
     gates: tuple[Gate, ...] = ()
     routing: tuple[RouteSpec, ...] = ()
+    act_on_decision: bool = False
 
     _output_class: type[JevOutput] | None = PrivateAttr(default=None)
 

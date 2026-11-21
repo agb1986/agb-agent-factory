@@ -106,11 +106,13 @@ class Store:
         output: dict[str, Any] | None = None,
         reviewed: bool = True,
         agent_ref: str = TRIAGE,
+        decision: dict[str, Any] | None = None,
     ) -> None:
         """Write a triage decision, the Jev run under it and, when `reviewed`, the panel's rows.
 
         `p` is the `needs_review` probability, or `None` for a run without answers. The Jev run
-        costs 0.001, each reviewer 0.1 and the judge 0.05.
+        costs 0.001, each reviewer 0.1 and the judge 0.05. The decision row is a shadow-window
+        one, route only, unless `decision` overrides its keys.
         """
         when = datetime.datetime.combine(day, datetime.time(9), datetime.UTC)
         files = [f"src/{MARKER}.py"]
@@ -130,7 +132,12 @@ class Store:
             kind="jev",
             input_json={"files": files},
             cost_usd=0.0,
-            decision_json={"skip": False, "route_only": True, "truncated": truncated},
+            decision_json={
+                "skip": False,
+                "route_only": True,
+                "truncated": truncated,
+                **(decision or {}),
+            },
             output_json=answers,
             error=error,
             tag=TRIAGE_TAG,
@@ -371,3 +378,92 @@ def test_a_missing_store_exits_3_and_one_without_traces_too(
     code, _, err = _run(store, capsys, "--threshold", "0.1")
     assert code == ExitCode.NOT_FOUND
     assert "has no traces table" in err
+
+
+ACTING = {"route_only": False, "may_act": True}
+"""The decision keys of a row written by a panel acting on triage."""
+
+
+def test_a_skipped_run_is_labelled_skipped_and_is_not_unchecked(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = Store(tmp_path)
+    store.panel_run(
+        "run-skip", 0.01, reviewed=False, decision={**ACTING, "skip": True, "sampled": False}
+    )
+    store.panel_run("run-full", 0.9, decision=ACTING, severities=("minor",))
+    manifest = _gated_manifest(tmp_path)
+    code, out, _ = _run(store, capsys, manifest=manifest)
+    assert code == ExitCode.OK
+    (line,) = [line for line in out.splitlines() if line.endswith("  run-skip")]
+    assert line.split()[3] == "skipped"
+    assert "have no panel output to check" not in out
+    assert "1 runs skipped by triage; 0 sampled would-skip runs got the full panel" in out
+    code, out, _ = _run(store, capsys, "--json", manifest=manifest)
+    report = json.loads(out)
+    assert report["skipped"] == ["run-skip"] and report["unchecked"] == []
+    assert report["sampled"] == []
+    (run,) = report["would_skip"]
+    assert (run["route_only"], run["sampled"], run["skipped"]) == (False, False, True)
+
+
+def test_sampled_runs_are_listed_with_their_worst_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = Store(tmp_path)
+    sampled = {**ACTING, "skip": True, "sampled": True}
+    store.panel_run("run-s1", 0.01, decision=sampled, severities=("minor",))
+    store.panel_run("run-s2", 0.02, decision=sampled, judge=("info",))
+    code, out, _ = _run(store, capsys, manifest=_gated_manifest(tmp_path))
+    assert code == ExitCode.OK
+    (line,) = [line for line in out.splitlines() if "run-s1" in line]
+    assert line.endswith("  run-s1  (sampled)") and line.split()[3] == "minor"
+    assert "0 runs skipped by triage; 2 sampled would-skip runs got the full panel, " in out
+    assert "worst finding minor" in out
+    code, out, _ = _run(store, capsys, "--json", manifest=_gated_manifest(tmp_path))
+    report = json.loads(out)
+    assert [run["pipeline_run_id"] for run in report["sampled"]] == ["run-s1", "run-s2"]
+    assert all(run["sampled"] and not run["skipped"] for run in report["sampled"])
+    assert report["skipped"] == []
+
+
+def test_fail_on_major_fails_on_a_sampled_run_with_a_major_finding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = Store(tmp_path)
+    store.panel_run(
+        "run-drift", 0.01, decision={**ACTING, "skip": True, "sampled": True}, judge=("major",)
+    )
+    manifest = _gated_manifest(tmp_path)
+    code, out, _ = _run(store, capsys, manifest=manifest)
+    assert code == ExitCode.OK
+    code, out, err = _run(store, capsys, "--fail-on", "major", manifest=manifest)
+    assert code == ExitCode.ERROR
+    assert "run-drift" in out.split("FAIL:")[1]
+    assert "1 would-skip runs have a major finding or worse" in err
+
+
+def test_shadow_window_rows_report_as_before(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = Store(tmp_path)
+    store.panel_run("run-old", 0.01, severities=("minor",))
+    code, out, _ = _run(store, capsys, manifest=_gated_manifest(tmp_path))
+    assert code == ExitCode.OK
+    assert "skipped by triage" not in out and "(sampled)" not in out
+    code, out, _ = _run(store, capsys, "--json", manifest=_gated_manifest(tmp_path))
+    report = json.loads(out)
+    assert report["skipped"] == [] and report["sampled"] == []
+    (run,) = report["would_skip"]
+    assert (run["route_only"], run["sampled"], run["skipped"]) == (True, False, False)
+
+
+def test_a_row_without_the_route_only_key_counts_as_route_only(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = Store(tmp_path)
+    store.panel_run("run-bare", 0.01, reviewed=False, decision={"route_only": None, "skip": True})
+    code, out, _ = _run(store, capsys, "--json", manifest=_gated_manifest(tmp_path))
+    report = json.loads(out)
+    assert code == ExitCode.OK
+    assert report["unchecked"] == ["run-bare"] and report["skipped"] == []

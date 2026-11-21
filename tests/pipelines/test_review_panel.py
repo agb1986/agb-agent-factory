@@ -418,7 +418,8 @@ def test_review_json_prints_one_document_and_the_prose_goes_to_stderr(
     captured = capsys.readouterr()
     document = json.loads(captured.out)
     assert document["ship"] is True
-    assert document["total_cost_usd"] == 1.25
+    # The fake triage routes to code and security, so perf-reviewer does not run.
+    assert document["total_cost_usd"] == 1.0
     assert document["pipeline_run_id"] == cli["runner"].calls[0]["pipeline_run_id"]
     assert "do not ship" not in captured.err and "ship: weighted score" in captured.err
 
@@ -447,9 +448,20 @@ def test_a_negative_result_still_prints_its_document_and_exits_1(
 def test_reviewers_flag_runs_the_named_subset(
     capsys: pytest.CaptureFixture[str], cli: dict[str, FakeRunner], repo: Path
 ) -> None:
-    assert main(_review_args(repo, "--json", "--reviewers", "code-reviewer,perf-reviewer")) == 0
+    # Triage acts inside the panel `--reviewers` names, so --no-triage runs exactly those.
+    argv = _review_args(repo, "--json", "--reviewers", "code-reviewer,perf-reviewer", "--no-triage")
+    assert main(argv) == 0
     document = json.loads(capsys.readouterr().out)
     assert [r["agent"] for r in document["reviewers"]] == ["code-reviewer", "perf-reviewer"]
+
+
+def test_reviewers_flag_is_narrowed_by_the_triage_route(
+    capsys: pytest.CaptureFixture[str], cli: dict[str, FakeRunner], repo: Path
+) -> None:
+    assert main(_review_args(repo, "--json", "--reviewers", "code-reviewer,perf-reviewer")) == 0
+    document = json.loads(capsys.readouterr().out)
+    assert [r["agent"] for r in document["reviewers"]] == ["code-reviewer"]
+    assert document["triage"]["outcome"] == "routed"
 
 
 def test_a_failed_reviewer_is_in_the_document(
@@ -463,7 +475,7 @@ def test_a_failed_reviewer_is_in_the_document(
         "run",
         FakeRunner(failing={"perf-reviewer": _refusal("no")}),
     )
-    assert main(_review_args(repo, "--json")) == ExitCode.OK
+    assert main(_review_args(repo, "--json", "--no-triage")) == ExitCode.OK
     reviewers = {r["agent"]: r for r in json.loads(capsys.readouterr().out)["reviewers"]}
     assert reviewers["perf-reviewer"]["status"] == "failed"
 

@@ -22,15 +22,6 @@ from registry.jev_spec import (
     ProbabilityGate,
 )
 
-ROUTE_ONLY = True
-"""While true, a pipeline logs the `Decision` and still runs everything.
-
-Skipping a review or narrowing the reviewers needs calibrated thresholds, two weeks of shadow mode
-and a measured recall on risky diffs (#20). Until then the decision is information only: the review
-panel logs it and runs every selected reviewer. #20 turns this off together with the code that acts
-on `skip` and `route`; the panel refuses to run with the constant off until that code exists.
-"""
-
 TRUNCATED = "truncated"
 """`Decision.reason` when the Jev input was cut and the answers cannot be trusted to skip."""
 

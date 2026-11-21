@@ -3,8 +3,8 @@
 Skipped unless `TYPESAFE_API_KEY` is set. The reviewers run on a fake runner, so no Anthropic key or
 spend is involved; only the Jev calls are real, triage's and the judge gate's (#19), and the checks
 read triage's rows alone. It checks what holds whatever the model answers: the decision is logged
-in a trace row under the pipeline run id, every reviewer still runs because triage is route only
-(#18), the Jev cost is in the pipeline total, and `skip` agrees with the `diff-triage` skip gate
+in a trace row under the pipeline run id, every reviewer still runs because this caller does not
+let triage act (only `factory review` does, #20), the Jev cost is in the pipeline total, and `skip` agrees with the `diff-triage` skip gate
 (#20): true only when `needs_review` is below the gate's value and nothing escalates.
 The pinned model id is checked through the response's `model` field in the Jev run's trace row,
 because `GET /v1/models` lists only the aliases (docs/CONVENTIONS.md).
@@ -61,9 +61,15 @@ def test_the_docs_only_diff_is_triaged_logged_and_still_reviewed(tmp_path: Path)
     (jev_run,) = [row for row in rows if row[0] != "triage:decision"]
     assert json.loads(jev_run[4])["model"] == panel.triage.model
 
-    # route only: the decision is information, every reviewer ran
+    # the manifest lets triage act, but this caller does not, so the run is route only and every
+    # reviewer ran
     assert runner.reviewers_called() == {name for name, _ in REVIEWERS}
-    assert result.to_json()["triage"]["route_only"] is True
+    document = result.to_json()["triage"]
+    assert (document["route_only"], document["may_act"], document["outcome"]) == (
+        True,
+        False,
+        "full",
+    )
 
     # the gates in the manifest, not the model, decide skip; an escalation or a cut input clears it
     gate = skip_gate(panel.triage)

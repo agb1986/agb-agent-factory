@@ -1,5 +1,6 @@
 """Tests for triage in the review panel and for `factory triage`, with fake Jev and agent runners."""
 
+import dataclasses
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -102,10 +103,10 @@ def _triage_rows(trace: RecordingTrace) -> list[TraceRow]:
 # --- the panel resolves triage
 
 
-def test_the_panel_pins_diff_triage_to_the_0_1_range(panel: Panel) -> None:
+def test_the_panel_pins_diff_triage_to_the_0_4_range(panel: Panel) -> None:
     assert panel.triage is not None
-    assert panel.triage.address == "diff-triage@0.3.0"
-    assert review_panel.TRIAGE == ("diff-triage", "^0.3")
+    assert panel.triage.address == "diff-triage@0.4.0"
+    assert review_panel.TRIAGE == ("diff-triage", "^0.4")
 
 
 def test_triage_false_leaves_the_triage_agent_out() -> None:
@@ -122,15 +123,17 @@ def test_changed_files_come_from_the_diff_headers() -> None:
     assert changed_files(diff) == ["new.py", "dir/b.md"]
 
 
-# --- route only
+# --- route only, the default for every caller but `factory review`
 
 
-def test_route_only_runs_every_reviewer_although_the_decision_says_skip(
+def test_a_caller_that_does_not_act_runs_every_reviewer_although_the_decision_says_skip(
     skipping_panel: Panel, repo: Path, trace: RecordingTrace
 ) -> None:
     jev = FakeJev(SKIPPABLE)
     result, runner = _run(skipping_panel, repo, trace, jev)
-    assert gates.ROUTE_ONLY is True
+    assert result.triage.route_only is True
+    assert result.triage.may_act is False
+    assert result.triage.outcome == "full"
     assert result.triage.decision == gates.Decision(
         skip=True, escalate=False, route=("code-reviewer", "security-reviewer"), reason="calm"
     )
@@ -144,7 +147,7 @@ def test_the_decision_and_probabilities_are_logged_in_a_trace_row(
     _run(skipping_panel, repo, trace, FakeJev(SKIPPABLE))
     (row,) = _triage_rows(trace)
     assert row.kind == "jev"
-    assert row.agent_ref == "diff-triage@0.3.0"
+    assert row.agent_ref == "diff-triage@0.4.0"
     assert row.pipeline_run_id == RUN_ID
     assert row.decision_json == {
         "skip": True,
@@ -152,6 +155,8 @@ def test_the_decision_and_probabilities_are_logged_in_a_trace_row(
         "route": ["code-reviewer", "security-reviewer"],
         "reason": "calm",
         "route_only": True,
+        "may_act": False,
+        "sampled": False,
         "truncated": False,
     }
     assert row.output_json == SKIPPABLE
@@ -164,7 +169,7 @@ def test_triage_is_called_with_the_files_and_the_diff_under_the_pipeline_run_id(
     jev = FakeJev()
     _run(panel, repo, trace, jev)
     (call,) = jev.calls_to("diff-triage")
-    assert call["spec"].address == "diff-triage@0.3.0"
+    assert call["spec"].address == "diff-triage@0.4.0"
     assert call["pipeline_run_id"] == RUN_ID
     assert call["payload"]["files"].splitlines() == changed_files(call["payload"]["diff"])
     assert call["payload"]["files"]
@@ -197,7 +202,8 @@ def test_the_document_carries_the_triage_entry(
     result, _ = _run(skipping_panel, repo, trace, FakeJev(SKIPPABLE))
     document = json.loads(json.dumps(result.to_json()))
     assert list(document["triage"]) == [
-        "status", "ref", "decision", "probabilities", "truncated", "route_only", "error"
+        "status", "ref", "decision", "probabilities", "truncated", "route_only", "may_act",
+        "sampled", "outcome", "error",
     ]  # fmt: skip
     assert document["triage"]["status"] == "ok"
     assert document["triage"]["decision"]["skip"] is True
@@ -212,14 +218,289 @@ def test_the_text_report_says_the_reviewers_ran_anyway(
     assert "route only, every reviewer ran" in result.text()
 
 
-def test_the_panel_refuses_to_run_once_route_only_is_off_and_nothing_acts_on_it(
-    panel: Panel, repo: Path, trace: RecordingTrace, monkeypatch: pytest.MonkeyPatch
+def _act(
+    panel: Panel,
+    repo: Path,
+    trace: Trace,
+    jev: FakeJev,
+    *,
+    sampled: bool = False,
+    runner: FakeRunner | None = None,
+) -> tuple[PanelResult, FakeRunner, list[bool]]:
+    """Run the panel the way `factory review` does, with a sampler that answers `sampled` and
+    records each draw."""
+    runner = runner or FakeRunner()
+    draws: list[bool] = []
+
+    def sample() -> bool:
+        draws.append(sampled)
+        return sampled
+
+    result = run_panel(
+        panel,
+        repo,
+        "base",
+        "head",
+        trace,
+        runner=runner,
+        jev_runner=jev,
+        pipeline_run_id=RUN_ID,
+        act_on_triage=True,
+        sample=sample,
+    )
+    return result, runner, draws
+
+
+# --- acting on a skip
+
+
+def test_an_acting_skip_runs_no_reviewer_no_judge_gate_and_no_judge(
+    skipping_panel: Panel, repo: Path, trace: RecordingTrace
 ) -> None:
-    monkeypatch.setattr(review_panel, "ROUTE_ONLY", False)
-    runner = FakeRunner()
-    with pytest.raises(NotImplementedError, match="#20"):
-        _run(panel, repo, trace, FakeJev(), runner)
+    jev = FakeJev(SKIPPABLE)
+    result, runner, draws = _act(skipping_panel, repo, trace, jev)
+    assert draws == [False]
     assert runner.calls == []
+    assert [call["spec"].name for call in jev.calls] == ["diff-triage"]
+    assert result.skipped is True
+    assert result.ship is True
+    assert result.reviewers == ()
+    assert result.judgement is None
+    assert result.assessment is None
+    assert result.triage.outcome == "skipped"
+    assert result.triage.route_only is False
+    assert result.triage.may_act is True
+    assert result.gate.status == "triage_skipped"
+
+
+def test_an_acting_skip_is_logged_as_allowed_to_act_and_not_sampled(
+    skipping_panel: Panel, repo: Path, trace: RecordingTrace
+) -> None:
+    _act(skipping_panel, repo, trace, FakeJev(SKIPPABLE))
+    (row,) = _triage_rows(trace)
+    assert row.decision_json is not None
+    assert (
+        row.decision_json["skip"],
+        row.decision_json["route_only"],
+        row.decision_json["may_act"],
+        row.decision_json["sampled"],
+    ) == (True, False, True, False)
+
+
+def test_a_skipped_run_costs_only_the_triage_call(
+    skipping_panel: Panel, repo: Path, trace: RecordingTrace
+) -> None:
+    result, _, _ = _act(skipping_panel, repo, trace, FakeJev(SKIPPABLE, cost_usd=0.01))
+    assert result.total_cost_usd == pytest.approx(0.01)
+
+
+def test_a_skipped_run_says_so_in_the_document(
+    skipping_panel: Panel, repo: Path, trace: RecordingTrace
+) -> None:
+    result, _, _ = _act(skipping_panel, repo, trace, FakeJev(SKIPPABLE))
+    document = json.loads(json.dumps(result.to_json()))
+    assert document["reviewers"] == []
+    assert document["judge"] is None
+    assert document["weighted_score"] is None
+    assert document["ship"] is True
+    assert document["judge_gate"]["status"] == "triage_skipped"
+    assert document["triage"]["outcome"] == "skipped"
+    assert document["triage"]["sampled"] is False
+
+
+def test_a_skipped_run_never_reads_as_reviewers_that_found_nothing(
+    skipping_panel: Panel, repo: Path, trace: RecordingTrace
+) -> None:
+    result, _, _ = _act(skipping_panel, repo, trace, FakeJev(SKIPPABLE))
+    text = result.text()
+    assert "skipped the review, no reviewer ran" in text
+    assert "judge gate: not run, triage skipped the review" in text
+    assert (
+        "ship: triage skipped the review (calm: needs_review p=0.020); no reviewer or judge ran. "
+        "Rerun with --no-triage to force a review"
+    ) in text
+
+
+def test_the_real_skip_gate_skips_too(panel: Panel, repo: Path, trace: RecordingTrace) -> None:
+    result, runner, _ = _act(panel, repo, trace, FakeJev(SKIPPABLE))
+    assert result.triage.decision is not None
+    assert result.triage.decision.reason == "low_risk"
+    assert result.skipped is True
+    assert runner.calls == []
+    assert "low_risk: needs_review p=0.020" in result.text()
+
+
+# --- the sample of would-skip runs
+
+
+def test_the_sample_rate_is_five_percent() -> None:
+    assert review_panel.SKIP_SAMPLE_RATE == 0.05
+
+
+@pytest.mark.parametrize(("draw", "sampled"), [(0.0, True), (0.049, True), (0.05, False)])
+def test_draw_sample_is_true_below_the_rate(
+    monkeypatch: pytest.MonkeyPatch, draw: float, sampled: bool
+) -> None:
+    monkeypatch.setattr(review_panel.random, "random", lambda: draw)
+    assert review_panel.draw_sample() is sampled
+
+
+def test_a_sampled_skip_runs_the_full_panel(
+    skipping_panel: Panel, repo: Path, trace: RecordingTrace
+) -> None:
+    jev = FakeJev(SKIPPABLE)
+    result, runner, draws = _act(skipping_panel, repo, trace, jev, sampled=True)
+    assert draws == [True]
+    assert runner.reviewers_called() == ALL_REVIEWERS
+    assert [call["spec"].name for call in runner.calls].count("judge") == 1
+    assert result.skipped is False
+    assert result.triage.sampled is True
+    assert result.triage.outcome == "full"
+    assert "sampled, the full panel ran to check the skip" in result.text()
+    (row,) = _triage_rows(trace)
+    assert row.decision_json is not None
+    assert row.decision_json["sampled"] is True
+
+
+def test_the_sample_is_drawn_only_for_a_run_that_would_skip(
+    panel: Panel, repo: Path, trace: RecordingTrace
+) -> None:
+    result, _, draws = _act(panel, repo, trace, FakeJev(), sampled=True)
+    assert draws == []
+    assert result.triage.sampled is False
+
+
+def test_a_caller_that_does_not_act_draws_no_sample(
+    skipping_panel: Panel, repo: Path, trace: RecordingTrace
+) -> None:
+    draws: list[bool] = []
+    run_panel(
+        skipping_panel,
+        repo,
+        "base",
+        "head",
+        trace,
+        runner=FakeRunner(),
+        jev_runner=FakeJev(SKIPPABLE),
+        pipeline_run_id=RUN_ID,
+        sample=lambda: draws.append(True) or True,
+    )
+    assert draws == []
+
+
+# --- acting on a route
+
+
+def test_an_acting_route_runs_only_the_reviewers_it_names(
+    panel: Panel, repo: Path, trace: RecordingTrace
+) -> None:
+    jev = FakeJev()
+    result, runner, _ = _act(panel, repo, trace, jev)
+    assert result.triage.decision is not None
+    assert result.triage.decision.route == ("code-reviewer", "security-reviewer")
+    assert runner.reviewers_called() == {"code-reviewer", "security-reviewer"}
+    assert [reviewer.spec.name for reviewer in result.reviewers] == [
+        "code-reviewer",
+        "security-reviewer",
+    ]
+    assert result.triage.outcome == "routed"
+    assert "only the reviewers on the route ran" in result.text()
+    (judge_call,) = [call for call in runner.calls if call["spec"].name == "judge"]
+    assert "perf-reviewer" not in json.dumps(judge_call["payload"])
+    assert "security-reviewer" in json.dumps(judge_call["payload"])
+
+
+def test_a_route_to_all_reviewers_runs_every_reviewer(
+    panel: Panel, repo: Path, trace: RecordingTrace
+) -> None:
+    answers = {**TRIAGE_ANSWERS, "reviewers": {**TRIAGE_ANSWERS["reviewers"], "answer": "all"}}
+    result, runner, _ = _act(panel, repo, trace, FakeJev(answers))
+    assert runner.reviewers_called() == ALL_REVIEWERS
+    assert result.triage.outcome == "full"
+    assert "; every reviewer ran" in result.text()
+
+
+def test_an_escalation_runs_every_reviewer_when_acting(
+    panel: Panel, repo: Path, trace: RecordingTrace
+) -> None:
+    unsure = {**TRIAGE_ANSWERS["reviewers"], "confidence": 0.3}
+    result, runner, draws = _act(
+        panel, repo, trace, FakeJev({**TRIAGE_ANSWERS, "reviewers": unsure})
+    )
+    assert result.triage.decision is not None
+    assert result.triage.decision.escalate is True
+    assert runner.reviewers_called() == ALL_REVIEWERS
+    assert result.triage.outcome == "full"
+    assert draws == []
+
+
+def test_a_jev_failure_runs_every_reviewer_when_acting(
+    panel: Panel, repo: Path, trace: RecordingTrace
+) -> None:
+    result, runner, _ = _act(panel, repo, trace, FakeJev(error=RuntimeError("boom")))
+    assert result.triage.status == "jev_error"
+    assert runner.reviewers_called() == ALL_REVIEWERS
+    assert result.skipped is False
+
+
+def test_a_truncated_input_runs_every_reviewer_when_acting(
+    skipping_panel: Panel, repo: Path, trace: RecordingTrace
+) -> None:
+    result, runner, draws = _act(skipping_panel, repo, trace, FakeJev(SKIPPABLE, truncated=True))
+    assert runner.reviewers_called() == ALL_REVIEWERS
+    assert result.skipped is False
+    assert draws == []
+
+
+def test_a_manifest_without_the_flag_never_acts(
+    skipping_panel: Panel, repo: Path, trace: RecordingTrace
+) -> None:
+    assert skipping_panel.triage is not None
+    flag_off = skipping_panel.triage.model_copy(update={"act_on_decision": False})
+    panel = Panel(skipping_panel.reviewers, skipping_panel.judge, flag_off)
+    result, runner, draws = _act(panel, repo, trace, FakeJev(SKIPPABLE))
+    assert runner.reviewers_called() == ALL_REVIEWERS
+    assert result.triage.route_only is True
+    assert result.triage.may_act is True
+    assert draws == []
+    assert "route only, every reviewer ran" in result.text()
+
+
+def _triaged(route: tuple[str, ...], **changes: Any) -> review_panel.TriageResult:
+    decision = gates.Decision(skip=False, escalate=False, route=route, reason="r")
+    result = review_panel.TriageResult("ok", None, decision, {}, False, None, route_only=False)
+    return dataclasses.replace(result, **changes)
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        (),
+        ("code-reviewer", "nobody"),
+        ("code-reviewer", "security-reviewer", "perf-reviewer"),
+    ],
+    ids=["empty", "unknown", "all"],
+)
+def test_select_runs_every_reviewer_unless_the_route_is_a_proper_subset(
+    panel: Panel, route: tuple[str, ...]
+) -> None:
+    assert _triaged(route).select(panel.reviewers) == panel.reviewers
+
+
+def test_select_keeps_the_panel_order(panel: Panel) -> None:
+    chosen = _triaged(("perf-reviewer", "code-reviewer")).select(panel.reviewers)
+    assert [spec.name for spec in chosen] == ["code-reviewer", "perf-reviewer"]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"route_only": True}, {"status": "jev_error"}, {"truncated": True}, {"sampled": True}],
+    ids=["route-only", "jev-error", "truncated", "sampled"],
+)
+def test_select_runs_every_reviewer_when_the_route_may_not_be_trusted(
+    panel: Panel, changes: dict[str, Any]
+) -> None:
+    assert _triaged(("code-reviewer",), **changes).select(panel.reviewers) == panel.reviewers
 
 
 # --- truncation
@@ -330,6 +611,9 @@ def test_a_panel_without_triage_never_calls_jev(repo: Path, trace: RecordingTrac
         "probabilities": None,
         "truncated": False,
         "route_only": True,
+        "may_act": False,
+        "sampled": False,
+        "outcome": "full",
         "error": None,
     }
     assert result.text().splitlines()[1] == "triage: disabled"
@@ -407,7 +691,7 @@ def test_triage_json_prints_one_document_and_runs_no_reviewer(
     document = json.loads(captured.out)
     assert list(document) == [
         "pipeline_run_id", "base", "head", "status", "ref", "decision", "probabilities",
-        "truncated", "route_only", "error",
+        "truncated", "route_only", "may_act", "sampled", "outcome", "error",
     ]  # fmt: skip
     assert document["decision"]["route"] == ["code-reviewer", "security-reviewer"]
     assert document["probabilities"] == TRIAGE_ANSWERS
@@ -459,3 +743,32 @@ def test_triage_with_an_unknown_ref_exits_3(
 
 def test_triage_missing_flags_exit_2(repo: Path) -> None:
     assert main(["triage", str(repo), "--base", "base"]) == ExitCode.USAGE
+
+
+def test_review_acts_on_a_skip_and_exits_0(
+    capsys: pytest.CaptureFixture[str],
+    cli: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    repo: Path,
+) -> None:
+    monkeypatch.setattr(review_panel, "run_jev", FakeJev(SKIPPABLE))
+    monkeypatch.setattr(review_panel.random, "random", lambda: 0.5)
+    assert main(_args("review", repo, "--json")) == ExitCode.OK
+    document = json.loads(capsys.readouterr().out)
+    assert document["triage"]["outcome"] == "skipped"
+    assert document["triage"]["may_act"] is True
+    assert document["reviewers"] == []
+    assert document["ship"] is True
+    assert cli["runner"].calls == []
+
+
+def test_review_no_triage_runs_every_reviewer_on_a_diff_triage_would_skip(
+    capsys: pytest.CaptureFixture[str],
+    cli: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    repo: Path,
+) -> None:
+    monkeypatch.setattr(review_panel, "run_jev", FakeJev(SKIPPABLE))
+    assert main(_args("review", repo, "--json", "--no-triage")) == ExitCode.OK
+    assert json.loads(capsys.readouterr().out)["triage"]["status"] == "disabled"
+    assert len(cli["runner"].calls) == 4
