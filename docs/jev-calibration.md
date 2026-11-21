@@ -2,7 +2,7 @@
 
 How the diff-triage skip threshold is calibrated (#20): the labelled diffs, the sweep that picks the threshold, how the result goes into the manifest, and the shadow period before anything is skipped. Every fact below was checked on 2026-10-27 against the code and files linked in its section.
 
-The live steps ran on 2026-10-27: the panel labelling pass over the `needs_panel` rows, the live model-id check and the real sweep. [Results](#results) records the sweep. The sweep ran again on 2026-10-30 for diff-triage@0.3.0, see [the `unsure` gate yields to `low_risk`](#the-unsure-gate-yields-to-low_risk-030). [Shadow results](#shadow-results) records the shadow period, which started on 2026-10-30.
+The live steps ran on 2026-10-27: the panel labelling pass over the `needs_panel` rows, the live model-id check and the real sweep. [Results](#results) records the sweep. The sweep ran again on 2026-10-30 for diff-triage@0.3.0, see [the `unsure` gate yields to `low_risk`](#the-unsure-gate-yields-to-low_risk-030). [Shadow results](#shadow-results) records the shadow period, which ran from 2026-10-30 to 2026-11-20. On 2026-11-21 the owner turned route-only off: diff-triage@0.4.0 sets `act_on_decision`, and `factory review` acts on its skip and route, see [After the shadow period](#after-the-shadow-period).
 
 ## Dataset
 
@@ -121,15 +121,15 @@ When a threshold reaches the recall, `calibrate.py` prints the gate to paste und
 
 Replace the placeholder comment above `gates:` at the same time.
 
-A gate alters behaviour, so it needs a minor version bump, 0.1.0 to 0.2.0 (docs/CONVENTIONS.md, "Agent address"). `scripts/check_version_bump.py` compares only the prompt, the schemas and the `questions` block, so it does not catch a gate change made without a bump. The agent has one version directory, so after the bump nothing matches `diff-triage@^0.1`, and the bump must also change the range to `^0.2` in `TRIAGE` in [pipelines/review_panel.py](../pipelines/review_panel.py) and in [tests/live/test_jev_live.py](../tests/live/test_jev_live.py). The 2026-10-27 gate was committed at 0.1.0 and the bump follows in its own commit, so the two can merge back to back; `ROUTE_ONLY` keeps the gate from skipping anything in between. [tests/live/test_triage_live.py](../tests/live/test_triage_live.py) asserts that the sample diff's `skip` matches the manifest's skip gate: below the threshold, not escalated and not truncated.
+A gate alters behaviour, so it needs a minor version bump, 0.1.0 to 0.2.0 (docs/CONVENTIONS.md, "Agent address"). `scripts/check_version_bump.py` compares only the prompt, the schemas and the `questions` block, so it does not catch a gate change made without a bump. The agent has one version directory, so after the bump nothing matches `diff-triage@^0.1`, and the bump must also change the range to `^0.2` in `TRIAGE` in [pipelines/review_panel.py](../pipelines/review_panel.py) and in [tests/live/test_jev_live.py](../tests/live/test_jev_live.py). The 2026-10-27 gate was committed at 0.1.0 and the bump follows in its own commit, so the two can merge back to back; the gate skipped nothing in between, because the panel was route only until diff-triage@0.4.0. [tests/live/test_triage_live.py](../tests/live/test_triage_live.py) asserts that the sample diff's `skip` matches the manifest's skip gate: below the threshold, not escalated and not truncated.
 
-The panel resolves with `published_only=True`. Until `factory publish-check diff-triage@^0.3` publishes 0.3.0, a panel run stops with exit 3 (`NotPublished`) unless it is given `--allow-unpublished`, so publish right after the merge.
+The panel resolves with `published_only=True`. Until `factory publish-check diff-triage@^0.4` publishes 0.4.0, a panel run stops with exit 3 (`NotPublished`) unless it is given `--allow-unpublished`, so publish right after the merge.
 
 ## Shadow mode
 
-Sources: [scripts/shadow_report.py](../scripts/shadow_report.py), `ROUTE_ONLY` in [runtime/gates.py](../runtime/gates.py).
+Sources: [scripts/shadow_report.py](../scripts/shadow_report.py), `run_triage` in [pipelines/review_panel.py](../pipelines/review_panel.py).
 
-`ROUTE_ONLY` stays `True` for the whole shadow period. The review panel triages every diff, writes the `Decision` and the probabilities to a `triage:decision` trace row, and still runs every reviewer. The 14-day clock starts on the day the calibrated gate is merged and published.
+During the shadow period the panel was route only: `runtime.gates.ROUTE_ONLY`, since removed, was `True`. The review panel triages every diff, writes the `Decision` and the probabilities to a `triage:decision` trace row, and still runs every reviewer. The 14-day clock starts on the day the calibrated gate is merged and published.
 
 `scripts/shadow_report.py` reads those rows for a range of UTC days (default: the 14 days ending today) and decides each diff again at the skip threshold, the manifest's skip gate by default or `--threshold`. For every diff that would have been skipped it reports the most severe finding the panel's reviewers and judge made under the same pipeline run id, and what the run cost. Runs of `calibrate.py`, whose ids start with `calibrate-`, are left out. A row whose answers do not fit the manifest's questions, such as one written by another version of the agent, is counted as unreadable. The store is opened read-only.
 
@@ -161,13 +161,16 @@ What the window measures is panel runs, so the evidence only exists if `factory 
 
 ## Shadow results
 
-Started 2026-10-30. `factory publish-check diff-triage@^0.3` passed that day at commit b5040e5 (7 of 7, recall on risky cases 1.0), which publishes diff-triage@0.3.0 with the `low_risk` skip gate at 0.5 and `unsure` yielding to it. `ROUTE_ONLY` stays on. The 14 days end at the earliest on 2026-11-13. The first report, run by hand on 2026-10-30 against the shared store (`FACTORY_TRACE_DB=~/.local/share/factory/traces.duckdb`), covered 2026-10-17 to 2026-10-30 and found no panel runs, so there is nothing to record yet; the sweep's own runs are left out by their `calibrate-` run ids. The final report, run as in [Running it once](#running-it-once) on or after 2026-11-13, goes in the table below.
+Started 2026-10-30. `factory publish-check diff-triage@^0.3` passed that day at commit b5040e5 (7 of 7, recall on risky cases 1.0), which publishes diff-triage@0.3.0 with the `low_risk` skip gate at 0.5 and `unsure` yielding to it. The panel stayed route only. The 14 days end at the earliest on 2026-11-13. The first report, run by hand on 2026-10-30 against the shared store (`FACTORY_TRACE_DB=~/.local/share/factory/traces.duckdb`), covered 2026-10-17 to 2026-10-30 and found no panel runs, so there is nothing to record yet; the sweep's own runs are left out by their `calibrate-` run ids. The final report, run as in [Running it once](#running-it-once) on or after 2026-11-13, goes in the table below.
 
 | Window | Panel runs | Would skip | Worst finding | Note |
 | --- | --- | --- | --- | --- |
 | 2026-10-17 to 2026-10-30 | 0 | 0 | none | first report, by hand, before any review ran |
+| 2026-10-30 to 2026-11-20 | 17 | 2 | none | end of window: two dependency-bump pull requests, neither with a finding; 13 reviewed, 2 truncated; exit 0 |
 
-Record the end-of-window report above, and any threshold change with the day the clock restarted.
+The end-of-window report ran on 2026-11-20 as `scripts/shadow_report.py --since 2026-10-30 --fail-on major` against the shared store. It is thin evidence: two would-skip diffs, both dependency bumps, say little about how the gate treats a risky diff that looks calm. The owner chose on 2026-11-21 to turn route-only off on that evidence, with the permanent sample of [After the shadow period](#after-the-shadow-period) to catch a drift that two diffs could not show.
+
+Record any later threshold change here, with the day the clock restarted.
 
 ## Measured against --no-triage
 
@@ -208,13 +211,45 @@ It exited 0: every run went through and no would-skip fixture had a `major` find
 | Would-skip fixtures with a `major` finding or worse | 0 |
 | Measurement spend | $1.7945 |
 
-`ROUTE_ONLY` still holds, so the with-triage runs ran every reviewer: each of the four reviewers and the judge has 30 rows in the store, one per run, and the $0.0671 difference is run-to-run variance, not triage. The saving is therefore projected: the four skipped fixtures' reviewer and judge cost in their with-triage runs, $0.2565, less Jev's cost over all 15 fixtures. That is 28% of the with-triage spend, against a Jev overhead of 0.05%. Most of it is clean-refactor, whose with-triage run cost $0.1241 against $0.0578 for the identical panel without triage; priced from the no-triage runs instead, the four skips come to $0.1932 and the saving to $0.1927, 22% of the no-triage spend.
+The panel was route only then, so the with-triage runs ran every reviewer: each of the four reviewers and the judge has 30 rows in the store, one per run, and the $0.0671 difference is run-to-run variance, not triage. The saving is therefore projected: the four skipped fixtures' reviewer and judge cost in their with-triage runs, $0.2565, less Jev's cost over all 15 fixtures. That is 28% of the with-triage spend, against a Jev overhead of 0.05%. Most of it is clean-refactor, whose with-triage run cost $0.1241 against $0.0578 for the identical panel without triage; priced from the no-triage runs instead, the four skips come to $0.1932 and the saving to $0.1927, 22% of the no-triage spend.
 
-Every fixture with a `major` or `blocker` finding was reviewed: the three blockers (hardcoded-secret, quadratic-loop, sql-injection) and the four off-by-one and n-plus-one majors all went to the panel, and docs-only escalated as `unsure`. Nine of the eleven reviewed fixtures had a narrower route; they take effect only once `ROUTE_ONLY` is off, so this run does not measure what routing saves. `FACTORY_TRACE_DB=data/triage-saving.duckdb factory cost --since 2026-10-27 --by kind` over the same store shows the split: `claude` 120 runs, $1.7941; `jev` 30 rows, $0.0005, which are the 15 triage calls and their 15 zero-cost `triage:decision` rows.
+Every fixture with a `major` or `blocker` finding was reviewed: the three blockers (hardcoded-secret, quadratic-loop, sql-injection) and the four off-by-one and n-plus-one majors all went to the panel, and docs-only escalated as `unsure`. Nine of the eleven reviewed fixtures had a narrower route; they took effect only once route-only was turned off in diff-triage@0.4.0, so this run does not measure what routing saves. `FACTORY_TRACE_DB=data/triage-saving.duckdb factory cost --since 2026-10-27 --by kind` over the same store shows the split: `claude` 120 runs, $1.7941; `jev` 30 rows, $0.0005, which are the 15 triage calls and their 15 zero-cost `triage:decision` rows.
 
 ## After the shadow period
 
-Stage 4 of #20, not built yet: once 14 days pass with no would-skip blocker, a manifest flag turns `ROUTE_ONLY` off for diff-triage, and the panel acts on `skip` and `route`. A permanent 5% random sample of skipped diffs still gets the full panel, so a drift in what Jev skips shows up as findings on sampled diffs rather than as nothing at all.
+Stage 4 of #20, turned on on 2026-11-21 with diff-triage@0.4.0. Sources: `act_on_decision` in [agents/diff-triage/agent.yaml](../agents/diff-triage/agent.yaml), `run_panel` and `SKIP_SAMPLE_RATE` in [pipelines/review_panel.py](../pipelines/review_panel.py).
+
+### Which runs act
+
+The panel acts on the triage decision only when the manifest sets `act_on_decision: true` and the caller passes `act_on_triage=True` to `run_panel`. Only `factory review` does, with or without `--comment`. The fix, build and hotfix loops review diffs the factory itself wrote, and the skip gate was calibrated on pull request diffs only, so they log the decision with `may_act` false and run every reviewer. `factory review --no-triage` makes no Jev call and runs every selected reviewer, as before. Setting the flag back to false, in a new version, makes `factory review` route only again.
+
+### Skip and route
+
+A skip is honoured only when all of these hold: the flag is on, the caller allows acting, the Jev call succeeded, `decision.skip` is true, nothing escalated, the diff was not truncated and the run was not sampled. Then no reviewer, judge gate or judge runs. The change ships and the command exits 0, and every output says that nobody looked: `triage.outcome` is `skipped`, `reviewers` is empty, `judge` and `weighted_score` are null and `judge_gate.status` is `triage_skipped`; the text report and the `--comment` body name the gate and the probability that skipped and give `--no-triage` as the way to force a review.
+
+A route that names a proper subset of the selected reviewers runs only those, and the judge gate and the judge see only what ran (`triage.outcome` `routed`). A route of `all`, an empty route, a route naming an unknown agent, an escalation, a `jev_error` and a truncated diff all run every selected reviewer.
+
+### The sample
+
+`SKIP_SAMPLE_RATE`, 0.05, of the runs that would skip are drawn at random and get the full panel anyway. It is a code constant, not a manifest field, so no manifest edit can switch the check off. The decision row records `sampled: true`, and the triage line of the report ends with "sampled, the full panel ran to check the skip".
+
+`scripts/shadow_report.py` keeps working after the window. It reads `route_only`, `sampled` and the skip from each decision row. A row with `route_only` true, every shadow-window row included, reports as before. A run the panel skipped shows `skipped` as its worst finding, because there is no panel output to read, and is not counted as unchecked. Sampled runs are marked `(sampled)`, listed under `sampled` in `--json` with their worst finding, and summed in the text report; `--fail-on` applies to them as to any other would-skip run. Run the report over a window long enough to hold a few sampled runs: at 5% that is about 20 would-skip runs per sampled one.
+
+### A sampled major or blocker
+
+A sampled run with a `major` or `blocker` finding is a diff the gate would have let through unreviewed. When the report shows one:
+
+1. Turn the flag off: release a new diff-triage version with `act_on_decision: false`, publish it, and `factory review` is route only again.
+2. Recalibrate as in [Re-running calibration](#re-running-calibration), with the missed diff added to the labels as risky.
+3. Restart the 14-day shadow clock, and turn the flag on again only after a clean end-of-window report.
+
+### A new model id
+
+The threshold belongs to one model id, so a change of `model` in the manifest means re-running calibration and restarting the shadow clock with the flag off, as in [Re-running calibration](#re-running-calibration).
+
+### Publishing
+
+`factory review` resolves `diff-triage@^0.4` with `published_only=True`. Until an operator runs `factory publish-check diff-triage@^0.4` and it passes, `factory review` exits 3 (`NotPublished`) unless it is given `--allow-unpublished` or `--no-triage`.
 
 ## Re-running calibration
 
@@ -224,6 +259,6 @@ The threshold belongs to one model id. When `model` in the manifest changes:
 2. Run the live model-id check: `uv run pytest -m live_jev tests/live/test_jev_live.py`.
 3. Run `scripts/calibrate.py` as in [Method](#method), with `--trace` on a scratch file.
 4. Paste the new gate, bump the version as in [Writing the manifest snippet](#writing-the-manifest-snippet), and record the run under [Results](#results).
-5. Restart the 14-day shadow clock.
+5. Set `act_on_decision: false` in the same version, and restart the 14-day shadow clock.
 
-Re-run it as well when a shadow report shows a would-skip blocker.
+Re-run it as well when a shadow report shows a would-skip blocker, or a sampled run with a `major` or `blocker` finding.

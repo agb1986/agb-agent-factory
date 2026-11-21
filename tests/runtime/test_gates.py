@@ -10,7 +10,6 @@ from registry import JevOutput, JevSpec
 from runtime.gates import (
     JUDGE_GATE,
     NO_GATE,
-    ROUTE_ONLY,
     SKIP_GATE_NAME,
     TRUNCATED,
     Decision,
@@ -131,8 +130,15 @@ def spec() -> JevSpec:
     return _spec()
 
 
-def test_route_only_is_on_until_calibration() -> None:
-    assert ROUTE_ONLY is True
+def test_a_jev_agent_does_not_act_on_its_decision_unless_its_manifest_says_so(
+    spec: JevSpec,
+) -> None:
+    from registry.resolver import resolve
+
+    assert spec.act_on_decision is False
+    triage = resolve("diff-triage", "^0.4")
+    assert isinstance(triage, JevSpec)
+    assert triage.act_on_decision is True
 
 
 def test_a_decision_is_frozen() -> None:
@@ -349,7 +355,7 @@ def _triage_output(spec: JevSpec, p: float, confidence: float) -> JevOutput:
 def test_the_diff_triage_manifest_escalates_on_low_confidence() -> None:
     from registry.resolver import resolve
 
-    triage = resolve("diff-triage", "^0.3")
+    triage = resolve("diff-triage", "^0.4")
     assert isinstance(triage, JevSpec)
     decision = decide(triage, _triage_output(triage, p=0.7, confidence=0.3), False)
     assert decision.escalate is True and decision.skip is False
@@ -360,7 +366,7 @@ def test_the_diff_triage_manifest_escalates_on_low_confidence() -> None:
 def test_the_diff_triage_manifest_skips_low_risk_whatever_the_routing_confidence() -> None:
     from registry.resolver import resolve
 
-    triage = resolve("diff-triage", "^0.3")
+    triage = resolve("diff-triage", "^0.4")
     assert isinstance(triage, JevSpec)
     decision = decide(triage, _triage_output(triage, p=0.02, confidence=0.3), False)
     assert decision.skip is True and decision.escalate is False

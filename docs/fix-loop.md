@@ -33,7 +33,7 @@ Every agent call carries the same `pipeline_run_id` and is charged to the same `
 5. On the host, every path changed in the clone is checked against the same rule, and then the fixer's work is committed.
 6. If the two commits together changed nothing, the run stops with `FixError`.
 7. The clone is reset to the fixer's commit and its untracked and ignored files are deleted (`pipelines.sandbox.clean`), so the suite sees the two commits and nothing an earlier command left behind; a clone that cannot be cleaned stops the run with `ToolExecutionError` (exit 1). Then the whole suite, `python -m pytest -q`, runs over the clone in the sandbox with a 600 s limit (`SUITE_TIMEOUT_S`), container start included. A non-zero exit, 124 for a timeout among them, stops the run with `SuiteFailedError`, whose hint carries the end of the output.
-8. The panel reviews the diff from the head commit to the fixer's commit in the clone: triage in route-only mode, the three reviewers, the judge gate and the judge, as `factory review` runs them.
+8. The panel reviews the diff from the head commit to the fixer's commit in the clone: triage, the three reviewers, the judge gate and the judge, as `factory review` runs them, except that triage is logged and never acted on: every reviewer runs, whatever it decides. The skip gate was calibrated on pull request diffs, not on diffs the factory wrote (#20).
 9. The patch is written only when the panel approves. The report is written whenever the panel ran.
 10. However the run ends, `sandbox.cleanup` kills any container still running over the clone (found by its `factory.sandbox.root` label), and the clone is deleted.
 

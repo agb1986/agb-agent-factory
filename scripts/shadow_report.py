@@ -1,13 +1,19 @@
 """Report what the diff-triage skip gate would have skipped, from the review panel's trace rows.
 
-Usage: `uv run python scripts/shadow_report.py [options]`, run from the repository root. While
-`runtime.gates.ROUTE_ONLY` is on, the review panel triages every diff, logs the `Decision` in a
-`triage:decision` trace row and still runs every reviewer. This script reads those rows for a range
-of UTC days, both ends included, and decides each diff again at the skip threshold: the manifest's
-skip gate by default, or `--threshold`. For every diff that would have been skipped it reports the
-most severe finding the panel's reviewers and judge made under the same pipeline run id, and what
-the run cost. A would-skip diff with a blocker finding means the threshold is too high
-(docs/jev-calibration.md, "Shadow mode").
+Usage: `uv run python scripts/shadow_report.py [options]`, run from the repository root. The
+review panel triages every diff and logs the `Decision` in a `triage:decision` trace row. This
+script reads those rows for a range of UTC days, both ends included, and decides each diff again at
+the skip threshold: the manifest's skip gate by default, or `--threshold`. For every diff that would
+have been skipped it reports the most severe finding the panel's reviewers and judge made under the
+same pipeline run id, and what the run cost. A would-skip diff with a blocker finding means the
+threshold is too high (docs/jev-calibration.md, "Shadow mode").
+
+A row written in the shadow window has `route_only` true: the panel ran every reviewer, so every
+would-skip diff has findings to check. A row written once the panel acts on triage has
+`route_only` false. Its would-skip diffs were skipped, with no panel output and `skipped` in the
+report, unless the row is `sampled`: then the full panel ran to check the skip, and the report lists
+the sampled runs and their worst finding. `--fail-on` applies to the sampled runs as to any other
+would-skip run (docs/jev-calibration.md, "After the shadow period").
 
 Runs of `scripts/calibrate.py`, whose pipeline run ids start with `calibrate-`, are left out. A
 truncated input or a failed Jev call never skips, as in `runtime.gates.decide`. A row whose answers
@@ -81,6 +87,9 @@ class ShadowRun:
     answers are missing or unreadable. `severity` is the most severe finding any panel agent made,
     `None` when there was none, and `reviewed` says whether a reviewer or the judge wrote an output
     under the run at all. `cost_usd` is the whole run and `triage_cost_usd` the triage agent's part.
+    `route_only`, `sampled` and `skipped` come from the decision row: whether the panel logged the
+    decision without acting (true for every shadow-window row, and for a row that does not say),
+    whether the run was drawn for the full panel, and whether the panel skipped the review.
     """
 
     pipeline_run_id: str
@@ -94,6 +103,9 @@ class ShadowRun:
     head: str | None
     cost_usd: float
     triage_cost_usd: float
+    route_only: bool = True
+    sampled: bool = False
+    skipped: bool = False
 
     def at_least(self, severity: str) -> bool:
         """Whether the run has a finding at `severity` or worse."""
@@ -113,6 +125,9 @@ class ShadowRun:
             "head": self.head,
             "cost_usd": self.cost_usd,
             "triage_cost_usd": self.triage_cost_usd,
+            "route_only": self.route_only,
+            "sampled": self.sampled,
+            "skipped": self.skipped,
         }
 
 
@@ -120,8 +135,9 @@ class ShadowRun:
 class Report:
     """Every triaged run in the range at one threshold, and what skipping them would have meant.
 
-    `failing` lists the would-skip runs with a finding at `fail_on` or worse, and `unchecked` the
-    would-skip runs no panel agent wrote an output for, so their severity is unknown.
+    `failing` lists the would-skip and sampled runs with a finding at `fail_on` or worse,
+    `skipped` the would-skip runs the panel really skipped, and `unchecked` the other would-skip
+    runs no panel agent wrote an output for, so their severity is unknown.
     """
 
     since: datetime.date
@@ -138,14 +154,33 @@ class Report:
         return tuple(run for run in self.runs if run.status == "skip")
 
     @property
+    def sampled(self) -> tuple[ShadowRun, ...]:
+        """The runs triage would have skipped that were drawn for the full panel instead."""
+        return tuple(run for run in self.runs if run.sampled)
+
+    @property
     def failing(self) -> tuple[ShadowRun, ...]:
-        """The would-skip runs with a finding at `fail_on` or worse."""
-        return tuple(run for run in self.would_skip if run.at_least(self.fail_on))
+        """The would-skip and sampled runs with a finding at `fail_on` or worse."""
+        return tuple(
+            run
+            for run in self.runs
+            if (run.status == "skip" or run.sampled) and run.at_least(self.fail_on)
+        )
+
+    @property
+    def skipped(self) -> tuple[ShadowRun, ...]:
+        """The would-skip runs the panel skipped, acting on triage."""
+        return tuple(run for run in self.would_skip if run.skipped)
 
     @property
     def unchecked(self) -> tuple[ShadowRun, ...]:
-        """The would-skip runs without any panel output."""
-        return tuple(run for run in self.would_skip if not run.reviewed)
+        """The would-skip runs without any panel output that triage did not skip."""
+        return tuple(run for run in self.would_skip if not run.reviewed and not run.skipped)
+
+    @property
+    def acting(self) -> bool:
+        """Whether any run in range was written by a panel acting on triage."""
+        return any(not run.route_only for run in self.runs)
 
     def counts(self) -> dict[str, int]:
         """Return how many runs ended in each status, every status listed."""
@@ -180,6 +215,8 @@ class Report:
             "would_skip": [run.to_json() for run in self.would_skip],
             "failing": [run.pipeline_run_id for run in self.failing],
             "unchecked": [run.pipeline_run_id for run in self.unchecked],
+            "skipped": [run.pipeline_run_id for run in self.skipped],
+            "sampled": [run.to_json() for run in self.sampled],
         }
 
 
@@ -206,7 +243,11 @@ def shadow_runs(
             per_run[row[0]].append(row[1:])
     runs = []
     for run_id, agent_ref, started, decision_json, output_json, error in decisions:
-        status, p = _decide(spec, gate, _loads(decision_json), _loads(output_json), error)
+        decision = _loads(decision_json)
+        status, p = _decide(spec, gate, decision, _loads(output_json), error)
+        logged = decision if isinstance(decision, dict) else {}
+        route_only = logged.get("route_only") is not False
+        sampled = logged.get("sampled") is True
         rows = per_run[run_id]
         outputs = [_loads(output) for _, kind, _, _, _, output in rows if kind == "llm"]
         found = [severity for output in outputs for severity in _severities(output)]
@@ -227,6 +268,9 @@ def shadow_runs(
                 triage_cost_usd=sum(
                     cost for ref, kind, cost, _, _, _ in rows if kind == "jev" and ref == agent_ref
                 ),
+                route_only=route_only,
+                sampled=sampled,
+                skipped=not route_only and not sampled and logged.get("skip") is True,
             )
         )
     return runs
@@ -303,11 +347,23 @@ def render(report: Report) -> str:
     if skipped:
         lines += ["", f"  {'started (UTC)':<16}  {'p':>6}  {'severity':<9}  {'cost':>9}  run"]
         for run in skipped:
-            severity = run.severity or ("none" if run.reviewed else "no panel")
+            severity = run.severity or (
+                "none" if run.reviewed else "skipped" if run.skipped else "no panel"
+            )
+            mark = "  (sampled)" if run.sampled else ""
             lines.append(
                 f"  {run.started_at:%Y-%m-%d %H:%M}  {run.p:>6.3f}  {severity:<9}  "
-                f"{f'${run.cost_usd:.4f}':>9}  {run.pipeline_run_id}"
+                f"{f'${run.cost_usd:.4f}':>9}  {run.pipeline_run_id}{mark}"
             )
+    if report.acting:
+        sampled = report.sampled
+        worst = max(
+            (run.severity for run in sampled if run.severity is not None), key=_rank, default=None
+        )
+        lines.append(
+            f"\n{len(report.skipped)} runs skipped by triage; {len(sampled)} sampled would-skip "
+            f"runs got the full panel, worst finding {worst or 'none'}"
+        )
     if report.unchecked:
         lines.append(f"\n{len(report.unchecked)} would-skip runs have no panel output to check")
     failing = report.failing

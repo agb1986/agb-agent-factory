@@ -491,7 +491,8 @@ def test_review_json_skips_the_judge_by_default_when_the_gate_is_sure(
     assert document["weighted_score"] is None
     assert document["ship"] is True
     assert document["judge_gate"]["path"] == PATH_SKIPPED
-    assert len(cli["runner"].calls) == 3
+    # The fake triage routes to code and security, so two of the three reviewers run.
+    assert len(cli["runner"].calls) == 2
 
 
 def test_review_text_says_the_judge_was_skipped(
@@ -510,4 +511,5 @@ def test_review_no_judge_gate_bypasses_the_gate(
     assert document["judge_gate"]["status"] == "disabled"
     assert document["judge"] is not None
     assert cli["jev"].calls_to("judge-gate") == []
-    assert len(cli["runner"].calls) == 4
+    # The fake triage routes to code and security: two reviewers, then the judge.
+    assert len(cli["runner"].calls) == 3

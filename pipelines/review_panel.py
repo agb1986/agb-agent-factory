@@ -5,8 +5,12 @@ id and `command` is what `factory review` calls. The pipeline decides nothing ab
 itself: the judge returns four scores, and `runtime.scoring` turns them into the weighted score and
 the `ship` flag with the numbers in the judge's manifest. Before the reviewers run, `run_triage`
 asks the Jev agent `diff-triage` about the diff and `runtime.gates.decide` turns its answers into a
-`Decision`. While `runtime.gates.ROUTE_ONLY` holds, the decision is logged and every selected
-reviewer still runs.
+`Decision`. The decision is logged on every run. It is acted on only when the triage manifest sets
+`act_on_decision` and the caller passes `act_on_triage=True`, which only `factory review` does: a
+skip then runs no reviewer and no judge, and a narrower route runs only the reviewers it names.
+`SKIP_SAMPLE_RATE` of the runs triage would skip still get the full panel, so a drift in what Jev
+skips shows up as findings on sampled diffs. Every other caller, the fix, build and hotfix loops
+included, runs every selected reviewer whatever the decision says.
 
 Between the reviewers and the judge, `run_judge_gate` asks the Jev agent `judge-gate` whether the
 reviews are clear-cut. When they are, `runtime.gates.decide_judge_gate` skips the judge and the
@@ -15,8 +19,10 @@ always did.
 """
 
 import asyncio
+import dataclasses
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -38,12 +44,12 @@ from pipelines.review_comment import (
     resolve_pull_request,
 )
 from registry.common_schemas import ReviewInput, ReviewOutput
-from registry.jev_spec import JevOutput, JevSpec
+from registry.jev_spec import JevOutput, JevSpec, ProbabilityGate
 from registry.resolver import resolve
 from registry.spec import LLMSpec
 from runtime.async_runner import arun
 from runtime.budget import DEFAULT_BUDGET_USD, Budget, BudgetExceeded
-from runtime.gates import ROUTE_ONLY, Decision, decide, decide_judge_gate, jev_error
+from runtime.gates import Decision, decide, decide_judge_gate, jev_error
 from runtime.jev_runner import run_jev
 from runtime.outside import OutsideContext
 from runtime.pricing import TokenUsage, cost_usd
@@ -63,8 +69,24 @@ REVIEWERS: tuple[tuple[str, str], ...] = (
 JUDGE: tuple[str, str] = ("judge", "^2.0")
 """The judge agent and its version range."""
 
-TRIAGE: tuple[str, str] = ("diff-triage", "^0.3")
+TRIAGE: tuple[str, str] = ("diff-triage", "^0.4")
 """The Jev agent that triages the diff and the version range it is pinned to."""
+
+SKIP_SAMPLE_RATE = 0.05
+"""Share of the runs triage would skip that get the full panel anyway, drawn at random.
+
+A code constant and not a manifest value, so a manifest change cannot quietly switch the check off.
+The sampled runs are how `scripts/shadow_report.py` keeps measuring the skip gate once it acts.
+"""
+
+OUTCOME_SKIPPED = "skipped"
+"""`TriageResult.outcome` when triage skipped the review: no reviewer, judge gate or judge ran."""
+
+OUTCOME_ROUTED = "routed"
+"""`TriageResult.outcome` when only the reviewers on the route ran."""
+
+OUTCOME_FULL = "full"
+"""`TriageResult.outcome` when every selected reviewer ran."""
 
 TRIAGE_TAG = "triage:decision"
 """The `tag` of the trace row that carries the triage `Decision`."""
@@ -90,6 +112,12 @@ CHARS_PER_TOKEN = 4
 
 type Runner = Callable[..., BaseModel]
 type JevRunner = Callable[..., JevOutput]
+type Sampler = Callable[[], bool]
+
+
+def draw_sample() -> bool:
+    """Return true for `SKIP_SAMPLE_RATE` of calls: whether a would-skip run gets the full panel."""
+    return random.random() < SKIP_SAMPLE_RATE
 
 
 class AllReviewersFailed(FactoryError):
@@ -137,6 +165,9 @@ class TriageResult:
 
     `status` is `ok`, `jev_error` (the Jev call raised, so `error` holds why and the decision is
     the escalation) or `disabled` (`--no-triage`, nothing was called and `decision` is `None`).
+    `route_only` is true unless the manifest sets `act_on_decision` and the caller allowed acting
+    (`may_act`). `sampled` is true for a would-skip run drawn for the full panel. `outcome` is what
+    the panel did: `skipped`, `routed` or `full`; `run_triage` alone leaves it `full`.
     """
 
     status: str
@@ -145,6 +176,69 @@ class TriageResult:
     probabilities: dict[str, Any] | None
     truncated: bool
     error: str | None
+    may_act: bool = False
+    route_only: bool = True
+    sampled: bool = False
+    outcome: str = OUTCOME_FULL
+
+    @property
+    def would_skip(self) -> bool:
+        """Whether the decision is a skip the panel may honour: Jev answered, nothing escalated or
+        was cut, and acting is allowed. A sampled run still would skip; `skips` leaves it out."""
+        decision = self.decision
+        return (
+            not self.route_only
+            and self.status == "ok"
+            and decision is not None
+            and decision.skip
+            and not decision.escalate
+            and not self.truncated
+        )
+
+    @property
+    def skips(self) -> bool:
+        """Whether the panel skips the review: a would-skip run that was not sampled."""
+        return self.would_skip and not self.sampled
+
+    def select(self, reviewers: tuple[LLMSpec, ...]) -> tuple[LLMSpec, ...]:
+        """Return the reviewers to run, in panel order, out of `reviewers`.
+
+        Only the ones on the route, when acting is allowed and the route names a proper subset of
+        `reviewers`. Every one of them otherwise: route only, a failed or escalated or truncated
+        triage, a sampled skip, an empty route, a route that names an agent outside `REVIEWERS`,
+        and a route that covers them all or none of them.
+        """
+        decision = self.decision
+        if (
+            self.route_only
+            or self.status != "ok"
+            or decision is None
+            or decision.escalate
+            or self.truncated
+            or self.sampled
+            or not decision.route
+        ):
+            return reviewers
+        known = {name for name, _ in REVIEWERS}
+        if not set(decision.route) <= known:
+            return reviewers
+        chosen = tuple(spec for spec in reviewers if spec.name in decision.route)
+        return chosen if 0 < len(chosen) < len(reviewers) else reviewers
+
+    def skip_reason(self) -> str:
+        """Return the gate that skipped and the probability it read, such as
+        `low_risk: needs_review p=0.120`, for the reports of a skipped run."""
+        assert self.decision is not None
+        reason = self.decision.reason
+        gate = next((g for g in self.spec.gates if g.name == reason), None) if self.spec else None
+        answer = (self.probabilities or {}).get(gate.question) if gate is not None else None
+        if not isinstance(gate, ProbabilityGate) or not isinstance(answer, dict):
+            return reason
+        p = answer.get("p") if gate.option is None else answer.get("probs", {}).get(gate.option)
+        if not isinstance(p, int | float):
+            return reason
+        label = gate.question if gate.option is None else f"{gate.question}[{gate.option}]"
+        return f"{reason}: {label} p={p:.3f}"
 
     def to_json(self) -> dict[str, Any]:
         """Return the `triage` entry of the pipeline document."""
@@ -154,7 +248,10 @@ class TriageResult:
             "decision": self.decision.to_json() if self.decision is not None else None,
             "probabilities": self.probabilities,
             "truncated": self.truncated,
-            "route_only": ROUTE_ONLY,
+            "route_only": self.route_only,
+            "may_act": self.may_act,
+            "sampled": self.sampled,
+            "outcome": self.outcome,
             "error": self.error,
         }
 
@@ -168,7 +265,15 @@ class TriageResult:
             f"triage: {decision.reason} (skip={decision.skip}, escalate={decision.escalate}, "
             f"route={route})"
         )
-        return f"{line}; route only, every reviewer ran" if ROUTE_ONLY else line
+        if self.route_only:
+            return f"{line}; route only, every reviewer ran"
+        if self.outcome == OUTCOME_SKIPPED:
+            return f"{line}; skipped the review, no reviewer ran"
+        if self.sampled:
+            return f"{line}; sampled, the full panel ran to check the skip"
+        if self.outcome == OUTCOME_ROUTED:
+            return f"{line}; only the reviewers on the route ran"
+        return f"{line}; every reviewer ran"
 
 
 DISABLED = TriageResult("disabled", None, None, None, False, None)
@@ -225,6 +330,8 @@ class GateResult:
 
     def text(self) -> str:
         """Return one line saying what the gate decided, for the text reports."""
+        if self.status == GATE_TRIAGE_SKIPPED_STATUS:
+            return "judge gate: not run, triage skipped the review"
         if self.decision is None:
             return "judge gate: disabled"
         if self.skipped:
@@ -236,6 +343,12 @@ class GateResult:
 
 GATE_DISABLED = GateResult("disabled", None, None, None, False, None)
 """The `GateResult` of a run with the judge gate switched off."""
+
+GATE_TRIAGE_SKIPPED_STATUS = "triage_skipped"
+"""`GateResult.status` when triage skipped the review, so there was nothing for the gate to read."""
+
+GATE_TRIAGE_SKIPPED = GateResult(GATE_TRIAGE_SKIPPED_STATUS, None, None, None, False, None)
+"""The `GateResult` of a run triage skipped."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,11 +368,20 @@ class PanelResult:
     gate: GateResult = GATE_DISABLED
 
     @property
+    def skipped(self) -> bool:
+        """Whether triage skipped the review, so that no reviewer, judge gate or judge ran."""
+        return self.triage.outcome == OUTCOME_SKIPPED
+
+    @property
     def ship(self) -> bool:
         """Whether the change ships: the weighted score reached the threshold, or the gate said so.
 
-        When the gate skipped the judge there is no score, and the gate's verdict decides.
+        When the gate skipped the judge there is no score, and the gate's verdict decides. When
+        triage skipped the review nothing found a problem because nothing looked, and the change
+        ships: that is what the skip gate is for, and `triage.outcome` says so.
         """
+        if self.skipped:
+            return True
         if self.assessment is not None:
             return self.assessment.ship
         return self.gate.verdict == "ship"
@@ -268,7 +390,9 @@ class PanelResult:
         """Return the pipeline document: reviewers, judge, score, ship flag, cost, triage and gate.
 
         When the gate skipped the judge, `judge` and `weighted_score` are null and `judge_gate`
-        says why.
+        says why. When triage skipped the review, `reviewers` is empty, `judge` and
+        `weighted_score` are null, `judge_gate.status` is `triage_skipped` and `triage.outcome` is
+        `skipped`.
         """
         judge = (
             {"ref": self.judge.address, "output": self.judgement.model_dump(mode="json")}
@@ -303,7 +427,12 @@ class PanelResult:
             else:
                 lines.append(f"  {reviewer.spec.address}: FAILED {reviewer.error}")
         verdict = "ship" if self.ship else "do not ship"
-        if self.judgement is not None and self.assessment is not None:
+        if self.skipped:
+            lines.append(
+                f"{verdict}: triage skipped the review ({self.triage.skip_reason()}); no reviewer "
+                "or judge ran. Rerun with --no-triage to force a review"
+            )
+        elif self.judgement is not None and self.assessment is not None:
             output = self.judgement.model_dump(mode="json")
             for name, score in output["scores"].items():
                 lines.append(f"  {name}: {score['value']:.2f}  {score['justification']}")
@@ -469,6 +598,8 @@ def run_triage(
     jev_runner: JevRunner = run_jev,
     budget: Budget | None = None,
     parent_run_id: str | None = None,
+    may_act: bool = False,
+    sample: Sampler = draw_sample,
 ) -> TriageResult:
     """Ask the Jev agent `spec` about `diff` and turn its answers into a `Decision`.
 
@@ -479,6 +610,11 @@ def run_triage(
     as a missing key or a failed request, gives the escalating `jev_error` decision and the caller
     carries on; it is not raised. `BudgetExceeded` is the one exception: it propagates, because a
     panel that is out of money must stop rather than go on to the reviewers.
+
+    `may_act` says whether the caller will act on the decision. The result is route only unless
+    it is true and the manifest sets `act_on_decision`. When acting would skip the review, `sample`
+    is called once and a true answer marks the run `sampled`, for the full panel. The row records
+    `route_only`, `may_act` and `sampled` beside the decision.
     """
     started_at = datetime.now(UTC)
     start = time.monotonic()
@@ -513,7 +649,12 @@ def run_triage(
             truncated,
             None,
         )
-    assert result.decision is not None
+    decision = result.decision
+    assert decision is not None
+    route_only = not (may_act and spec.act_on_decision)
+    result = dataclasses.replace(result, may_act=may_act, route_only=route_only)
+    if result.would_skip:
+        result = dataclasses.replace(result, sampled=sample())
     trace.record(
         TraceRow(
             run_id=str(uuid.uuid4()),
@@ -526,8 +667,10 @@ def run_triage(
             parent_run_id=parent_run_id,
             cost_usd=0.0,
             decision_json={
-                **result.decision.to_json(),
-                "route_only": ROUTE_ONLY,
+                **decision.to_json(),
+                "route_only": result.route_only,
+                "may_act": result.may_act,
+                "sampled": result.sampled,
                 "truncated": truncated,
             },
             output_json=result.probabilities,
@@ -677,12 +820,20 @@ def run_panel(
     pipeline_run_id: str | None = None,
     budget: Budget | None = None,
     parent_run_id: str | None = None,
+    act_on_triage: bool = False,
+    sample: Sampler = draw_sample,
 ) -> PanelResult:
     """Review the change from `base` to `head` of the repository at `repo_path`.
 
     When the panel has a triage agent, `jev_runner` triages the diff first under the same
-    `pipeline_run_id` and the `Decision` goes into the result and the trace. While `ROUTE_ONLY`
-    holds the decision is information only and every selected reviewer runs. The reviewers run at
+    `pipeline_run_id` and the `Decision` goes into the result and the trace. Unless
+    `act_on_triage` is true and the triage manifest sets `act_on_decision`, the decision is
+    information only and every selected reviewer runs. When both hold, a skip that was not sampled
+    (`sample`, see `run_triage`) ends the run there: no reviewer, judge gate or judge runs and the
+    change ships, with `triage.outcome` `skipped`. A route that names a proper subset of the
+    selected reviewers runs only those, and the judge gate and the judge see only them. Only
+    `factory review` acts on triage; the fix, build and hotfix loops review diffs the factory
+    wrote, so they leave `act_on_triage` off and every reviewer runs. The reviewers run at
     the same time under `asyncio.gather`: with the default `runner`, each on
     `runtime.async_runner.arun` on one event loop, and any other `runner` on a worker thread. Each
     call gets the same `pipeline_run_id`, as does the judge's, so the trace holds one row per agent
@@ -699,8 +850,6 @@ def run_panel(
     `ToolNotFoundError` for an unknown repository or ref, `FactoryError` (exit 1) when every
     reviewer failed, and whatever the judge's run raises.
     """
-    if not ROUTE_ONLY:
-        raise NotImplementedError("acting on a triage decision is not built yet, see #20")
     start = time.monotonic()
     run_id = pipeline_run_id or new_pipeline_run_id()
     diff = show_diff(repo_path, base, head, max_bytes=MAX_OUTPUT_BYTES)
@@ -714,10 +863,29 @@ def run_panel(
             jev_runner=jev_runner,
             budget=budget,
             parent_run_id=parent_run_id,
+            may_act=act_on_triage,
+            sample=sample,
         )
         if panel.triage is not None
         else DISABLED
     )
+    if triaged.skips:
+        return PanelResult(
+            pipeline_run_id=run_id,
+            base=base,
+            head=head,
+            reviewers=(),
+            judge=panel.judge,
+            judgement=None,
+            assessment=None,
+            total_cost_usd=trace.cost_by_pipeline_run(run_id),
+            duration_ms=round((time.monotonic() - start) * 1000),
+            triage=dataclasses.replace(triaged, outcome=OUTCOME_SKIPPED),
+            gate=GATE_TRIAGE_SKIPPED,
+        )
+    selected = triaged.select(panel.reviewers)
+    if len(selected) < len(panel.reviewers):
+        triaged = dataclasses.replace(triaged, outcome=OUTCOME_ROUTED)
     shared = _LockedTrace(trace)
     payload = ReviewInput(repo_path=str(repo_path), base=base, head=head).model_dump(mode="json")
 
@@ -742,9 +910,7 @@ def run_panel(
     async def review_all() -> list[ReviewerResult | BaseException]:
         # Every reviewer finishes before an error is raised, so each one's trace row and charge
         # are in before the panel ends; the first error in report order is the one raised.
-        return await asyncio.gather(
-            *(review(spec) for spec in panel.reviewers), return_exceptions=True
-        )
+        return await asyncio.gather(*(review(spec) for spec in selected), return_exceptions=True)
 
     outcomes = asyncio.run(review_all())
     for outcome in outcomes:
@@ -835,8 +1001,11 @@ def command(
     (the flags, `GH_TOKEN`, the pull request, the `origin`) is checked first, so a bad call costs
     nothing.
 
-    `no_triage` skips the Jev call. Triage needs `TYPESAFE_API_KEY` only to work: without it the
-    run records a `jev_error` and the reviewers still run. `no_judge_gate` skips the judge-gate
+    `no_triage` skips the Jev call, so every selected reviewer runs. Otherwise the panel acts on
+    the triage decision (see `run_panel`): a skipped change ships with no reviewer run, and the
+    report and the comment say that triage skipped it and that `--no-triage` forces a review.
+    Triage needs `TYPESAFE_API_KEY` only to work: without it the run records a `jev_error` and
+    every reviewer runs. `no_judge_gate` skips the judge-gate
     call, so the judge always runs; the gate fails the same way, escalating to the judge.
 
     Prose goes to stderr under `as_json`, where stdout gets exactly one JSON document, also when
@@ -890,6 +1059,7 @@ def command(
             jev_runner=run_jev,
             pipeline_run_id=context.pipeline_run_id if context is not None else None,
             budget=budget,
+            act_on_triage=True,
         )
         if context is not None and pull is not None:
             try:
