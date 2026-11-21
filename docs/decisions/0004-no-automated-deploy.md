@@ -1,6 +1,6 @@
 # ADR 0004: No automated deploy
 
-Status: Proposed, 2026-11-20. Issue: #109.
+Status: accepted, 2026-11-21. Issue: #109.
 
 ## Decision in one line
 
