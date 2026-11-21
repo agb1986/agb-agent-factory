@@ -142,8 +142,8 @@ def review_body(result: PanelResult, pull: PullRequest) -> str:
             "and no judge looked at it. This is not a review that found nothing."
         )
         sections.append(
-            f"To force a full review, run `factory review --pr {pull.number} --comment "
-            "--no-triage`."
+            "To force a full review, run "
+            f"`factory review <repo_path> --pr {pull.number} --comment --no-triage`."
         )
     elif result.judgement is not None and result.assessment is not None:
         output = result.judgement.model_dump(mode="json")

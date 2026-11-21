@@ -236,7 +236,7 @@ def test_a_review_triage_skipped_says_no_reviewer_looked_and_how_to_force_one(
     assert body.startswith("## Review: skipped by triage\n\n")
     assert "(low_risk: needs_review p=0.020)" in body
     assert "no reviewer and no judge looked at it" in body
-    assert "`factory review --pr 7 --comment --no-triage`" in body
+    assert "`factory review <repo_path> --pr 7 --comment --no-triage`" in body
     assert "found nothing." in body
     assert "weighted score" not in body
     assert body.endswith(f"Reviewed commit `{pull.head[:12]}`.")

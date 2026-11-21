@@ -61,11 +61,12 @@ def test_the_docs_only_diff_is_triaged_logged_and_still_reviewed(tmp_path: Path)
     (jev_run,) = [row for row in rows if row[0] != "triage:decision"]
     assert json.loads(jev_run[4])["model"] == panel.triage.model
 
-    # the manifest lets triage act, but this caller does not: every reviewer ran
+    # the manifest lets triage act, but this caller does not, so the run is route only and every
+    # reviewer ran
     assert runner.reviewers_called() == {name for name, _ in REVIEWERS}
     document = result.to_json()["triage"]
     assert (document["route_only"], document["may_act"], document["outcome"]) == (
-        False,
+        True,
         False,
         "full",
     )
