@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from factory.exit import ExitCode
+from tools._call_graph import CALL_GRAPH, call_graph
 from tools._common import (
     DEFAULT_MAX_BYTES,
     PathEscapeError,
@@ -611,12 +612,14 @@ def command(repo_path: str, *, impact_paths: Sequence[str] | None, as_json: bool
 
 
 __all__ = [
+    "CALL_GRAPH",
     "Edge",
     "External",
     "Graph",
     "PathEscapeError",
     "Unresolved",
     "build_graph",
+    "call_graph",
     "check_paths",
     "command",
     "graph",
@@ -646,5 +649,6 @@ TOOLS = (
         },
         impl=impact,
     ),
+    CALL_GRAPH,
 )  # fmt: skip
 """The tools this module declares; `tools.registry` collects them."""

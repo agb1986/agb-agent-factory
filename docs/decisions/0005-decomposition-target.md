@@ -44,7 +44,7 @@ Like the other fixtures, its own tests pass on both refs and its files pass ruff
 
 **Ground truth.** Recorded in the fixture directory and checked against the tree by the fixture tests, so it cannot drift off the code. Dead code entries go in `defects.yaml` with the category `dead-code`. The call chain, the data flows, the module map and the decoys go in a second file beside it; #111 defines its schema.
 
-**TypeScript.** The target is Python only. The TypeScript half of `deps.dead_code` and `deps.call_graph` is tested on small trees written inside the tool tests, and no agent eval depends on it.
+**TypeScript.** The target is Python only. `deps.call_graph` reads Python only and refuses a TypeScript symbol with an input error. The TypeScript half of `deps.dead_code` is tested on small trees written inside the tool tests, and no agent eval depends on it.
 
 **Agents built.** `code-archaeology@0.1` and `extraction-modularization@0.1`, as #112 scopes them.
 
