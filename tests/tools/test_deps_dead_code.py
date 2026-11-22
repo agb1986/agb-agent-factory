@@ -365,6 +365,129 @@ def test_a_module_imported_by_a_run_time_name_is_dynamic(tmp_path: Path) -> None
     assert rules(report.dead) == {"far.py": "module"}
 
 
+@pytest.mark.parametrize(
+    "lookup",
+    [
+        "globals()['run_' + n]()",
+        "globals().get(f'run_{n}')()",
+        "globals()['run_%s' % n]()",
+        "globals()['run_{}'.format(n)]()",
+        "getattr(sys.modules[__name__], n)()",
+    ],
+)
+def test_a_module_looking_itself_up_keeps_its_functions_out_of_the_dead_list(
+    tmp_path: Path, lookup: str
+) -> None:
+    text = (
+        "import sys\n\n\ndef run_nightly():\n    pass\n\n\n"
+        f"def go(n):\n    print(sys)\n    return {lookup}\n\n\n"
+        "if __name__ == '__main__':\n    go('nightly')\n"
+    )
+    report = analyse(tmp_path, {"main.py": text, "other.py": "def run_else():\n    pass\n"})
+    assert set(rules(report.dynamic)) == {"main.py::run_nightly"}
+    assert set(rules(report.dead)) == {"other.py"}
+
+
+@pytest.mark.parametrize(
+    "lookup",
+    [
+        "getattr(self, 'on_' + n)()",
+        "getattr(type(self), n)(self)",
+        "operator.methodcaller('on_start')(self)",
+        "operator.methodcaller('on_' + n)(self)",
+        "operator.attrgetter('on_start')(self)()",
+    ],
+)
+def test_a_class_looking_itself_up_keeps_its_methods_out_of_the_dead_list(
+    tmp_path: Path, lookup: str
+) -> None:
+    text = (
+        "import operator\n\n\nclass Base:\n"
+        f"    def go(self, n):\n        print(operator)\n        return {lookup}\n\n\n"
+        "class Child(Base):\n    def on_start(self):\n        pass\n\n\n"
+        "if __name__ == '__main__':\n    Child().go('start')\n"
+    )
+    report = analyse(tmp_path, {"main.py": text})
+    assert report.dead == []
+    assert set(rules(report.dynamic)) == {"main.py::Child.on_start"}
+
+
+def test_a_class_lookup_does_not_reach_an_unrelated_class(tmp_path: Path) -> None:
+    text = (
+        "class One:\n    def go(self, n):\n        return getattr(self, 'on_' + n)()\n\n\n"
+        "class Two:\n    def on_start(self):\n        pass\n\n\n"
+        "if __name__ == '__main__':\n    One().go('start')\n    Two()\n"
+    )
+    assert set(rules(analyse(tmp_path, {"main.py": text}).dead)) == {"main.py::Two.on_start"}
+
+
+def test_a_special_name_is_not_dead(tmp_path: Path) -> None:
+    text = (
+        "class Base:\n    def __init_subclass__(cls):\n        pass\n\n"
+        "    def __class_getitem__(cls, item):\n        return cls\n\n\n"
+        "def __getattr__(name):\n    return name\n\n\n"
+        "if __name__ == '__main__':\n    print(Base)\n"
+    )
+    report = analyse(tmp_path, {"main.py": text})
+    assert (report.dead, report.dynamic) == ([], [])
+
+
+@pytest.mark.parametrize(
+    ("base", "caller"),
+    [
+        ("class Base:\n    def __init_subclass__(cls):\n        pass\n", "print(Base)"),
+        ("class Base:\n    pass\n", "print(Base.__subclasses__())"),
+    ],
+)
+def test_a_base_class_that_registers_its_subclasses_is_dynamic(
+    tmp_path: Path, base: str, caller: str
+) -> None:
+    text = f"{base}\n\nclass Child(Base):\n    pass\n\n\nif __name__ == '__main__':\n    {caller}\n"
+    report = analyse(tmp_path, {"main.py": text})
+    assert report.dead == []
+    assert set(rules(report.dynamic)) == {"main.py::Child"}
+
+
+def test_a_string_naming_a_module_or_a_function_is_a_dynamic_lookup(tmp_path: Path) -> None:
+    report = analyse(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/worker.py": "print(1)\n",
+            "app/tasks.py": "def nightly():\n    pass\n",
+            "main.py": (
+                "import app.tasks\n\n"
+                "SETTINGS = {'worker': 'app.worker', 'task': 'app.tasks:nightly'}\n\n"
+                "if __name__ == '__main__':\n    print(SETTINGS, app.tasks)\n"
+            ),
+        },
+    )
+    assert report.dead == []
+    assert set(rules(report.dynamic)) == {"app/worker.py", "app/tasks.py::nightly"}
+
+
+def test_a_literal_run_time_import_is_a_use_of_the_module(tmp_path: Path) -> None:
+    report = analyse(
+        tmp_path,
+        {
+            "far.py": "print(1)\n",
+            "main.py": (
+                "import importlib\n\nif __name__ == '__main__':\n"
+                "    importlib.import_module('far')\n"
+            ),
+        },
+    )
+    assert (report.dead, report.dynamic) == ([], [])
+
+
+def test_a_name_only_a_string_annotation_uses_is_not_dead(tmp_path: Path) -> None:
+    text = (
+        "class Shape:\n    pass\n\n\ndef area(shape: 'Shape'):\n    return shape\n\n\n"
+        "if __name__ == '__main__':\n    area(1)\n"
+    )
+    assert analyse(tmp_path, {"main.py": text}).dead == []
+
+
 def test_what_a_dynamic_candidate_calls_is_not_dead(tmp_path: Path) -> None:
     report = analyse(
         tmp_path,
@@ -426,6 +549,17 @@ def test_a_syntax_error_is_skipped_and_the_rest_is_read(tmp_path: Path) -> None:
     lines = deps.dead_code(root).splitlines()
     assert "not scanned: bad.py (syntax_error)" in lines
     assert any("main.py::unused" in line for line in lines)
+
+
+def test_a_type_comment_is_read_and_a_malformed_one_is_ignored(tmp_path: Path) -> None:
+    text = (
+        "class Shape:\n    pass\n\n\n"
+        "x = None  # type: Shape\ny = 1  # type: not (valid\n\n\n"
+        "def f(a):\n    # type: (also not) valid\n    return a\n\n\n"
+        "if __name__ == '__main__':\n    print(x, y, f(1))\n"
+    )
+    report = analyse(tmp_path, {"main.py": text})
+    assert (report.dead, report.skipped) == ([], {})
 
 
 def test_an_oversized_file_is_skipped(tmp_path: Path) -> None:
@@ -605,6 +739,18 @@ def test_an_import_by_a_run_time_path_is_dynamic(tmp_path: Path) -> None:
     assert {f.symbol for f in report.exports} == {"src/other.ts::lone"}
     assert {f.symbol for f in report.dynamic} == {"src/pages/a.ts::page"}
     assert report.dynamic[0].detail.startswith("src/load.js:2")
+
+
+def test_an_alias_import_marks_the_name_used_in_any_file(tmp_path: Path) -> None:
+    report = analyse(
+        tmp_path,
+        {
+            "src/a.ts": "export const f = 1;\nexport const g = 1;\nexport default 1;\n",
+            "src/c.ts": "export default 2;\n",
+            "src/b.ts": "import a, { f } from '@/a';\nconsole.log(a, f);\n",
+        },
+    )
+    assert {f.symbol for f in report.exports} == {"src/a.ts::g", "src/c.ts::default"}
 
 
 def test_unused_exports_are_rendered_in_their_own_section(tmp_path: Path) -> None:

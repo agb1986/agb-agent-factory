@@ -863,6 +863,8 @@ class _Python:
             definition = known.get((places[item.filename], item.name, item.first_lineno))
             if item.typ not in wanted or definition is None or definition.module.test:
                 continue
+            if item.name.startswith("__") and item.name.endswith("__"):
+                continue  # Python calls it; vulture knows that only of a method that takes `self`
             if item.name not in self.annotated and not self._is_exported(definition):
                 found.append((definition, item.confidence))
         return found
