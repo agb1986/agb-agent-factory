@@ -24,8 +24,10 @@ rebuild deletes the old directory. Exit codes follow the usual convention: 3 for
 fixtures/src/<name>/base/        tree of the first commit
 fixtures/src/<name>/head/        tree of the second commit
 fixtures/src/<name>/defects.yaml planted defects, with paths and lines in the head tree
+fixtures/src/<name>/ground-truth.yaml  optional: what is true of the head tree besides its defects
 fixtures/handmade/<name>/        same shape, for hand-built cases
 fixtures/schema.py               pydantic model of defects.yaml and the checker
+fixtures/ground_truth.py         pydantic model of ground-truth.yaml and the checker
 fixtures/build.py                the build script
 ```
 
@@ -60,6 +62,7 @@ fixture**; add a new one instead.
 | `sast-false-positive` | Names the auth header and the token env var as constants and adds jittered retry waits; a static analyser flags all three, wrongly | none |
 | `storefront` | Adds a line to the README on how to run the tests. A small shop package (money, catalog, cart, orders, API, CLI) whose modules import one another, for story-breakdown evals | none |
 | `tracker` | Adds a line to the README on how to run the tests. A small issue tracker package (models, storage, search, report, CLI), for story-breakdown evals | none |
+| `legacy-billing` | Adds a line to the README on how to run the tests. A billing package of 23 modules around one oversized `billing.py`, with planted dead code, decoys that only look dead, and features bound into the monolith, for the decomposition agents ([ADR 0005](../docs/decisions/0005-decomposition-target.md)). It is synthetic and small: an agent that does well on it has found what was planted here, which does not show that it holds up on a large or a real codebase | 7 (minor, dead-code) |
 | `crash-empty-average` | `average_rating` divides by the number of ratings with no check for none, so a product with no ratings raises `ZeroDivisionError` (a triage-diagnostics eval) | 1 (major, logic) |
 | `crash-missing-config-key` | `timeout_seconds` reads `config["timeout"]` and drops the default, so a config without it raises `KeyError` (a triage-diagnostics eval) | 1 (major, logic) |
 | `crash-loader-caller` | The feed loader stops skipping lines with no price, so `line_total` in `pricing.py` raises `ValueError`; the fault is in the loader, one frame up (a triage-diagnostics eval) | 1 (major, logic) |
@@ -91,6 +94,14 @@ defects:                        # [] for a fixture with nothing to find
 
 The build and the tests check that each file exists in the head tree, that the window ends inside
 it and that the window contains the snippet. Edit the window whenever you move the code.
+
+## `ground-truth.yaml`
+
+A fixture that is read as a codebase rather than as a diff may hold a `ground-truth.yaml` as well:
+its module map, dead code, decoys, call chains, data flows, dynamic calls and features. Only
+`legacy-billing` has one. The fields are the models in `fixtures/ground_truth.py`; the rules are in
+[docs/CONVENTIONS.md](../docs/CONVENTIONS.md#fixtures). The build refuses a file that no longer
+matches the head tree.
 
 ## Add a fixture
 

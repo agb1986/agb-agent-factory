@@ -23,7 +23,7 @@ type Severity = Literal["info", "minor", "major", "blocker"]
 
 
 class FixtureManifestError(AuthOrConfigError):
-    """A `defects.yaml` is missing, unreadable, invalid, or out of step with its source tree."""
+    """A `defects.yaml` or `ground-truth.yaml` is missing, invalid or out of step with its tree."""
 
 
 class _Model(BaseModel):
@@ -38,7 +38,8 @@ class Defect(_Model):
     `file` is a relative POSIX path inside the head tree. `line_start` and `line_end` are 1-based
     and inclusive. `snippet` is text that must appear inside that window, so a manifest cannot
     silently point at the wrong code after a source edit. `severity` uses the values of a finding.
-    `category` is a lowercase slug; the fixtures use logic, style, security, performance, testing.
+    `category` is a lowercase slug; the fixtures use logic, style, security, performance, testing
+    and dead-code.
     """
 
     id: Slug

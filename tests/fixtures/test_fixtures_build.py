@@ -47,6 +47,7 @@ REQUIRED = {
     "docs-new-class",
     "docs-renamed-function",
     "docs-new-module",
+    "legacy-billing",
 }
 CLEAN = {
     "clean-refactor",

@@ -1,0 +1,401 @@
+fixture: legacy-billing
+package: legacy_billing
+
+modules:
+  - id: module-init
+    path: legacy_billing/__init__.py
+    role: The package, which re-exports main and to_major_units for partner scripts.
+    imports: [legacy_billing/cli.py, legacy_billing/money.py]
+  - id: module-main
+    path: legacy_billing/__main__.py
+    role: The entry point of python -m legacy_billing.
+    imports: [legacy_billing/cli.py]
+  - id: module-audit
+    path: legacy_billing/audit.py
+    role: The audit trail, which hooks itself into the billing run.
+    imports: [legacy_billing/state.py, legacy_billing/storage.py]
+  - id: module-billing
+    path: legacy_billing/billing.py
+    role: >-
+      The oversized module: the billing run, prices, discounts, late fees, credit notes,
+      statements, exports and the period close.
+    imports:
+      - legacy_billing/catalog.py
+      - legacy_billing/customers.py
+      - legacy_billing/dates.py
+      - legacy_billing/exporters.py
+      - legacy_billing/invoices.py
+      - legacy_billing/ledger.py
+      - legacy_billing/money.py
+      - legacy_billing/notify.py
+      - legacy_billing/numbering.py
+      - legacy_billing/settings.py
+      - legacy_billing/state.py
+      - legacy_billing/storage.py
+      - legacy_billing/taxes.py
+      - legacy_billing/usage.py
+  - id: module-catalog
+    path: legacy_billing/catalog.py
+    role: Plans, meter prices and promotion codes.
+    imports: []
+  - id: module-cli
+    path: legacy_billing/cli.py
+    role: The command line.
+    imports:
+      - legacy_billing/audit.py
+      - legacy_billing/billing.py
+      - legacy_billing/customers.py
+      - legacy_billing/importer.py
+      - legacy_billing/payments.py
+      - legacy_billing/reports.py
+      - legacy_billing/storage.py
+  - id: module-customers
+    path: legacy_billing/customers.py
+    role: Customer rows, cached in the shared state.
+    imports: [legacy_billing/dates.py, legacy_billing/state.py, legacy_billing/storage.py]
+  - id: module-dates
+    path: legacy_billing/dates.py
+    role: ISO days and YYYY-MM periods.
+    imports: []
+  - id: module-exporters
+    path: legacy_billing/exporters.py
+    role: Ledger exports, picked by the name of the format.
+    imports: [legacy_billing/money.py]
+  - id: module-fax-gateway
+    path: legacy_billing/fax_gateway.py
+    role: Invoices by fax; nothing imports it.
+    imports: [legacy_billing/settings.py, legacy_billing/storage.py]
+  - id: module-importer
+    path: legacy_billing/importer.py
+    role: Reads usage files from the meters.
+    imports: [legacy_billing/catalog.py, legacy_billing/state.py, legacy_billing/usage.py]
+  - id: module-invoices
+    path: legacy_billing/invoices.py
+    role: The invoice object that the billing run fills in.
+    imports: [legacy_billing/money.py]
+  - id: module-ledger
+    path: legacy_billing/ledger.py
+    role: Postings and balances.
+    imports: [legacy_billing/state.py, legacy_billing/storage.py]
+  - id: module-money
+    path: legacy_billing/money.py
+    role: Amounts in cents, converted and rounded.
+    imports: []
+  - id: module-notify
+    path: legacy_billing/notify.py
+    role: Letters to customers, queued in the outbox table.
+    imports: [legacy_billing/customers.py, legacy_billing/money.py, legacy_billing/storage.py]
+  - id: module-numbering
+    path: legacy_billing/numbering.py
+    role: Document numbers.
+    imports: [legacy_billing/state.py, legacy_billing/storage.py]
+  - id: module-payments
+    path: legacy_billing/payments.py
+    role: Payments, put against the oldest unpaid invoices.
+    imports: [legacy_billing/ledger.py, legacy_billing/state.py, legacy_billing/storage.py]
+  - id: module-reports
+    path: legacy_billing/reports.py
+    role: Plain text reports, looked up by name in a table.
+    imports:
+      - legacy_billing/customers.py
+      - legacy_billing/ledger.py
+      - legacy_billing/money.py
+      - legacy_billing/state.py
+      - legacy_billing/storage.py
+  - id: module-settings
+    path: legacy_billing/settings.py
+    role: Constants.
+    imports: []
+  - id: module-state
+    path: legacy_billing/state.py
+    role: The dictionaries and lists the whole package shares.
+    imports: []
+  - id: module-storage
+    path: legacy_billing/storage.py
+    role: Tables kept as JSON files in the data directory.
+    imports: [legacy_billing/state.py]
+  - id: module-taxes
+    path: legacy_billing/taxes.py
+    role: VAT by country.
+    imports: [legacy_billing/money.py, legacy_billing/settings.py]
+  - id: module-usage
+    path: legacy_billing/usage.py
+    role: Metered usage, one row per reading.
+    imports: [legacy_billing/storage.py]
+
+dead_code:
+  - {id: dead-function, symbol: "legacy_billing/billing.py::prorate_by_weeks", kind: function}
+  - {id: dead-class, symbol: "legacy_billing/customers.py::CustomerMerger", kind: class}
+  - {id: dead-method, symbol: "legacy_billing/invoices.py::Invoice.as_legacy_row", kind: method}
+  - {id: dead-module, symbol: legacy_billing/fax_gateway.py, kind: module}
+  - {id: dead-vat-rate, symbol: "legacy_billing/taxes.py::old_vat_rate", kind: function}
+  - {id: dead-through-dead, symbol: "legacy_billing/taxes.py::_old_vat_table", kind: function}
+  - {id: dead-copy, symbol: "legacy_billing/importer.py::_pad", kind: function}
+
+decoys:
+  - id: decoy-test-only
+    kind: test_only
+    symbol: legacy_billing/money.py::parse_amount
+    evidence:
+      symbol: tests/test_money.py
+      snippet: parse_amount
+    why: Only the tests call it.
+  - id: decoy-test-reset
+    kind: test_only
+    symbol: legacy_billing/state.py::reset
+    evidence:
+      symbol: tests/conftest.py
+      snippet: state.reset()
+    why: Only the test set-up calls it.
+  - id: decoy-report-balances
+    kind: dispatch_table
+    symbol: legacy_billing/reports.py::report_balances
+    evidence:
+      symbol: legacy_billing/reports.py::REPORTS
+      snippet: '"balances": report_balances,'
+    why: run_report looks it up in REPORTS by a string.
+  - id: decoy-report-unpaid
+    kind: dispatch_table
+    symbol: legacy_billing/reports.py::report_unpaid
+    evidence:
+      symbol: legacy_billing/reports.py::REPORTS
+      snippet: '"unpaid": report_unpaid,'
+    why: run_report looks it up in REPORTS by a string.
+  - id: decoy-report-warnings
+    kind: dispatch_table
+    symbol: legacy_billing/reports.py::report_warnings
+    evidence:
+      symbol: legacy_billing/reports.py::REPORTS
+      snippet: '"warnings": report_warnings,'
+    why: run_report looks it up in REPORTS by a string.
+  - id: decoy-reexport
+    kind: reexport
+    symbol: legacy_billing/money.py::to_major_units
+    evidence:
+      symbol: legacy_billing/__init__.py
+      snippet: from legacy_billing.money import to_major_units
+    why: The package re-exports it for partner scripts; nothing in the tree calls it.
+  - id: decoy-export-csv
+    kind: dynamic_lookup
+    symbol: legacy_billing/exporters.py::export_csv
+    evidence:
+      symbol: legacy_billing/billing.py::export_ledger
+      snippet: getattr(exporters, "export_" + fmt, None)
+    why: export_ledger builds its name from the format at run time; no code names it.
+  - id: decoy-export-fixed
+    kind: dynamic_lookup
+    symbol: legacy_billing/exporters.py::export_fixed
+    evidence:
+      symbol: legacy_billing/billing.py::export_ledger
+      snippet: getattr(exporters, "export_" + fmt, None)
+    why: export_ledger builds its name from the format at run time; no code names it.
+  - id: decoy-callback
+    kind: callback
+    symbol: legacy_billing/audit.py::log_posting
+    evidence:
+      symbol: legacy_billing/audit.py::install
+      snippet: state.HOOKS.append(log_posting)
+    why: It is registered as a hook and called through the list.
+
+call_chains:
+  - id: chain-billing-run
+    title: From the bill command to the table file
+    calls:
+      - caller: legacy_billing/cli.py::main
+        callee: legacy_billing/billing.py::run_billing
+        snippet: billing.run_billing(args.period, args.issued)
+      - caller: legacy_billing/billing.py::run_billing
+        callee: legacy_billing/billing.py::bill_customer
+        snippet: bill_customer(customer)
+      - caller: legacy_billing/billing.py::bill_customer
+        callee: legacy_billing/billing.py::post_invoice
+        snippet: post_invoice(invoice)
+      - caller: legacy_billing/billing.py::post_invoice
+        callee: legacy_billing/ledger.py::post_entry
+        snippet: ledger.post_entry(invoice.customer_id, "invoice", invoice.number, invoice.total)
+      - caller: legacy_billing/ledger.py::post_entry
+        callee: legacy_billing/storage.py::append_row
+        snippet: storage.append_row("ledger", entry)
+      - caller: legacy_billing/storage.py::append_row
+        callee: legacy_billing/storage.py::_write_table
+        snippet: _write_table(table, rows)
+  - id: chain-import-usage
+    title: From the import-usage command to the table file
+    calls:
+      - caller: legacy_billing/cli.py::main
+        callee: legacy_billing/importer.py::import_usage
+        snippet: importer.import_usage(args.path)
+      - caller: legacy_billing/importer.py::import_usage
+        callee: legacy_billing/usage.py::record_usage
+        snippet: usage.record_usage(row["customer"], row["day"], row["meter"], int(row["quantity"]))
+      - caller: legacy_billing/usage.py::record_usage
+        callee: legacy_billing/storage.py::append_row
+        snippet: storage.append_row(
+      - caller: legacy_billing/storage.py::append_row
+        callee: legacy_billing/storage.py::_write_table
+        snippet: _write_table(table, rows)
+
+data_flows:
+  - id: flow-usage-to-invoice
+    data: The metered usage of a customer
+    steps:
+      - symbol: legacy_billing/importer.py::import_usage
+        snippet: usage.record_usage(row["customer"], row["day"], row["meter"], int(row["quantity"]))
+        does: Reads the readings from a CSV file.
+      - symbol: legacy_billing/usage.py::record_usage
+        snippet: storage.append_row(
+        does: Saves each reading in the usage table.
+      - symbol: legacy_billing/usage.py::usage_for
+        snippet: 'for row in storage.read_rows("usage")'
+        does: Adds up the readings of a customer per meter.
+      - symbol: legacy_billing/billing.py::price_usage
+        snippet: totals = usage.usage_for(customer["id"], invoice.period)
+        does: Prices the totals and adds them to the invoice as lines.
+      - symbol: legacy_billing/billing.py::post_invoice
+        snippet: storage.append_row("invoices", row)
+        does: Saves the invoice in the invoices table and posts its total.
+  - id: flow-overdue-to-ledger
+    data: The late fee on an overdue invoice
+    steps:
+      - symbol: legacy_billing/billing.py::overdue_invoices
+        snippet: 'for row in storage.read_rows("invoices")'
+        does: Reads the unpaid invoices that are past due.
+      - symbol: legacy_billing/billing.py::late_fee_for
+        snippet: owed = row["total"] - row["paid"]
+        does: Takes the fee from what is open.
+      - symbol: legacy_billing/billing.py::apply_late_fees
+        snippet: storage.replace_row("invoices", "number", row)
+        does: Writes the fee into the invoice row.
+      - symbol: legacy_billing/ledger.py::post_entry
+        snippet: storage.append_row("ledger", entry)
+        does: Posts the fee to the ledger table.
+      - symbol: legacy_billing/notify.py::queue_notice
+        snippet: storage.append_row("outbox"
+        does: Queues the letter about the fee in the outbox table.
+  - id: flow-promo-to-discount
+    data: The promotion code of a customer
+    steps:
+      - symbol: legacy_billing/cli.py::_add_customer
+        snippet: '"promo": args.promo,'
+        does: Takes the code from the command line.
+      - symbol: legacy_billing/customers.py::add_customer
+        snippet: storage.replace_row("customers", "id", row)
+        does: Saves it in the customers table.
+      - symbol: legacy_billing/customers.py::all_customers
+        snippet: storage.read_rows("customers")
+        does: Reads it back and caches it in the shared state.
+      - symbol: legacy_billing/billing.py::promo_discount
+        snippet: code = customer.get("promo")
+        does: Looks the code up in the catalog and works out the discount.
+      - symbol: legacy_billing/billing.py::apply_discounts
+        snippet: invoice.add_line("discount", f"Promotion {customer['promo']}", -promo)
+        does: Adds the discount to the invoice as a negative line.
+  - id: flow-country-to-total
+    data: The country of a customer
+    steps:
+      - symbol: legacy_billing/cli.py::_add_customer
+        snippet: '"country": args.country,'
+        does: Takes the country from the command line.
+      - symbol: legacy_billing/billing.py::add_vat
+        snippet: invoice.vat = taxes.vat_amount(invoice.subtotal(), customer["country"])
+        does: Sets the VAT of the invoice.
+      - symbol: legacy_billing/taxes.py::vat_amount
+        snippet: money.percent_of(cents, vat_rate(country))
+        does: Applies the rate of the country.
+      - symbol: legacy_billing/invoices.py::Invoice.total
+        snippet: return self.subtotal() + self.vat
+        does: Adds the VAT to the amount to pay.
+  - id: flow-period-to-ledger
+    data: The period of the billing run
+    steps:
+      - symbol: legacy_billing/billing.py::run_billing
+        snippet: state.RUN["period"] = period
+        does: Puts the period into the shared state.
+      - symbol: legacy_billing/ledger.py::post_entry
+        snippet: '"period": state.RUN.get("period", ""),'
+        does: Reads it from the shared state for every posting.
+
+dynamic_calls:
+  - id: dynamic-export
+    symbol: legacy_billing/billing.py::export_ledger
+    snippet: writer(ledger.entries())
+    reason: The function is found by getattr with a name built from the format.
+    targets:
+      - legacy_billing/exporters.py::export_csv
+      - legacy_billing/exporters.py::export_fixed
+  - id: dynamic-hooks
+    symbol: legacy_billing/billing.py::post_invoice
+    snippet: hook(row)
+    reason: The hooks are values in a shared list.
+    targets: ["legacy_billing/audit.py::log_posting"]
+  - id: dynamic-report
+    symbol: legacy_billing/reports.py::run_report
+    snippet: REPORTS[name]()
+    reason: The function is a value of a dictionary, picked by a string.
+    targets:
+      - legacy_billing/reports.py::report_balances
+      - legacy_billing/reports.py::report_unpaid
+      - legacy_billing/reports.py::report_warnings
+
+features:
+  - id: feature-late-fees
+    title: Late fees on overdue invoices
+    modules: [legacy_billing/billing.py, legacy_billing/notify.py, legacy_billing/settings.py]
+    symbols:
+      - legacy_billing/billing.py::apply_late_fees
+      - legacy_billing/billing.py::overdue_invoices
+      - legacy_billing/billing.py::late_fee_for
+      - legacy_billing/notify.py::late_fee_text
+      - legacy_billing/settings.py::LATE_FEE_GRACE_DAYS
+      - legacy_billing/settings.py::LATE_FEE_FLAT_CENTS
+      - legacy_billing/settings.py::LATE_FEE_PERCENT
+    uses:
+      - legacy_billing/dates.py::days_after
+      - legacy_billing/ledger.py::post_entry
+      - legacy_billing/money.py::format_cents
+      - legacy_billing/money.py::percent_of
+      - legacy_billing/notify.py::queue_notice
+      - legacy_billing/storage.py::read_rows
+      - legacy_billing/storage.py::replace_row
+    called_from:
+      - symbol: legacy_billing/cli.py::main
+        snippet: billing.apply_late_fees(args.today)
+    state:
+      - symbol: legacy_billing/billing.py::apply_late_fees
+        snippet: state.RUN["late_fees"] = state.RUN.get("late_fees", 0) + charged
+    tests: [tests/test_late_fees.py]
+  - id: feature-discounts
+    title: Promotion and loyalty discounts
+    modules:
+      - legacy_billing/billing.py
+      - legacy_billing/catalog.py
+      - legacy_billing/customers.py
+      - legacy_billing/settings.py
+    symbols:
+      - legacy_billing/billing.py::apply_discounts
+      - legacy_billing/billing.py::promo_discount
+      - legacy_billing/billing.py::loyalty_discount
+      - legacy_billing/billing.py::promo_uses
+      - legacy_billing/billing.py::count_promo_use
+      - legacy_billing/catalog.py::PROMOS
+      - legacy_billing/catalog.py::find_promo
+      - legacy_billing/customers.py::months_active
+      - legacy_billing/settings.py::LOYALTY_MONTHS
+      - legacy_billing/settings.py::LOYALTY_PERCENT
+    uses:
+      - legacy_billing/dates.py::parse_day
+      - legacy_billing/dates.py::period_start
+      - legacy_billing/invoices.py::Invoice.add_line
+      - legacy_billing/invoices.py::Invoice.charges
+      - legacy_billing/money.py::percent_of
+      - legacy_billing/storage.py::read_rows
+      - legacy_billing/storage.py::replace_row
+    called_from:
+      - symbol: legacy_billing/billing.py::bill_customer
+        snippet: apply_discounts(invoice, customer)
+    state:
+      - symbol: legacy_billing/billing.py::promo_discount
+        snippet: state.WARNINGS.append(f"{customer['id']} has the unknown code {code}")
+      - symbol: legacy_billing/billing.py::count_promo_use
+        snippet: state.RUN["promos"] = state.RUN.get("promos", 0) + 1
+    tests: [tests/test_discounts.py]
