@@ -1,0 +1,21 @@
+name: code-archaeology
+version: 0.1.0
+kind: llm
+team: decomp
+description: Reads a Python codebase from one entry point and returns a module map, the data flows between modules, the dead code with the tool's evidence, and the execution paths with every unresolved dynamic call named.
+model: claude-sonnet-5-5 # verified by tests/live/test_code_archaeology_live.py
+effort: high
+system_prompt: system.md
+schemas: schemas.py
+input_model: CodeArchaeologyInput
+output_model: CodeArchaeologyOutput
+tools:
+  allow: [git.read_file, rg.search, deps.graph, deps.impact, deps.dead_code, deps.call_graph]
+  deny: []
+limits:
+  max_tool_turns: 25
+  timeout_s: 600
+  max_output_tokens: 16000
+  max_tokens_total: 600000
+evals:
+  min_pass_rate: 0.75
