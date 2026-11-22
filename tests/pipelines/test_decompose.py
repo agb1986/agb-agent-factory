@@ -7,20 +7,25 @@ The blueprints come from the ground truth of `legacy-billing`; the store is a Du
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from evals.graders.ground_truth import load_truth
-from factory.exit import UsageError
+from factory.exit import NotFoundError, UsageError
+from pipelines import decompose
 from pipelines.decompose import (
     ACTOR,
+    ARCHAEOLOGY,
+    EXTRACTION,
     JSON_HEADING,
     TITLE_CHARS,
     blueprint_of,
     extraction_ticket,
     file_extraction_ticket,
     render_blueprint,
+    resolve_decompose_agents,
     ticket_body,
 )
 from registry.decomposition_schemas import ExtractionBlueprint
@@ -324,3 +329,47 @@ class TestFileExtractionTicket:
         with pytest.raises(UsageError, match="run id"):
             file_extraction_ticket(trace, small(), repo=REPO, ref=REF, pipeline_run_id=" ")
         assert WorkItems(trace).list() == []
+
+
+class TestResolveDecomposeAgents:
+    def test_both_agents_resolve_and_are_read_only(self) -> None:
+        agents = resolve_decompose_agents(allow_unpublished=True)
+        assert agents.archaeology.name == ARCHAEOLOGY[0]
+        assert agents.extraction.name == EXTRACTION[0]
+        for spec in (agents.archaeology, agents.extraction):
+            assert spec.sandbox_profile is None and spec.files is None
+
+    def test_only_published_versions_unless_allowed(self, tmp_path: Path) -> None:
+        with pytest.raises(NotFoundError):
+            resolve_decompose_agents(trace_path=tmp_path / "traces.duckdb")
+
+    @pytest.mark.parametrize("name", [ARCHAEOLOGY[0], EXTRACTION[0]])
+    @pytest.mark.parametrize("how", ["sandboxed", "files"])
+    def test_an_agent_that_may_write_is_a_usage_error(
+        self, monkeypatch: pytest.MonkeyPatch, name: str, how: str
+    ) -> None:
+        real = decompose.resolve
+        update = {"sandbox": True} if how == "sandboxed" else {"files": object()}
+
+        def writing(asked: str, *args: Any, **kwargs: Any) -> Any:
+            spec = real(asked, *args, **kwargs)
+            return spec.model_copy(update=update) if asked == name else spec
+
+        monkeypatch.setattr(decompose, "resolve", writing)
+        with pytest.raises(UsageError, match=f"{name}.*not read-only"):
+            resolve_decompose_agents(allow_unpublished=True)
+
+    @pytest.mark.parametrize("name", [ARCHAEOLOGY[0], EXTRACTION[0]])
+    def test_an_agent_that_is_not_an_llm_agent_is_a_usage_error(
+        self, monkeypatch: pytest.MonkeyPatch, name: str
+    ) -> None:
+        real = decompose.resolve
+
+        def other(asked: str, *args: Any, **kwargs: Any) -> Any:
+            if asked == name:
+                return SimpleNamespace(address=f"{name}@0.1.0")
+            return real(asked, *args, **kwargs)
+
+        monkeypatch.setattr(decompose, "resolve", other)
+        with pytest.raises(UsageError, match="is not an LLM agent"):
+            resolve_decompose_agents(allow_unpublished=True)

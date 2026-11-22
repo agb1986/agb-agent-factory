@@ -13,15 +13,22 @@ is one line and cannot open a code fence; the JSON keeps the text as it was give
 import json
 import re
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 from pydantic import ValidationError
 
 from factory.exit import UsageError
 from registry.common_schemas import Ticket
 from registry.decomposition_schemas import ExtractionBlueprint
+from registry.resolver import resolve
+from registry.spec import LLMSpec
 from runtime.trace import Trace
 from runtime.work_items import WorkItem, WorkItems
+
+ARCHAEOLOGY = ("code-archaeology", "^0.1")
+EXTRACTION = ("extraction-modularization", "^0.1")
 
 ACTOR = "pipeline:decompose"
 """The actor of the ticket's events: ADR 0002's `pipeline:<module>`."""
@@ -35,6 +42,48 @@ TITLE_CHARS = 120
 _JSON_OPEN = f"\n{JSON_HEADING}\n\n```json\n"
 _JSON_CLOSE = "\n```"
 _FENCE = re.compile(r"`{3,}|~{3,}")
+
+
+# --- the agents --------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class DecomposeAgents:
+    """The two resolved agents one decompose run uses."""
+
+    archaeology: LLMSpec
+    extraction: LLMSpec
+
+
+def resolve_decompose_agents(
+    *, allow_unpublished: bool = False, trace_path: Path | None = None
+) -> DecomposeAgents:
+    """Resolve the two agents of a decompose run; unless `allow_unpublished`, published ones.
+
+    Raises `UsageError` when either is not an LLM agent or may write (both manifests must offer
+    read-only tools only), and the resolver's `NotFoundError` subclasses (exit 3) when an agent or
+    version is missing.
+    """
+    found: list[LLMSpec] = []
+    for name, version_range in (ARCHAEOLOGY, EXTRACTION):
+        spec = resolve(
+            name, version_range, published_only=not allow_unpublished, trace_path=trace_path
+        )
+        if not isinstance(spec, LLMSpec):
+            raise UsageError(
+                f"{spec.address} is not an LLM agent, so the decompose run cannot run it"
+            )
+        if spec.sandbox_profile is not None or spec.files is not None:
+            raise UsageError(
+                f"{spec.address} is sandboxed or has a files policy, so it is not read-only",
+                hint=f"{name} takes read-only tools only (agents/{name})",
+            )
+        found.append(spec)
+    archaeology, extraction = found
+    return DecomposeAgents(archaeology=archaeology, extraction=extraction)
+
+
+# --- the ticket --------------------------------------------------------------------------------
 
 
 def render_blueprint(blueprint: ExtractionBlueprint) -> str:
