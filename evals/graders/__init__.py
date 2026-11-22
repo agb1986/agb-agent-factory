@@ -23,6 +23,10 @@ The `incident` grader, `evals.graders.incident`, checks a triage-diagnostics ans
 paths must name the planted fault and its reproduction test must fail at the fixture's `head` with
 the event's exception. It needs the repository path too, and calls no judge: an answer that
 passes its checks passes.
+The `ground_truth` grader, `evals.graders.ground_truth`, checks an answer about a whole codebase
+against entries of the fixture's `ground-truth.yaml`, which it loads by the case's fixture name. It
+calls no judge either. A rubric case may carry `expected.ground_truth` too: the same checks then run
+before its judge.
 """
 
 from collections.abc import Mapping
@@ -32,6 +36,7 @@ from typing import Any
 
 from evals.cases import SEVERITIES, Case, Expected, ExpectedDefect
 from evals.graders.citations import Fetcher, check_citations, web_fetcher
+from evals.graders.ground_truth import check_ground_truth, load_truth
 from evals.graders.incident import check_incident
 from evals.graders.llm_judge import Judge, JudgeVerdict
 from evals.graders.rubric import check_output
@@ -140,6 +145,11 @@ def grade(
     `repo_path`. The `incident` grader runs the checks of `expected.incident` in a copy of
     `repo_path`, raises `UsageError` without it, and calls no judge: passing its checks passes.
 
+    A case with `expected.ground_truth` (the `ground_truth` grader, or `rubric` with the block) has
+    it checked against the ground truth of the case's fixture. Raises `UsageError` when the fixture
+    has none or the case names an id that is not in it. The `ground_truth` grader calls no judge:
+    passing its checks passes.
+
     A case with `expected.citations_resolve` has it checked once the other checks have passed and
     before a judge is called; the pages come from `fetcher`, which defaults to `web.fetch`. A page
     that cannot be fetched or is outside the case's domains raises `CitationCheckError`, not a
@@ -162,6 +172,9 @@ def grade(
             raise UsageError("the incident grader needs the repository path to run the test in")
         found = check_incident(case.expected.incident, actual, repo_path)
         checks = Deterministic(checks.passed and not found, (*checks.failures, *found))
+    if case.expected.ground_truth is not None:
+        found = check_ground_truth(case.expected.ground_truth, actual, load_truth(case.fixture))
+        checks = Deterministic(checks.passed and not found, (*checks.failures, *found))
     if case.expected.rubric is not None:
         found = check_output(case.expected.rubric, actual, repo_path)
         checks = Deterministic(checks.passed and not found, (*checks.failures, *found))
@@ -178,6 +191,8 @@ def grade(
         return Grade(False, 0.0, "; ".join(checks.failures), checks)
     if case.grader == "incident":
         return Grade(True, 1.0, "the incident checks passed", checks)
+    if case.grader == "ground_truth":
+        return Grade(True, 1.0, "the ground truth checks passed", checks)
     chosen = judge
     if case.grader == "jev" and jev_judge is not None:
         chosen = jev_judge
