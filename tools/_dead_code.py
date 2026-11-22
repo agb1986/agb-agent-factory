@@ -1,6 +1,7 @@
 """Static dead code: `deps.dead_code`, the symbols and modules of a repository nothing appears to use.
 
-Nothing read is imported or run, and the report never depends on a setting the repository holds.
+Nothing read is imported or run, and no setting the repository holds drops a finding; the only one
+read, the entry points of the root `pyproject.toml`, moves what it names to the dynamic list.
 Python is read with `ast`. Vulture, used as a library, finds the definitions whose bare name no
 file uses; its command line, which is the part that reads `[tool.vulture]`, is never entered, its
 `# noqa` handling is switched off and whitelist modules are set aside, so a file in the repository
@@ -1310,6 +1311,7 @@ DEAD_CODE = ToolSpec(
                 ),
             },
         },
+        "required": [],
         "additionalProperties": False,
     },
     impl=dead_code,
