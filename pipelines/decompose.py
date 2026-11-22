@@ -1,8 +1,8 @@
 """From an extraction blueprint to a `refactor` ticket in the work-item store.
 
 `extraction-modularization` (team `decomp`) returns an `ExtractionBlueprint`. Nothing in this module
-runs an agent or calls a model: it renders the blueprint as markdown, makes a `Ticket` from it and stores the ticket, so that the
-build loop can route the item to `refactorer` (ADR 0002).
+runs an agent or calls a model: it renders the blueprint as markdown, makes a `Ticket` from it and
+stores the ticket, so that the build loop can route the item to `refactorer` (ADR 0002).
 
 The blueprint is the model, and the markdown is made from it in code. The body of the ticket holds
 both: the markdown for a reader and, after `JSON_HEADING`, the JSON that `blueprint_of` reads back
