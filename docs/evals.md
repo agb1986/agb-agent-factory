@@ -8,16 +8,18 @@ agent may use.
 
 ## Ground truth first
 
-An eval is only as good as what it compares against. The `llm_judge`, `sandbox_tests`, `incident` and `jev`
-graders all start from ground truth that the case states: a verdict, planted defects at known
-lines, tests that must fail and then pass, or the option a Jev question must pick. The judge model
-only grades what is left once those deterministic checks pass.
+An eval is only as good as what it compares against. The `llm_judge`, `sandbox_tests`, `incident`,
+`ground_truth` and `jev` graders all start from ground truth that the case states: a verdict,
+planted defects at known lines, tests that must fail and then pass, entries of a fixture's
+`ground-truth.yaml`, or the option a Jev question must pick. The judge model only grades what is
+left once those deterministic checks pass.
 
 The following agents keep ground-truth evals and must not use the `rubric` grader:
 
 - the reviewers (`code-reviewer`, `security-reviewer`, `perf-reviewer` and any later one);
 - the fixers and the test-writer;
 - the judge;
+- `code-archaeology`, whose account of a codebase is checked against that codebase;
 - the Jev agents (`diff-triage`, `judge-gate`, `action-guard` and any later `kind: jev` agent).
 
 Their outputs have a right answer, and a case that does not check it measures nothing.
@@ -36,11 +38,16 @@ The research agent `spike` runs throwaway code in the networked spike sandbox to
 real shape; its cases are graded by rubric on the observations it reports, each with the command
 and the output, and by `citations_resolve` on the facts it read (#106).
 
-The one agent outside those teams that may use the rubric is `escalation-summary` (#94, team
+Two agents outside those teams may use the rubric. The first is `escalation-summary` (#94, team
 `hitl`). It writes a paragraph and a few options for a person to choose from an escalation record,
 prose that has no single right answer. Its ground truth is not the prose but the record itself:
 each case sets `expected.options_in_record`, and the case fails, without a model call, when an
 option's evidence is not a span of the record or a dollar figure was invented (see below).
+
+The second is `extraction-modularization` (#112, team `decomp`). Its blueprint states a feature's
+inputs, outputs and invariants in words, which have no single right answer. The boundary it draws
+does have one, so every case carries an `expected.ground_truth` block, and an answer whose boundary
+or ties are wrong fails without a judge call ([below](#the-ground_truth-grader)).
 
 A rubric case has `expected.verdict: null` and an `expected.rubric` block:
 
@@ -246,3 +253,60 @@ A case passes on two checks, in this order, and the grader calls no model:
 `int("")` raises one frame below it. The rule in step 2 is `reproduces`, and `factory incident` applies the same function to the
 tests test-writer writes ([incident.md](incident.md)), so the eval scores what the pipeline counts.
 The grader needs Docker and the sandbox image.
+
+## The `ground_truth` grader
+
+code-archaeology (#112) is graded by `ground_truth` (`evals/graders/ground_truth.py`). Its cases run
+on a fixture that holds a `ground-truth.yaml` ([fixtures/README.md](../fixtures/README.md#ground-truthyaml)),
+which the grader loads by the case's fixture name. A case names the entries to check by id, and
+repeats nothing else of that file:
+
+```yaml
+  expected:
+    verdict: null
+    ground_truth:
+      dead_code: [dead-function, dead-module]
+      data_flows: [flow-usage-to-invoice]
+      call_chains: [chain-billing-run]
+      dynamic_calls: [dynamic-hooks]
+  grader: ground_truth
+```
+
+Every list is optional, and at least one id must be given. The checks are exact, every failure names
+the entry's id, and the grader calls no model: an answer that passes its checks passes, with score
+1.0. The grader reads the `dead_code`, `data_flows` and `execution_paths` of the answer, and for
+`features` the fields of an `ExtractionBlueprint`. No prose is compared, and neither are line
+numbers, module roles or, except where a rule says so, the extra entries an answer may have.
+
+- `dead_code`: `dead_code` of the answer has an entry with the same symbol and the same `kind`.
+- Decoys: no `dead_code` entry of the answer is a decoy, or a class or module a decoy is in. This is
+  checked against every decoy of the fixture in every case, whatever the case names. A decoy under
+  `dynamic_lookups` is not called dead and is no failure.
+- `data_flows`: one flow of the answer names every module the entry's steps are in, has every step's
+  symbol except at most one (a flow of two steps may miss none), and reaches the entry's first
+  module before its last.
+- `call_chains`: every call of the chain is in the answer as a `resolved` call with the same caller
+  and callee. The calls may be spread over several execution paths.
+- `dynamic_calls`: the answer has an `unresolved` call whose `caller` is the entry's symbol and whose
+  `expression` is the entry's call. Whitespace is ignored, and the expression matches when it
+  contains the entry's snippet or has the same text before its first `(`.
+- Not guessed: no `resolved` call of the answer goes from a dynamic call's site to one of its
+  targets. This too is checked in every case, for every dynamic call of the fixture.
+- `features`: the blueprint's `symbols`, the callers in its `called_from`, the symbols in its
+  `state` and the paths in its `pinning_tests` hold every one the entry lists, and its `uses` hold
+  every one but at most one. Nothing in the entry's `uses` or `called_from` may be in the
+  blueprint's `symbols`, by itself or through its class or module. Other extra entries are no
+  failure.
+
+A `rubric` case may carry `expected.ground_truth` as well. The same checks then run before its judge,
+and a failed one ends the case; the cases of extraction-modularization name a feature this way. No
+other grader takes the block. A case whose fixture has no ground
+truth, or that names an id the file lacks in that section, is a usage error and not a failed grade.
+
+To check another section of the ground truth, add its field to `ExpectedGroundTruth` in
+`evals/cases.py`, a function to `evals/graders/ground_truth.py`, and a call to it in
+`check_ground_truth`.
+
+The target, `legacy-billing`, is synthetic and small. A pass rate on it shows that an agent finds what
+was planted there. It does not show that the agent holds up on a large or a real codebase
+([ADR 0005](decisions/0005-decomposition-target.md)).

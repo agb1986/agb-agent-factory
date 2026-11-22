@@ -1,0 +1,93 @@
+# Eval cases for code-archaeology, all on fixtures/src/legacy-billing, the decomposition target of
+# docs/decisions/0005-decomposition-target.md. Each one starts the agent from another symbol. The
+# ground_truth grader (evals/graders/ground_truth.py, docs/evals.md) checks the answer against
+# entries of the fixture's ground-truth.yaml, named here by id, and calls no judge; no case repeats
+# any text of that file. In every case no decoy may be listed as dead code and no dynamic call may be
+# reported as resolved, whether the case names it or not.
+#
+# The target is synthetic and small. A pass rate here shows that the agent finds what was planted in
+# a small codebase. It does not show that the agent holds up on a large or a real one.
+#
+# `repo_path` is not in the payload: the eval runner fills it in with the built fixture repository,
+# which holds `head/` only, so the agent cannot read the ground truth.
+cases:
+  - id: whole-program-from-main
+    fixture: legacy-billing
+    payload:
+      entry_point: legacy_billing/cli.py::main
+    expected:
+      verdict: null
+      ground_truth:
+        dead_code:
+          - dead-function
+          - dead-class
+          - dead-method
+          - dead-module
+          - dead-vat-rate
+          - dead-through-dead
+          - dead-copy
+        data_flows:
+          - flow-usage-to-invoice
+        call_chains:
+          - chain-billing-run
+          - chain-import-usage
+    grader: ground_truth
+
+  # The entry point is the second call of the billing run, and its hooks are called from a list.
+  - id: billing-run-and-its-hooks
+    fixture: legacy-billing
+    payload:
+      entry_point: legacy_billing/billing.py::run_billing
+    expected:
+      verdict: null
+      ground_truth:
+        data_flows:
+          - flow-period-to-ledger
+        dynamic_calls:
+          - dynamic-hooks
+    grader: ground_truth
+
+  # A flow that leaves the module of the entry point twice.
+  - id: late-fees-to-the-ledger
+    fixture: legacy-billing
+    payload:
+      entry_point: legacy_billing/billing.py::apply_late_fees
+    expected:
+      verdict: null
+      ground_truth:
+        data_flows:
+          - flow-overdue-to-ledger
+    grader: ground_truth
+
+  # Functions reached by a computed name, which a text search shows no use of.
+  - id: export-by-computed-name
+    fixture: legacy-billing
+    payload:
+      entry_point: legacy_billing/billing.py::export_ledger
+    expected:
+      verdict: null
+      ground_truth:
+        dead_code:
+          - dead-function
+          - dead-class
+          - dead-method
+        dynamic_calls:
+          - dynamic-export
+    grader: ground_truth
+
+  # Functions reached through a registry, in a codebase with dead code next to them.
+  - id: report-registry
+    fixture: legacy-billing
+    payload:
+      entry_point: legacy_billing/reports.py::run_report
+    expected:
+      verdict: null
+      ground_truth:
+        dead_code:
+          - dead-module
+          - dead-vat-rate
+          - dead-through-dead
+          - dead-copy
+        dynamic_calls:
+          - dynamic-report
+    grader: ground_truth

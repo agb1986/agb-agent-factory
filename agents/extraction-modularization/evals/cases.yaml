@@ -1,0 +1,607 @@
+# Eval cases for extraction-modularization, all on fixtures/src/legacy-billing, the decomposition
+# target of docs/decisions/0005-decomposition-target.md. Each one is graded by the rubric grader. Its
+# deterministic checks run first: the ground_truth checks compare the blueprint's boundary and ties
+# with a feature of the fixture's ground-truth.yaml, named here by id (evals/graders/ground_truth.py,
+# docs/evals.md). The judge then reads the prose, which has no ground truth.
+#
+# The archaeology in a payload is a correct answer of code-archaeology, built from the outputs of the
+# deps tools on the built fixture. It describes the codebase and never says what belongs to the
+# feature. The cases differ in how much of the codebase it covers. `repo_path` is not in the payload:
+# the eval runner fills it in with the built fixture repository, which holds `head/` only, so the
+# agent cannot read the ground truth.
+#
+# The target is synthetic and small. A pass rate here shows that the agent finds a boundary that was
+# planted in a small codebase. It does not show that the agent holds up on a large or a real one.
+cases:
+  # The whole program, read from the command line.
+  - id: late-fees-full-map
+    fixture: legacy-billing
+    payload:
+      feature:
+        name: Late fees
+        start: legacy_billing/billing.py::apply_late_fees
+      archaeology: &full-map
+        summary: >-
+          A command line program that bills subscription customers. cli.py parses a command and
+          calls one function of the billing, payments, importer, customers or reports module.
+          billing.py is the largest module: it runs the monthly billing, and also holds discounts,
+          late fees, credit notes, statements, exports and the period close. Rows are kept in JSON
+          files through storage.py. Much passes through the dictionaries of state.py and not
+          through calls: counters of the run, cached customers, warnings and hooks. Three calls
+          cannot be tied to one function by reading: the hooks called when an invoice is posted,
+          the export picked by the name of the format, and the report looked up by name.
+        modules:
+          - {path: "legacy_billing/cli.py", role: "Parses the command line and hands each command to
+             the module that does the work.", imports: ["legacy_billing/audit.py",
+             "legacy_billing/billing.py", "legacy_billing/customers.py",
+             "legacy_billing/importer.py", "legacy_billing/payments.py",
+             "legacy_billing/reports.py", "legacy_billing/storage.py"]}
+          - {path: "legacy_billing/billing.py", role: "The largest module: the billing run, prices,
+             discounts, late fees, credit notes, statements, exports and period close.", imports:
+             ["legacy_billing/catalog.py", "legacy_billing/customers.py", "legacy_billing/dates.py",
+             "legacy_billing/exporters.py", "legacy_billing/invoices.py",
+             "legacy_billing/ledger.py", "legacy_billing/money.py", "legacy_billing/notify.py",
+             "legacy_billing/numbering.py", "legacy_billing/settings.py", "legacy_billing/state.py",
+             "legacy_billing/storage.py", "legacy_billing/taxes.py", "legacy_billing/usage.py"]}
+          - {path: "legacy_billing/audit.py", role: "Saves a trail of posted invoices; it registers
+             itself as a hook in the shared state.", imports: ["legacy_billing/state.py",
+             "legacy_billing/storage.py"]}
+          - {path: "legacy_billing/storage.py", role: "Reads and writes the tables, each one a JSON
+             file in the data directory of the run.", imports: ["legacy_billing/state.py"]}
+          - {path: "legacy_billing/customers.py", role: "Customer rows, cached in the shared state
+             after the first read.", imports: ["legacy_billing/dates.py", "legacy_billing/state.py",
+             "legacy_billing/storage.py"]}
+          - {path: "legacy_billing/payments.py", role: "Records payments and puts them against the
+             oldest open invoices.", imports: ["legacy_billing/ledger.py",
+             "legacy_billing/state.py", "legacy_billing/storage.py"]}
+          - {path: "legacy_billing/importer.py", role: "Reads usage files from the meters.",
+             imports: ["legacy_billing/catalog.py", "legacy_billing/state.py",
+             "legacy_billing/usage.py"]}
+          - {path: "legacy_billing/reports.py", role: "Plain text reports, found by name in a
+             table.", imports: ["legacy_billing/customers.py", "legacy_billing/ledger.py",
+             "legacy_billing/money.py", "legacy_billing/state.py", "legacy_billing/storage.py"]}
+          - {path: "legacy_billing/state.py", role: "Dictionaries and lists that the whole package
+             shares: run counters, caches, number counters, warnings and hooks.", imports: []}
+          - {path: "legacy_billing/dates.py", role: "Days as text and periods as year and month, and
+             arithmetic on them.", imports: []}
+          - {path: "legacy_billing/invoices.py", role: "The invoice object that a billing run fills
+             with lines.", imports: ["legacy_billing/money.py"]}
+          - {path: "legacy_billing/catalog.py", role: "Plan prices, meter prices and promotion
+             codes.", imports: []}
+          - {path: "legacy_billing/usage.py", role: "Rows of metered usage.", imports:
+             ["legacy_billing/storage.py"]}
+          - {path: "legacy_billing/taxes.py", role: "VAT by the customer's country, and an old rate
+             table nothing uses.", imports: ["legacy_billing/money.py",
+             "legacy_billing/settings.py"]}
+          - {path: "legacy_billing/money.py", role: "Rounding, percentages and formatting of amounts
+             in cents.", imports: []}
+          - {path: "legacy_billing/settings.py", role: "Constants that several modules read.",
+             imports: []}
+          - {path: "legacy_billing/numbering.py", role: "Document numbers, counted in the shared
+             state and saved.", imports: ["legacy_billing/state.py", "legacy_billing/storage.py"]}
+          - {path: "legacy_billing/ledger.py", role: "One row per posting, and balances over the
+             rows.", imports: ["legacy_billing/state.py", "legacy_billing/storage.py"]}
+          - {path: "legacy_billing/notify.py", role: "Letters to customers, queued in the outbox
+             table.", imports: ["legacy_billing/customers.py", "legacy_billing/money.py",
+             "legacy_billing/storage.py"]}
+          - {path: "legacy_billing/exporters.py", role: "Ledger exports; billing finds one by the
+             name of the format.", imports: ["legacy_billing/money.py"]}
+          - {path: "legacy_billing/fax_gateway.py", role: "Sends invoices by fax; no module imports
+             it.", imports: ["legacy_billing/settings.py", "legacy_billing/storage.py"]}
+          - {path: "legacy_billing/__main__.py", role: "Runs the command line when the package is
+             started as a module.", imports: ["legacy_billing/cli.py"]}
+          - {path: "legacy_billing/__init__.py", role: "The package; offers two names to scripts
+             outside the repository.", imports: ["legacy_billing/cli.py",
+             "legacy_billing/money.py"]}
+        data_flows:
+          - data: "A meter reading, from the usage file to the posted invoice."
+            steps:
+              - {symbol: "legacy_billing/importer.py::import_usage", does: "reads the rows of the
+                 file"}
+              - {symbol: "legacy_billing/usage.py::record_usage", does: "saves one reading"}
+              - {symbol: "legacy_billing/usage.py::usage_for", does: "adds up the readings of a
+                 customer and period"}
+              - {symbol: "legacy_billing/billing.py::price_usage", does: "turns the units into
+                 invoice lines"}
+              - {symbol: "legacy_billing/billing.py::post_invoice", does: "saves the invoice and
+                 posts its total"}
+          - data: "A promotion code, from the new customer to the invoice line."
+            steps:
+              - {symbol: "legacy_billing/cli.py::_add_customer", does: "takes the code from the
+                 command line"}
+              - {symbol: "legacy_billing/customers.py::add_customer", does: "saves it in the
+                 customer row"}
+              - {symbol: "legacy_billing/customers.py::all_customers", does: "returns the row to the
+                 billing run"}
+              - {symbol: "legacy_billing/billing.py::promo_discount", does: "looks the code up and
+                 works out an amount"}
+              - {symbol: "legacy_billing/billing.py::apply_discounts", does: "adds a line to the
+                 invoice"}
+          - data: "An invoice that is past due, from the invoice table to the ledger and the outbox."
+            steps:
+              - {symbol: "legacy_billing/billing.py::overdue_invoices", does: "picks the rows that
+                 are past due"}
+              - {symbol: "legacy_billing/billing.py::late_fee_for", does: "works out an amount from
+                 the row"}
+              - {symbol: "legacy_billing/billing.py::apply_late_fees", does: "saves the row with the
+                 amount"}
+              - {symbol: "legacy_billing/ledger.py::post_entry", does: "appends a posting to the
+                 ledger"}
+              - {symbol: "legacy_billing/notify.py::queue_notice", does: "puts a letter into the
+                 outbox"}
+          - data: "A payment, from the command line to the invoices it pays."
+            steps:
+              - {symbol: "legacy_billing/cli.py::main", does: "takes the customer, the amount and
+                 the reference"}
+              - {symbol: "legacy_billing/payments.py::record_payment", does: "posts the payment and
+                 warns about an overpayment"}
+              - {symbol: "legacy_billing/payments.py::_allocate", does: "adds it to the paid amount
+                 of the oldest open invoices"}
+              - {symbol: "legacy_billing/storage.py::replace_row", does: "saves the invoice rows"}
+        dead_code: &dead-code
+          - {symbol: "legacy_billing/billing.py::prorate_by_weeks", kind: "function", line: 104,
+             rule: "vulture", confidence: 60, evidence: "No use of the name in the tree; reading
+             billing showed no table or lookup that holds it."}
+          - {symbol: "legacy_billing/customers.py::CustomerMerger", kind: "class", line: 37, rule:
+             "vulture", confidence: 60, evidence: "No use of the name in the tree."}
+          - {symbol: "legacy_billing/fax_gateway.py", kind: "module", line: 1, rule: "module",
+             confidence: 60, evidence: "No module in the tree imports it."}
+          - {symbol: "legacy_billing/importer.py::_pad", kind: "function", line: 9, rule: "private",
+             confidence: 80, evidence: "Its own module never uses it and no other module imports or
+             reads it."}
+          - {symbol: "legacy_billing/invoices.py::Invoice.as_legacy_row", kind: "method", line: 50,
+             rule: "vulture", confidence: 60, evidence: "No use of the name in the tree."}
+          - {symbol: "legacy_billing/taxes.py::old_vat_rate", kind: "function", line: 24, rule:
+             "vulture", confidence: 60, evidence: "No use of the name in the tree."}
+          - {symbol: "legacy_billing/taxes.py::_old_vat_table", kind: "function", line: 20, rule:
+             "through_dead", confidence: 60, evidence: "Only old_vat_rate uses it, which nothing
+             uses."}
+        dynamic_lookups: &dynamic-lookups
+          - {symbol: "legacy_billing/exporters.py::export_csv", kind: "function", line: 12, rule:
+             "vulture", confidence: 20, lookup_site: "legacy_billing/billing.py::export_ledger",
+             lookup: "getattr(exporters, 'export_' + fmt, None)"}
+          - {symbol: "legacy_billing/exporters.py::export_fixed", kind: "function", line: 21, rule:
+             "vulture", confidence: 20, lookup_site: "legacy_billing/billing.py::export_ledger",
+             lookup: "getattr(exporters, 'export_' + fmt, None)"}
+        execution_paths:
+          - title: "The billing run, one customer at a time."
+            calls:
+              - {status: "resolved", caller: "legacy_billing/cli.py::main", callee:
+                 "legacy_billing/audit.py::install", line: 80, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/cli.py::main", callee:
+                 "legacy_billing/billing.py::run_billing", line: 82, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::run_billing", callee:
+                 "legacy_billing/billing.py::is_closed", line: 26, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::run_billing", callee:
+                 "legacy_billing/customers.py::all_customers", line: 31, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::run_billing", callee:
+                 "legacy_billing/billing.py::already_billed", line: 34, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::run_billing", callee:
+                 "legacy_billing/billing.py::bill_customer", line: 37, expression: null, reason:
+                 null}
+          - title: "One invoice, from its lines to the letter."
+            calls:
+              - {status: "resolved", caller: "legacy_billing/billing.py::bill_customer", callee:
+                 "legacy_billing/numbering.py::next_number", line: 55, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::bill_customer", callee:
+                 "legacy_billing/billing.py::add_plan_line", line: 56, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::bill_customer", callee:
+                 "legacy_billing/billing.py::price_usage", line: 57, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::price_usage", callee:
+                 "legacy_billing/usage.py::usage_for", line: 116, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::price_usage", callee:
+                 "legacy_billing/catalog.py::unit_price", line: 118, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::bill_customer", callee:
+                 "legacy_billing/billing.py::apply_discounts", line: 58, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::bill_customer", callee:
+                 "legacy_billing/billing.py::add_vat", line: 59, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::add_vat", callee:
+                 "legacy_billing/taxes.py::vat_amount", line: 129, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::bill_customer", callee:
+                 "legacy_billing/billing.py::post_invoice", line: 60, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::post_invoice", callee:
+                 "legacy_billing/dates.py::due_day", line: 70, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::post_invoice", callee:
+                 "legacy_billing/ledger.py::post_entry", line: 72, expression: null, reason: null}
+              - {status: "unresolved", caller: "legacy_billing/billing.py::post_invoice", callee:
+                 null, line: 75, expression: "hook(row)", reason: "container"}
+              - {status: "resolved", caller: "legacy_billing/billing.py::bill_customer", callee:
+                 "legacy_billing/notify.py::queue_notice", line: 61, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::bill_customer", callee:
+                 "legacy_billing/notify.py::invoice_text", line: 62, expression: null, reason: null}
+          - title: "Late fees."
+            calls:
+              - {status: "resolved", caller: "legacy_billing/cli.py::main", callee:
+                 "legacy_billing/billing.py::apply_late_fees", line: 84, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::apply_late_fees", callee:
+                 "legacy_billing/billing.py::overdue_invoices", line: 194, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::apply_late_fees", callee:
+                 "legacy_billing/ledger.py::post_entry", line: 199, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::apply_late_fees", callee:
+                 "legacy_billing/notify.py::queue_notice", line: 200, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/ledger.py::post_entry", callee:
+                 "legacy_billing/storage.py::append_row", line: 17, expression: null, reason: null}
+          - title: "A payment."
+            calls:
+              - {status: "resolved", caller: "legacy_billing/cli.py::main", callee:
+                 "legacy_billing/payments.py::record_payment", line: 88, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/payments.py::record_payment", callee:
+                 "legacy_billing/ledger.py::post_entry", line: 8, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/payments.py::record_payment", callee:
+                 "legacy_billing/payments.py::_allocate", line: 9, expression: null, reason: null}
+          - title: "A credit note."
+            calls:
+              - {status: "resolved", caller: "legacy_billing/cli.py::main", callee:
+                 "legacy_billing/billing.py::issue_credit_note", line: 91, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::issue_credit_note", callee:
+                 "legacy_billing/billing.py::find_invoice", line: 239, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::issue_credit_note", callee:
+                 "legacy_billing/numbering.py::next_number", line: 242, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::issue_credit_note", callee:
+                 "legacy_billing/ledger.py::post_entry", line: 244, expression: null, reason: null}
+          - title: "A usage file."
+            calls:
+              - {status: "resolved", caller: "legacy_billing/cli.py::main", callee:
+                 "legacy_billing/importer.py::import_usage", line: 97, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/importer.py::import_usage", callee:
+                 "legacy_billing/usage.py::record_usage", line: 24, expression: null, reason: null}
+          - title: "A report."
+            calls:
+              - {status: "resolved", caller: "legacy_billing/cli.py::main", callee:
+                 "legacy_billing/reports.py::run_report", line: 101, expression: null, reason: null}
+              - {status: "unresolved", caller: "legacy_billing/reports.py::run_report", callee:
+                 null, line: 43, expression: "REPORTS[name]()", reason: "container"}
+          - title: "An export of the ledger."
+            calls:
+              - {status: "resolved", caller: "legacy_billing/cli.py::main", callee:
+                 "legacy_billing/billing.py::export_ledger", line: 103, expression: null, reason:
+                 null}
+              - {status: "unresolved", caller: "legacy_billing/billing.py::export_ledger", callee:
+                 null, line: 275, expression: "writer(ledger.entries())", reason: "getattr"}
+    expected:
+      verdict: null
+      ground_truth:
+        features: [feature-late-fees]
+      rubric:
+        threshold: 0.7
+        required_fields: &required-fields [feature, summary, inputs, outputs, invariants, symbols,
+          uses, called_from, state, pinning_tests]
+        forbidden: &forbidden ["```", "def ", "lambda ", "isinstance(", "len(", "==", "!=", "TODO", "lorem ipsum"]
+        paths_exist: [pinning_tests.*.path]
+        criteria:
+          - &late-fees-invariants-real-and-testable
+            id: invariants-real-and-testable
+            text: >-
+              Each invariant is a rule the code keeps and a test can check, with what is given and
+              what must come out. Together they cover most of these facts and contradict none: a
+              fee is charged only when an invoice is more than 7 days past due, so exactly 7 days
+              past due gives none; an invoice with nothing left to pay gets none; an invoice that
+              already has a fee gets no second one; the fee is the larger of 2 percent of what is
+              still open and 500 cents (5.00).
+            required: true
+            floor: 0.6
+          - &late-fees-enough-for-a-coder
+            id: enough-for-a-coder
+            text: >-
+              A coder who has not read the codebase could write the feature from the blueprint
+              alone. The inputs name the day the run is for, the stored invoices and the settings
+              with their values. The outputs name the fee saved on the invoice, the posting to the
+              ledger, the letter to the customer, the counter of the run and the number of fees
+              charged that is returned. No step of the feature is left out.
+            required: true
+            floor: 0.6
+          - &language-agnostic
+            id: language-agnostic
+            text: >-
+              Everything outside the fields for symbols and paths can be followed by a coder who
+              writes in another language: plain words in the terms of the business, no code, no
+              expressions and no names that only the source language or its standard library has.
+              Naming a table, a stored field or a setting in words is fine.
+            required: true
+            floor: 0.5
+          - &late-fees-ties-can-be-cut
+            id: ties-can-be-cut
+            text: >-
+              The uses, the calls into the feature and the shared state say what each side relies
+              on and how the tie can be cut without changing behaviour, so that the counter of the
+              run and the command that starts the feature still work after the move.
+    grader: rubric
+  # A thin map read from the start of the feature. It does not say what else uses its modules.
+  - id: late-fees-thin-map
+    fixture: legacy-billing
+    payload:
+      feature:
+        name: Charging a fee when an invoice stays unpaid
+        start: legacy_billing/billing.py::apply_late_fees
+      archaeology:
+        summary: >-
+          Reading started at the function that charges late fees. It reads the invoice table,
+          saves a changed row, posts to the ledger and queues a letter. The rest of the program
+          was not followed, so what else uses these modules is not known.
+        modules:
+          - {path: "legacy_billing/billing.py", role: "The largest module: the billing run, prices,
+             discounts, late fees, credit notes, statements, exports and period close.", imports:
+             ["legacy_billing/catalog.py", "legacy_billing/customers.py", "legacy_billing/dates.py",
+             "legacy_billing/exporters.py", "legacy_billing/invoices.py",
+             "legacy_billing/ledger.py", "legacy_billing/money.py", "legacy_billing/notify.py",
+             "legacy_billing/numbering.py", "legacy_billing/settings.py", "legacy_billing/state.py",
+             "legacy_billing/storage.py", "legacy_billing/taxes.py", "legacy_billing/usage.py"]}
+          - {path: "legacy_billing/dates.py", role: "Days as text and periods as year and month, and
+             arithmetic on them.", imports: []}
+          - {path: "legacy_billing/storage.py", role: "Reads and writes the tables, each one a JSON
+             file in the data directory of the run.", imports: ["legacy_billing/state.py"]}
+          - {path: "legacy_billing/ledger.py", role: "One row per posting, and balances over the
+             rows.", imports: ["legacy_billing/state.py", "legacy_billing/storage.py"]}
+          - {path: "legacy_billing/notify.py", role: "Letters to customers, queued in the outbox
+             table.", imports: ["legacy_billing/customers.py", "legacy_billing/money.py",
+             "legacy_billing/storage.py"]}
+        data_flows:
+          - data: "An invoice that is past due, from the invoice table to the ledger and the outbox."
+            steps:
+              - {symbol: "legacy_billing/billing.py::overdue_invoices", does: "picks the rows that
+                 are past due"}
+              - {symbol: "legacy_billing/billing.py::late_fee_for", does: "works out an amount from
+                 the row"}
+              - {symbol: "legacy_billing/billing.py::apply_late_fees", does: "saves the row with the
+                 amount"}
+              - {symbol: "legacy_billing/ledger.py::post_entry", does: "appends a posting to the
+                 ledger"}
+              - {symbol: "legacy_billing/notify.py::queue_notice", does: "puts a letter into the
+                 outbox"}
+        dead_code: *dead-code
+        dynamic_lookups: *dynamic-lookups
+        execution_paths:
+          - title: "From an overdue invoice to the ledger."
+            calls:
+              - {status: "resolved", caller: "legacy_billing/billing.py::apply_late_fees", callee:
+                 "legacy_billing/billing.py::overdue_invoices", line: 194, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::overdue_invoices", callee:
+                 "legacy_billing/storage.py::read_rows", line: 211, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::apply_late_fees", callee:
+                 "legacy_billing/ledger.py::post_entry", line: 199, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/ledger.py::post_entry", callee:
+                 "legacy_billing/storage.py::append_row", line: 17, expression: null, reason: null}
+          - title: "From an overdue invoice to the letter."
+            calls:
+              - {status: "resolved", caller: "legacy_billing/billing.py::apply_late_fees", callee:
+                 "legacy_billing/notify.py::queue_notice", line: 200, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/notify.py::queue_notice", callee:
+                 "legacy_billing/customers.py::get_customer", line: 8, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/notify.py::queue_notice", callee:
+                 "legacy_billing/storage.py::append_row", line: 9, expression: null, reason: null}
+    expected:
+      verdict: null
+      ground_truth:
+        features: [feature-late-fees]
+      rubric:
+        threshold: 0.7
+        required_fields: *required-fields
+        forbidden: *forbidden
+        paths_exist: [pinning_tests.*.path]
+        criteria:
+          - *late-fees-invariants-real-and-testable
+          - *late-fees-enough-for-a-coder
+          - *language-agnostic
+          - *late-fees-ties-can-be-cut
+    grader: rubric
+  # A correct map that says nothing about the feature: it was read from the payments. The agent has to
+  # find the feature itself.
+  - id: late-fees-map-from-elsewhere
+    fixture: legacy-billing
+    payload:
+      feature:
+        name: The overdue charge
+        start: legacy_billing/billing.py::apply_late_fees
+      archaeology:
+        summary: >-
+          Reading started at the function that records a payment. It posts the payment to the
+          ledger and puts it against the customer's open invoices, oldest first; what is left over
+          becomes a warning in the shared state. Billing itself was not read.
+        modules:
+          - {path: "legacy_billing/payments.py", role: "Records payments and puts them against the
+             oldest open invoices.", imports: ["legacy_billing/ledger.py",
+             "legacy_billing/state.py", "legacy_billing/storage.py"]}
+          - {path: "legacy_billing/ledger.py", role: "One row per posting, and balances over the
+             rows.", imports: ["legacy_billing/state.py", "legacy_billing/storage.py"]}
+          - {path: "legacy_billing/storage.py", role: "Reads and writes the tables, each one a JSON
+             file in the data directory of the run.", imports: ["legacy_billing/state.py"]}
+          - {path: "legacy_billing/state.py", role: "Dictionaries and lists that the whole package
+             shares: run counters, caches, number counters, warnings and hooks.", imports: []}
+        data_flows:
+          - data: "A payment, from the command line to the invoices it pays."
+            steps:
+              - {symbol: "legacy_billing/payments.py::record_payment", does: "posts the payment and
+                 warns about an overpayment"}
+              - {symbol: "legacy_billing/payments.py::_allocate", does: "adds it to the paid amount
+                 of the oldest open invoices"}
+              - {symbol: "legacy_billing/storage.py::replace_row", does: "saves the invoice rows"}
+        dead_code: *dead-code
+        dynamic_lookups: *dynamic-lookups
+        execution_paths:
+          - title: "A payment."
+            calls:
+              - {status: "resolved", caller: "legacy_billing/payments.py::record_payment", callee:
+                 "legacy_billing/ledger.py::post_entry", line: 8, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/ledger.py::post_entry", callee:
+                 "legacy_billing/storage.py::append_row", line: 17, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/payments.py::record_payment", callee:
+                 "legacy_billing/payments.py::_allocate", line: 9, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/payments.py::_allocate", callee:
+                 "legacy_billing/storage.py::read_rows", line: 17, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/payments.py::_allocate", callee:
+                 "legacy_billing/storage.py::replace_row", line: 25, expression: null, reason: null}
+    expected:
+      verdict: null
+      ground_truth:
+        features: [feature-late-fees]
+      rubric:
+        threshold: 0.7
+        required_fields: *required-fields
+        forbidden: *forbidden
+        paths_exist: [pinning_tests.*.path]
+        criteria:
+          - *late-fees-invariants-real-and-testable
+          - *late-fees-enough-for-a-coder
+          - *language-agnostic
+          - *late-fees-ties-can-be-cut
+          - id: stays-inside-the-feature
+            text: >-
+              The blueprint keeps payments out of the feature. It does not present recording or
+              allocating a payment as something the feature does, although the map it was given is
+              about payments.
+    grader: rubric
+  # The same map of the whole program, for a feature that starts in the middle of the billing run.
+  - id: discounts-full-map
+    fixture: legacy-billing
+    payload:
+      feature:
+        name: Discounts on invoices
+        start: legacy_billing/billing.py::apply_discounts
+      archaeology: *full-map
+    expected:
+      verdict: null
+      ground_truth:
+        features: [feature-discounts]
+      rubric:
+        threshold: 0.7
+        required_fields: *required-fields
+        forbidden: *forbidden
+        paths_exist: [pinning_tests.*.path]
+        criteria:
+          - &discounts-invariants-real-and-testable
+            id: invariants-real-and-testable
+            text: >-
+              Each invariant is a rule the code keeps and a test can check, with what is given and
+              what must come out. Together they cover most of these facts and contradict none: at
+              most one discount applies, the larger of promotion and loyalty, and the promotion
+              when both are equal; an unknown promotion code gives no promotion discount and a
+              warning; a code used up to its limit by a customer gives none; loyalty gives 5
+              percent from 12 months on and nothing before; a use of the code is counted only when
+              the promotion is the discount that applies.
+            required: true
+            floor: 0.6
+          - &discounts-enough-for-a-coder
+            id: enough-for-a-coder
+            text: >-
+              A coder who has not read the codebase could write the feature from the blueprint
+              alone. The inputs name the charges and the period of the invoice, the customer's
+              code and joining day, the promotion codes with percentage and limit, and the loyalty
+              settings with their values. The outputs name the negative discount line on the
+              invoice, the saved count of uses of the code, the warning and the counter of the
+              run.
+            required: true
+            floor: 0.6
+          - *language-agnostic
+          - &discounts-ties-can-be-cut
+            id: ties-can-be-cut
+            text: >-
+              The uses, the calls into the feature and the shared state say what each side relies
+              on and how the tie can be cut without changing behaviour, so that the warnings, the
+              counter of the run and the billing of a customer still work after the move.
+    grader: rubric
+  # A thin map read from the function that bills one customer. It passes the feature in one step.
+  - id: discounts-thin-map
+    fixture: legacy-billing
+    payload:
+      feature:
+        name: Price reductions for promotions and loyal customers
+        start: legacy_billing/billing.py::apply_discounts
+      archaeology:
+        summary: >-
+          Reading started at the function that bills one customer. It creates an invoice, adds the
+          plan, the usage, a discount and VAT, posts it and queues a letter. Discounts were noted
+          as one step and not read further.
+        modules:
+          - {path: "legacy_billing/billing.py", role: "The largest module: the billing run, prices,
+             discounts, late fees, credit notes, statements, exports and period close.", imports:
+             ["legacy_billing/catalog.py", "legacy_billing/customers.py", "legacy_billing/dates.py",
+             "legacy_billing/exporters.py", "legacy_billing/invoices.py",
+             "legacy_billing/ledger.py", "legacy_billing/money.py", "legacy_billing/notify.py",
+             "legacy_billing/numbering.py", "legacy_billing/settings.py", "legacy_billing/state.py",
+             "legacy_billing/storage.py", "legacy_billing/taxes.py", "legacy_billing/usage.py"]}
+          - {path: "legacy_billing/invoices.py", role: "The invoice object that a billing run fills
+             with lines.", imports: ["legacy_billing/money.py"]}
+          - {path: "legacy_billing/numbering.py", role: "Document numbers, counted in the shared
+             state and saved.", imports: ["legacy_billing/state.py", "legacy_billing/storage.py"]}
+          - {path: "legacy_billing/usage.py", role: "Rows of metered usage.", imports:
+             ["legacy_billing/storage.py"]}
+          - {path: "legacy_billing/catalog.py", role: "Plan prices, meter prices and promotion
+             codes.", imports: []}
+          - {path: "legacy_billing/taxes.py", role: "VAT by the customer's country, and an old rate
+             table nothing uses.", imports: ["legacy_billing/money.py",
+             "legacy_billing/settings.py"]}
+          - {path: "legacy_billing/notify.py", role: "Letters to customers, queued in the outbox
+             table.", imports: ["legacy_billing/customers.py", "legacy_billing/money.py",
+             "legacy_billing/storage.py"]}
+        data_flows:
+          - data: "A meter reading, from the usage file to the posted invoice."
+            steps:
+              - {symbol: "legacy_billing/importer.py::import_usage", does: "reads the rows of the
+                 file"}
+              - {symbol: "legacy_billing/usage.py::record_usage", does: "saves one reading"}
+              - {symbol: "legacy_billing/usage.py::usage_for", does: "adds up the readings of a
+                 customer and period"}
+              - {symbol: "legacy_billing/billing.py::price_usage", does: "turns the units into
+                 invoice lines"}
+              - {symbol: "legacy_billing/billing.py::post_invoice", does: "saves the invoice and
+                 posts its total"}
+        dead_code: *dead-code
+        dynamic_lookups: *dynamic-lookups
+        execution_paths:
+          - title: "One invoice."
+            calls:
+              - {status: "resolved", caller: "legacy_billing/billing.py::bill_customer", callee:
+                 "legacy_billing/numbering.py::next_number", line: 55, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::bill_customer", callee:
+                 "legacy_billing/billing.py::add_plan_line", line: 56, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::bill_customer", callee:
+                 "legacy_billing/billing.py::price_usage", line: 57, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::bill_customer", callee:
+                 "legacy_billing/billing.py::apply_discounts", line: 58, expression: null, reason:
+                 null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::bill_customer", callee:
+                 "legacy_billing/billing.py::add_vat", line: 59, expression: null, reason: null}
+              - {status: "resolved", caller: "legacy_billing/billing.py::bill_customer", callee:
+                 "legacy_billing/billing.py::post_invoice", line: 60, expression: null, reason:
+                 null}
+              - {status: "unresolved", caller: "legacy_billing/billing.py::post_invoice", callee:
+                 null, line: 75, expression: "hook(row)", reason: "container"}
+    expected:
+      verdict: null
+      ground_truth:
+        features: [feature-discounts]
+      rubric:
+        threshold: 0.7
+        required_fields: *required-fields
+        forbidden: *forbidden
+        paths_exist: [pinning_tests.*.path]
+        criteria:
+          - *discounts-invariants-real-and-testable
+          - *discounts-enough-for-a-coder
+          - *language-agnostic
+          - *discounts-ties-can-be-cut
+          - id: stays-inside-the-feature
+            text: >-
+              The blueprint keeps the rest of the invoice out of the feature. Plan lines, usage
+              prices and VAT are named at most as what comes before or after the discount, not as
+              something the feature does.
+    grader: rubric

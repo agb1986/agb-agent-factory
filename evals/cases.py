@@ -22,12 +22,16 @@ SEVERITIES = ("info", "minor", "major", "blocker")
 """Finding severities, lowest first. A finding meets a `severity_floor` at or above its index."""
 
 type Severity = Literal["info", "minor", "major", "blocker"]
-type GraderName = Literal["llm_judge", "sandbox_tests", "jev", "rubric", "incident"]
+type GraderName = Literal["llm_judge", "sandbox_tests", "jev", "rubric", "incident", "ground_truth"]
 type DecisionName = Literal["skip", "review", "escalate"]
 
 RUBRIC_GRADERS = ("rubric", "sandbox_tests")
 """The graders that read `expected.rubric`. On a `sandbox_tests` case the rubric is an extra check
 on the prose of an answer whose code the tests already judge, such as a coder's summary."""
+
+GROUND_TRUTH_GRADERS = ("ground_truth", "rubric")
+"""The graders that read `expected.ground_truth`. On a `rubric` case the block is an extra check of
+an answer whose prose the rubric's judge scores."""
 
 FIXTURE_REF = "$fixture"
 """The key of a payload value the runner replaces with content of the case's fixture."""
@@ -238,6 +242,33 @@ class ExpectedIncident(_Strict):
     crash_file: Annotated[str, Field(min_length=1)]
 
 
+class ExpectedGroundTruth(_Strict):
+    """What an answer must hold of the `ground-truth.yaml` of the case's fixture, by entry id.
+
+    Each field names entries of the section of the same name, and the rules that match an answer
+    against them are in `evals/graders/ground_truth.py`. A case repeats none of the text of an
+    entry, so the ground truth stays the one place that says what is true of the fixture. The
+    check that no decoy is called dead needs no id: it covers every decoy of the fixture.
+    """
+
+    dead_code: tuple[str, ...] = ()
+    data_flows: tuple[str, ...] = ()
+    call_chains: tuple[str, ...] = ()
+    dynamic_calls: tuple[str, ...] = ()
+    features: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _names_entries(self) -> ExpectedGroundTruth:
+        named = {field: getattr(self, field) for field in type(self).model_fields}
+        if not any(named.values()):
+            raise ValueError("name at least one entry of the ground truth")
+        for field, ids in named.items():
+            dupes = sorted({i for i in ids if ids.count(i) > 1})
+            if dupes:
+                raise ValueError(f"{field}: duplicate ids: {', '.join(dupes)}")
+        return self
+
+
 class Expected(_Strict):
     """What a good answer looks like: the verdict and the defects that must be found.
 
@@ -259,6 +290,9 @@ class Expected(_Strict):
     the record the case's payload holds (`runtime.escalation_summary.ungrounded`, the same code
     that runs before a summary is stored); only a `rubric` case may use it.
     `incident` is what the `incident` grader checks, and is required for that grader.
+    `ground_truth` names the entries of the fixture's ground truth an answer must hold. It is
+    required for the `ground_truth` grader and may be set on a `rubric` case. It is not part of the
+    dumped model, so no judge sees the ids.
     """
 
     verdict: str | None
@@ -272,6 +306,7 @@ class Expected(_Strict):
     citations_resolve: CitationsCheck | None = None
     options_in_record: bool = Field(default=False, exclude=True)
     incident: ExpectedIncident | None = None
+    ground_truth: ExpectedGroundTruth | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
     def _risky_needs_decision(self) -> Expected:
@@ -331,6 +366,12 @@ class Case(_Strict):
             raise ValueError("expected.incident: required by the incident grader")
         if self.grader != "incident" and self.expected.incident is not None:
             raise ValueError("expected.incident: only the incident grader reads it")
+        if self.grader == "ground_truth" and self.expected.ground_truth is None:
+            raise ValueError("expected.ground_truth: required by the ground_truth grader")
+        if self.grader not in GROUND_TRUTH_GRADERS and self.expected.ground_truth is not None:
+            raise ValueError(
+                "expected.ground_truth: only the ground_truth and rubric graders read it"
+            )
         return self
 
 
