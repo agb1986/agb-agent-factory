@@ -101,7 +101,9 @@ A fixture that is read as a codebase rather than as a diff may hold a `ground-tr
 its module map, dead code, decoys, call chains, data flows, dynamic calls and features. Only
 `legacy-billing` has one. The fields are the models in `fixtures/ground_truth.py`; the rules are in
 [docs/CONVENTIONS.md](../docs/CONVENTIONS.md#fixtures). The build refuses a file that no longer
-matches the head tree.
+matches the head tree. An eval case names entries of it by id and the `ground_truth` grader checks an
+answer against them ([docs/evals.md](../docs/evals.md#the-ground_truth-grader)), so an id that a case
+names must not be renamed without that case.
 
 ## Add a fixture
 
