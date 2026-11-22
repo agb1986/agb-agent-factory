@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from factory.exit import ExitCode
+from tools._call_graph import CALL_GRAPH, call_graph
 from tools._common import (
     DEFAULT_MAX_BYTES,
     PathEscapeError,
@@ -50,6 +51,7 @@ from tools._common import (
     resolve_root,
     truncate,
 )
+from tools._dead_code import DEAD_CODE, dead_code
 
 MAX_FILE_BYTES = 1_048_576
 """Largest source file that is parsed; a bigger one is listed under `skipped` as `too_large`."""
@@ -611,14 +613,18 @@ def command(repo_path: str, *, impact_paths: Sequence[str] | None, as_json: bool
 
 
 __all__ = [
+    "CALL_GRAPH",
+    "DEAD_CODE",
     "Edge",
     "External",
     "Graph",
     "PathEscapeError",
     "Unresolved",
     "build_graph",
+    "call_graph",
     "check_paths",
     "command",
+    "dead_code",
     "graph",
     "impact",
     "impact_of",
@@ -646,5 +652,7 @@ TOOLS = (
         },
         impl=impact,
     ),
+    CALL_GRAPH,
+    DEAD_CODE,
 )  # fmt: skip
 """The tools this module declares; `tools.registry` collects them."""

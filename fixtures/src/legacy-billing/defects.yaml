@@ -1,0 +1,80 @@
+fixture: legacy-billing
+summary: >-
+  A synthetic legacy invoicing package for the decomposition agents (ADR 0005). Its defects are
+  planted dead code, in the tree at both refs; the head commit only adds a README line. What else
+  is known about the tree, the decoys among it, is in ground-truth.yaml under the same ids.
+defects:
+  - id: dead-function
+    file: legacy_billing/billing.py
+    line_start: 104
+    line_end: 109
+    severity: minor
+    category: dead-code
+    title: Nothing calls prorate_by_weeks
+    description: >-
+      prorate_by_weeks counts started weeks. The billing run uses prorate, which counts days;
+      nothing calls or names the older function.
+    snippet: "def prorate_by_weeks(cents: int, joined: str, period: str) -> int:"
+  - id: dead-class
+    file: legacy_billing/customers.py
+    line_start: 37
+    line_end: 52
+    severity: minor
+    category: dead-code
+    title: Nothing uses CustomerMerger
+    description: >-
+      Nothing creates a CustomerMerger or names the class, so its methods are dead with it.
+    snippet: "class CustomerMerger:"
+  - id: dead-method
+    file: legacy_billing/invoices.py
+    line_start: 50
+    line_end: 52
+    severity: minor
+    category: dead-code
+    title: Nothing calls Invoice.as_legacy_row
+    description: >-
+      Invoice is used throughout, but no code reads an attribute called as_legacy_row.
+    snippet: "def as_legacy_row(self) -> list[str]:"
+  - id: dead-module
+    file: legacy_billing/fax_gateway.py
+    line_start: 1
+    line_end: 14
+    severity: minor
+    category: dead-code
+    title: Nothing imports fax_gateway
+    description: >-
+      No module and no test imports fax_gateway. send_fax and _queue_page are dead with it, though
+      the first calls the second.
+    snippet: "def send_fax(number: str, text: str) -> None:"
+  - id: dead-vat-rate
+    file: legacy_billing/taxes.py
+    line_start: 24
+    line_end: 26
+    severity: minor
+    category: dead-code
+    title: Nothing calls old_vat_rate
+    description: >-
+      old_vat_rate holds the rates from before a reform. VAT is taken from vat_rate and nothing
+      calls the old function.
+    snippet: "def old_vat_rate(country: str) -> int:"
+  - id: dead-through-dead
+    file: legacy_billing/taxes.py
+    line_start: 20
+    line_end: 21
+    severity: minor
+    category: dead-code
+    title: Only dead code calls _old_vat_table
+    description: >-
+      _old_vat_table has one caller, old_vat_rate, which is dead, so it is dead too.
+    snippet: "def _old_vat_table() -> dict[str, int]:"
+  - id: dead-copy
+    file: legacy_billing/importer.py
+    line_start: 9
+    line_end: 10
+    severity: minor
+    category: dead-code
+    title: The copy of _pad in importer is unused
+    description: >-
+      _pad was copied into exporters, reports and importer. The first two use their copy; importer
+      never does, though the name is used elsewhere.
+    snippet: "def _pad(text: str, width: int) -> str:"

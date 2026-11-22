@@ -1,6 +1,7 @@
 """Build the fixture repositories under `fixtures/repos/`.
 
-Each fixture is a source directory holding a `base/` tree, a `head/` tree and a `defects.yaml`.
+Each fixture is a source directory holding a `base/` tree, a `head/` tree and a `defects.yaml`, and
+for a decomposition fixture a `ground-truth.yaml`.
 `build` turns it into a git repository with two commits on two branches: `base` and, on top of it,
 `head`. Author, committer, dates and branch names are fixed and no hooks or user git config apply,
 so the same sources always produce the same commit SHAs.
@@ -31,6 +32,7 @@ from factory.exit import (
     error_envelope,
     exit_code,
 )
+from fixtures.ground_truth import GroundTruth, check_ground_truth, load_ground_truth
 from fixtures.schema import DefectManifest, check_against_tree, load_manifest
 
 FIXTURES_DIR = Path(__file__).resolve().parent
@@ -76,6 +78,17 @@ class Fixture:
         """Load and validate `defects.yaml`; its `fixture` field must equal the directory name."""
         return load_manifest(self.manifest_path, expected_fixture=self.name)
 
+    @property
+    def ground_truth_path(self) -> Path:
+        """The fixture's `ground-truth.yaml`; only a decomposition fixture has one."""
+        return self.source / "ground-truth.yaml"
+
+    def load_ground_truth(self) -> GroundTruth | None:
+        """Load and validate `ground-truth.yaml`, or return None when the fixture has none."""
+        if not self.ground_truth_path.exists():
+            return None
+        return load_ground_truth(self.ground_truth_path, expected_fixture=self.name)
+
 
 @dataclass(frozen=True)
 class BuiltFixture:
@@ -118,8 +131,9 @@ def build(
     """Build the named fixtures (all when `names` is None or empty) under `dest`.
 
     Each fixture lands in `dest/<name>/`, which is deleted first, so a rebuild never mixes old and
-    new files. Unknown names raise `FixtureNotFound` before anything is touched. The manifest is
-    checked against the head tree first; a stale `defects.yaml` raises `FixtureManifestError`.
+    new files. Unknown names raise `FixtureNotFound` before anything is touched. The manifest, and
+    the ground truth of a fixture that has one, are checked against the head tree first; a stale
+    `defects.yaml` or `ground-truth.yaml` raises `FixtureManifestError`.
     """
     available = discover(roots)
     wanted = list(names) if names else list(available)
@@ -138,6 +152,10 @@ def _build_one(fixture: Fixture, repo: Path) -> BuiltFixture:
     head_tree = fixture.source / HEAD_REF
     manifest = fixture.load_manifest()
     check_against_tree(manifest, lambda rel: _read_text(head_tree / rel))
+    truth = fixture.load_ground_truth()
+    if truth is not None:
+        files = [p.relative_to(head_tree).as_posix() for p in _tree_paths(head_tree)]
+        check_ground_truth(truth, manifest, files, lambda rel: _read_text(head_tree / rel))
 
     if repo.exists():
         shutil.rmtree(repo)
@@ -167,13 +185,20 @@ def _read_text(path: Path) -> str | None:
         return None
 
 
+def _tree_paths(src: Path) -> list[Path]:
+    """Return everything under `src`, directories included, in sorted order and without caches."""
+    return [
+        path
+        for path in sorted(src.rglob("*"))
+        if not any(part in _SKIP_DIRS for part in path.relative_to(src).parts)
+        and path.suffix not in _SKIP_SUFFIXES
+    ]
+
+
 def _copy_tree(src: Path, dest: Path) -> None:
     """Copy `src` into `dest` in sorted order, skipping caches. File modes come from `src`."""
-    for path in sorted(src.rglob("*")):
-        rel = path.relative_to(src)
-        if any(part in _SKIP_DIRS for part in rel.parts) or path.suffix in _SKIP_SUFFIXES:
-            continue
-        target = dest / rel
+    for path in _tree_paths(src):
+        target = dest / path.relative_to(src)
         if path.is_dir():
             target.mkdir(parents=True, exist_ok=True)
         else:
