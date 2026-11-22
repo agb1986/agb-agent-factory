@@ -38,11 +38,16 @@ The research agent `spike` runs throwaway code in the networked spike sandbox to
 real shape; its cases are graded by rubric on the observations it reports, each with the command
 and the output, and by `citations_resolve` on the facts it read (#106).
 
-The one agent outside those teams that may use the rubric is `escalation-summary` (#94, team
+Two agents outside those teams may use the rubric. The first is `escalation-summary` (#94, team
 `hitl`). It writes a paragraph and a few options for a person to choose from an escalation record,
 prose that has no single right answer. Its ground truth is not the prose but the record itself:
 each case sets `expected.options_in_record`, and the case fails, without a model call, when an
 option's evidence is not a span of the record or a dollar figure was invented (see below).
+
+The second is `extraction-modularization` (#112, team `decomp`). Its blueprint states a feature's
+inputs, outputs and invariants in words, which have no single right answer. The boundary it draws
+does have one, so every case carries an `expected.ground_truth` block, and an answer whose boundary
+or ties are wrong fails without a judge call ([below](#the-ground_truth-grader)).
 
 A rubric case has `expected.verdict: null` and an `expected.rubric` block:
 
@@ -269,8 +274,9 @@ repeats nothing else of that file:
 
 Every list is optional, and at least one id must be given. The checks are exact, every failure names
 the entry's id, and the grader calls no model: an answer that passes its checks passes, with score
-1.0. The grader reads the `dead_code`, `data_flows` and `execution_paths` of the answer. No prose is
-compared, and neither are line numbers, module roles or the extra entries an answer may have.
+1.0. The grader reads the `dead_code`, `data_flows` and `execution_paths` of the answer, and for
+`features` the fields of an `ExtractionBlueprint`. No prose is compared, and neither are line
+numbers, module roles or, except where a rule says so, the extra entries an answer may have.
 
 - `dead_code`: `dead_code` of the answer has an entry with the same symbol and the same `kind`.
 - Decoys: no `dead_code` entry of the answer is a decoy, or a class or module a decoy is in. This is
@@ -286,9 +292,14 @@ compared, and neither are line numbers, module roles or the extra entries an ans
   contains the entry's snippet or has the same text before its first `(`.
 - Not guessed: no `resolved` call of the answer goes from a dynamic call's site to one of its
   targets. This too is checked in every case, for every dynamic call of the fixture.
+- `features`: the blueprint's `symbols`, the callers in its `called_from`, the symbols in its
+  `state` and the paths in its `pinning_tests` hold every one the entry lists, and its `uses` hold
+  every one but at most one. Nothing in the entry's `uses` or `called_from` may be in the blueprint's
+  `symbols`, by itself or through its class or module. Other extra entries are no failure.
 
 A `rubric` case may carry `expected.ground_truth` as well. The same checks then run before its judge,
-and a failed one ends the case. No other grader takes the block. A case whose fixture has no ground
+and a failed one ends the case; the cases of extraction-modularization name a feature this way. No
+other grader takes the block. A case whose fixture has no ground
 truth, or that names an id the file lacks in that section, is a usage error and not a failed grade.
 
 To check another section of the ground truth, add its field to `ExpectedGroundTruth` in
