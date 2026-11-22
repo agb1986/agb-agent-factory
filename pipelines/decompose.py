@@ -1,8 +1,16 @@
-"""From an extraction blueprint to a `refactor` ticket in the work-item store.
+"""From a repository to an extraction blueprint to a `refactor` ticket in the work-item store.
 
-`extraction-modularization` (team `decomp`) returns an `ExtractionBlueprint`. Nothing in this module
-runs an agent or calls a model: it renders the blueprint as markdown, makes a `Ticket` from it and
-stores the ticket, so that the build loop can route the item to `refactorer` (ADR 0002).
+`run_decompose` runs `code-archaeology` from an entry point, gives its output to
+`extraction-modularization` (team `decomp`) with the feature to extract, and files the
+`ExtractionBlueprint` that comes back, so that the build loop can route the item to `refactorer`
+(ADR 0002). Neither agent writes. When either fails nothing is filed and its error passes through.
+
+**What the agents read, and the ticket's `ref`.** The ticket names one commit: `ref` when it is
+given, else the commit of `HEAD`. Both agents read a throwaway clone of exactly that commit, so a
+blueprint never describes code its ticket does not name. Uncommitted changes are therefore never
+read. Without a `ref`, a work tree that has any (staged, unstaged or untracked; ignored files do not
+count) is refused before an agent runs, because the caller may well mean the code as it stands;
+with a `ref`, `HEAD` included, they are left out and the run goes on.
 
 The blueprint is the model, and the markdown is made from it in code. The body of the ticket holds
 both: the markdown for a reader and, after `JSON_HEADING`, the JSON that `blueprint_of` reads back
@@ -11,17 +19,36 @@ is one line and cannot open a code fence; the JSON keeps the text as it was give
 """
 
 import json
+import os
 import re
+import sys
+import time
+import uuid
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
-from factory.exit import UsageError
+from factory.exit import AuthOrConfigError, ExitCode, NotFoundError, UsageError
+from pipelines.ids import new_pipeline_run_id
+from pipelines.sandbox import DirtyRepositoryError, checkout, require_clean
 from registry.common_schemas import Ticket
 from registry.decomposition_schemas import ExtractionBlueprint
+from registry.resolver import resolve
+from registry.spec import LLMSpec
+from runtime.budget import DEFAULT_BUDGET_USD, Budget
+from runtime.runner import API_KEY_ENV, run
 from runtime.trace import Trace
 from runtime.work_items import WorkItem, WorkItems
+from tools._common import git, resolve_commit, resolve_root
+
+Runner = Callable[..., BaseModel]
+
+ARCHAEOLOGY: tuple[str, str] = ("code-archaeology", "^0.1")
+EXTRACTION: tuple[str, str] = ("extraction-modularization", "^0.1")
 
 ACTOR = "pipeline:decompose"
 """The actor of the ticket's events: ADR 0002's `pipeline:<module>`."""
@@ -35,6 +62,314 @@ TITLE_CHARS = 120
 _JSON_OPEN = f"\n{JSON_HEADING}\n\n```json\n"
 _JSON_CLOSE = "\n```"
 _FENCE = re.compile(r"`{3,}|~{3,}")
+
+
+# --- the agents --------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class DecomposeAgents:
+    """The two resolved agents one decompose run uses."""
+
+    archaeology: LLMSpec
+    extraction: LLMSpec
+
+
+def resolve_decompose_agents(
+    *, allow_unpublished: bool = False, trace_path: Path | None = None
+) -> DecomposeAgents:
+    """Resolve the two agents of a decompose run; unless `allow_unpublished`, published ones.
+
+    Raises `UsageError` when either is not an LLM agent or may write (both manifests must offer
+    read-only tools only), and the resolver's `NotFoundError` subclasses (exit 3) when an agent or
+    version is missing.
+    """
+    found: list[LLMSpec] = []
+    for name, version_range in (ARCHAEOLOGY, EXTRACTION):
+        spec = resolve(
+            name, version_range, published_only=not allow_unpublished, trace_path=trace_path
+        )
+        if not isinstance(spec, LLMSpec):
+            raise UsageError(
+                f"{spec.address} is not an LLM agent, so the decompose run cannot run it"
+            )
+        if spec.sandbox_profile is not None or spec.files is not None:
+            raise UsageError(
+                f"{spec.address} is sandboxed or has a files policy, so it is not read-only",
+                hint=f"{name} takes read-only tools only (agents/{name})",
+            )
+        found.append(spec)
+    archaeology, extraction = found
+    return DecomposeAgents(archaeology=archaeology, extraction=extraction)
+
+
+# --- the request -------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class DecomposeRequest:
+    """What one decompose run reads and asks for, checked."""
+
+    root: Path
+    commit: str
+    repo: str
+    entry_point: str
+    feature: str
+    start: str
+
+
+def check_request(
+    agents: DecomposeAgents,
+    repo_path: str | Path,
+    entry_point: str,
+    feature: str,
+    start: str,
+    *,
+    ref: str | None = None,
+    repository: str | None = None,
+) -> DecomposeRequest:
+    """Check what a run was asked for, without a model, and return it.
+
+    The symbols and the name are checked by the agents' own input models. The commit is the one
+    `ref` names, or that of `HEAD`, for which the work tree must have no uncommitted changes. Both
+    symbols' files must be in it; whether the symbols are is left to the agents. Raises
+    `UsageError` (exit 2) for a malformed value or a dirty work tree, `NotFoundError` (exit 3) for
+    a repository, commit or file that does not exist.
+    """
+    root = resolve_root(repo_path)
+    parsed: Any = _checked(
+        agents.archaeology.input_class, {"repo_path": str(root), "entry_point": entry_point}
+    )
+    feature_class = agents.extraction.input_class.model_fields["feature"].annotation
+    assert isinstance(feature_class, type) and issubclass(feature_class, BaseModel)
+    asked: Any = _checked(feature_class, {"name": feature, "start": start})
+    if ref is None:
+        try:
+            require_clean(root)
+        except DirtyRepositoryError as exc:
+            raise DirtyRepositoryError(
+                exc.message,
+                hint="commit them, or pass --ref HEAD to read the last commit without them",
+            ) from None
+    commit = resolve_commit(root, "HEAD" if ref is None else ref)
+    for symbol in (parsed.entry_point, asked.start):
+        path = symbol.partition("::")[0]
+        proc = git(["cat-file", "-t", f"{commit}:{path}"], root)
+        if proc.returncode != 0 or proc.stdout.strip() != b"blob":
+            raise NotFoundError(f"no file {path!r} in commit {commit[:12]}")
+    repo = str(root) if repository is None else repository
+    # The ticket is made after both agents were paid for, so what it would refuse is refused here.
+    probe = {"kind": "refactor", "title": "-", "body": "-", "acceptance": ["-"]}
+    _checked(Ticket, {**probe, "repo": repo, "ref": commit})
+    return DecomposeRequest(
+        root=root,
+        commit=commit,
+        repo=repo,
+        entry_point=parsed.entry_point,
+        feature=asked.name,
+        start=asked.start,
+    )
+
+
+def _checked(model: type[BaseModel], values: dict[str, Any]) -> BaseModel:
+    """Return `values` as a `model`, or raise `UsageError` naming the first one it refuses."""
+    try:
+        return model.model_validate(values)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        where = ".".join(str(part) for part in first["loc"])
+        raise UsageError(f"{where}: {first['msg']}") from None
+
+
+# --- the run -----------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class DecomposeResult:
+    """What one decompose run did: both agents' answers and the ticket it filed."""
+
+    pipeline_run_id: str
+    request: DecomposeRequest
+    archaeology: LLMSpec
+    archaeology_output: BaseModel
+    extraction: LLMSpec
+    blueprint: ExtractionBlueprint
+    item: WorkItem
+    total_cost_usd: float
+    duration_ms: int
+
+    def to_json(self) -> dict[str, Any]:
+        """Return the report: what was asked, both agents' answers and the ticket."""
+        return {
+            "pipeline_run_id": self.pipeline_run_id,
+            "repo_path": str(self.request.root),
+            "commit": self.request.commit,
+            "entry_point": self.request.entry_point,
+            "feature": {"name": self.request.feature, "start": self.request.start},
+            "archaeology": {
+                "ref": self.archaeology.address,
+                "output": self.archaeology_output.model_dump(mode="json"),
+            },
+            "extraction": {
+                "ref": self.extraction.address,
+                "output": self.blueprint.model_dump(mode="json"),
+            },
+            "ticket": {
+                "id": self.item.id,
+                "status": self.item.status,
+                **self.item.ticket().model_dump(mode="json"),
+            },
+            "total_cost_usd": self.total_cost_usd,
+            "duration_ms": self.duration_ms,
+        }
+
+    def text(self) -> str:
+        """Return a short plain-text report of the run, for use without `--json`."""
+        request, blueprint = self.request, self.blueprint
+        lines = [
+            f"decompose run {self.pipeline_run_id}: {request.feature}",
+            f"  commit {request.commit[:12]}, read from {request.entry_point}",
+            f"  starts at {blueprint.start}",
+            f"  symbols that move: {len(blueprint.symbols)}",
+            f"  open questions: {len(blueprint.open_questions)}",
+        ]
+        lines.append(f"filed {self.item.id} ({self.item.status}): {self.item.title}")
+        lines.append(f"cost ${self.total_cost_usd:.4f}")
+        return "\n".join(lines)
+
+
+def run_decompose(
+    agents: DecomposeAgents,
+    repo_path: str | Path,
+    entry_point: str,
+    feature: str,
+    start: str,
+    trace: Trace,
+    *,
+    ref: str | None = None,
+    repository: str | None = None,
+    runner: Runner = run,
+    pipeline_run_id: str | None = None,
+    budget: Budget | None = None,
+    now: Callable[[], datetime] | None = None,
+) -> DecomposeResult:
+    """Draw the boundary of `feature`, which starts at the symbol `start`, and file its ticket.
+
+    `code-archaeology` reads the repository at `repo_path` from `entry_point`, and
+    `extraction-modularization` takes its output with the feature. Both read a clone of the commit
+    `check_request` gives, deleted at the end. Both calls get the same `pipeline_run_id` and are
+    charged to `budget` (default: `DEFAULT_BUDGET_USD`).
+
+    The ticket's `repo` is `repository` (default: the repository's absolute path) and its `ref` the
+    commit. It is filed only when both agents finished. Raises what `check_request` does, before
+    any agent runs, and whatever an agent's run raises, `BudgetExceeded` among them.
+    """
+    started = time.monotonic()
+    run_id = pipeline_run_id or new_pipeline_run_id()
+    budget = budget or Budget(DEFAULT_BUDGET_USD)
+    request = check_request(
+        agents, repo_path, entry_point, feature, start, ref=ref, repository=repository
+    )
+    with checkout(request.root, request.commit) as clone:
+        archaeology_run_id = str(uuid.uuid4())
+        found = runner(
+            agents.archaeology,
+            agents.archaeology.input_class.model_validate(
+                {"repo_path": str(clone), "entry_point": request.entry_point}
+            ),
+            trace,
+            repo_path=clone,
+            pipeline_run_id=run_id,
+            run_id=archaeology_run_id,
+            budget=budget,
+        )
+        answer = runner(
+            agents.extraction,
+            agents.extraction.input_class.model_validate(
+                {
+                    "repo_path": str(clone),
+                    "archaeology": found.model_dump(mode="json"),
+                    "feature": {"name": request.feature, "start": request.start},
+                }
+            ),
+            trace,
+            repo_path=clone,
+            pipeline_run_id=run_id,
+            parent_run_id=archaeology_run_id,
+            run_id=str(uuid.uuid4()),
+            budget=budget,
+        )
+    blueprint = ExtractionBlueprint.model_validate(answer.model_dump(mode="json"))
+    item = file_extraction_ticket(
+        trace,
+        blueprint,
+        repo=request.repo,
+        ref=request.commit,
+        pipeline_run_id=run_id,
+        now=now,
+    )
+    return DecomposeResult(
+        pipeline_run_id=run_id,
+        request=request,
+        archaeology=agents.archaeology,
+        archaeology_output=found,
+        extraction=agents.extraction,
+        blueprint=blueprint,
+        item=item,
+        total_cost_usd=trace.cost_by_pipeline_run(run_id),
+        duration_ms=round((time.monotonic() - started) * 1000),
+    )
+
+
+def command(
+    repo_path: str,
+    *,
+    entry_point: str,
+    feature: str,
+    start: str,
+    ref: str | None = None,
+    repository: str | None = None,
+    budget_usd: float | None = None,
+    as_json: bool = False,
+    allow_unpublished: bool = False,
+) -> int:
+    """Run `factory decompose`: file the refactor ticket that extracts one feature of `repo_path`.
+
+    The agents, the budget and the request are checked before the API key is looked for and before
+    a model is called; a missing key is `AuthOrConfigError` (exit 4). Prose goes to stderr under
+    `as_json`, where stdout gets exactly one JSON document. Without it the text report goes to
+    stdout. Returns 0 once the ticket is filed.
+    """
+    agents = resolve_decompose_agents(allow_unpublished=allow_unpublished)
+    budget = Budget(DEFAULT_BUDGET_USD if budget_usd is None else budget_usd)
+    check_request(agents, repo_path, entry_point, feature, start, ref=ref, repository=repository)
+    if not os.environ.get(API_KEY_ENV):
+        raise AuthOrConfigError(
+            f"{API_KEY_ENV} is not set",
+            hint=f"store it with `agb sys secrets set {API_KEY_ENV}` and export it",
+        )
+    with Trace() as trace:
+        result = run_decompose(
+            agents,
+            repo_path,
+            entry_point,
+            feature,
+            start,
+            trace,
+            ref=ref,
+            repository=repository,
+            runner=run,
+            budget=budget,
+        )
+    if as_json:
+        print(result.text(), file=sys.stderr)
+        print(json.dumps(result.to_json()))
+    else:
+        print(result.text())
+    return ExitCode.OK
+
+
+# --- the ticket --------------------------------------------------------------------------------
 
 
 def render_blueprint(blueprint: ExtractionBlueprint) -> str:

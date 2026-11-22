@@ -23,7 +23,7 @@ factory build wi-4 --repo ./widgets --json
 
 `ANTHROPIC_API_KEY` and `GH_TOKEN` must be set, a dry run included, since a dry run still reads the target repository. Docker must be reachable and the sandbox image present, as for `factory fix`. `TYPESAFE_API_KEY` is used by triage and the judge gate of the panel. Without it both report `jev_error`, and the reviewers and the judge run anyway.
 
-The ticket's kind picks the coder from the fixed table `CODERS`. `feature` and `bug` use `feature-coder@^0.1`. `refactor` uses `refactorer@^0.1` and goes through [the behaviour check](#the-behaviour-check-refactor). `docs` uses `documentation-agent@^0.1` and goes through [the docs check](#the-docs-check-docs). `incident` is refused with a pointer to `factory hotfix` ([hotfix.md](hotfix.md)), and `research` is refused with a pointer to `factory run`.
+The ticket's kind picks the coder from the fixed table `CODERS`. `feature` and `bug` use `feature-coder@^0.1`. `refactor` uses `refactorer@^0.1` and goes through [the behaviour check](#the-behaviour-check-refactor); `factory decompose` files such tickets ([decompose.md](decompose.md)). `docs` uses `documentation-agent@^0.1` and goes through [the docs check](#the-docs-check-docs). `incident` is refused with a pointer to `factory hotfix` ([hotfix.md](hotfix.md)), and `research` is refused with a pointer to `factory run`.
 
 ## Flow
 
