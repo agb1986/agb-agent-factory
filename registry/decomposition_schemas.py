@@ -1,13 +1,14 @@
-"""Models shared by the decomposition agents: what code-archaeology returns.
+"""Models shared by the decomposition agents: what they return.
 
-The archaeology of a codebase is the output of `code-archaeology` and part of the input of the
-agent that plans an extraction from it. An agent's `schemas.py` is imported by file path and cannot
-import a sibling agent's module, so the models live here and each `schemas.py` re-exports the ones
-its manifest or its own models use.
+`CodeArchaeologyOutput`, the archaeology of a codebase, is the output of `code-archaeology` and
+part of the input of `extraction-modularization`, whose output is an `ExtractionBlueprint`: one
+feature's boundary, for a pipeline that turns it into a ticket. An agent's `schemas.py` is imported
+by file path and cannot import a sibling agent's module, so the models live here and each
+`schemas.py` re-exports the ones its manifest or its own models use.
 
-The output model is sent to the Messages API as a JSON schema (`output_config.format`), so every
+Both output models are sent to the Messages API as a JSON schema (`output_config.format`), so every
 field is a plain type, a `Literal` or a nested model, and none has a default. Every list and every
-string has a maximum length, so that an answer about one entry point fits the agent's
+string has a maximum length, so that an answer about one entry point or one feature fits the agent's
 `max_output_tokens`. The API cannot enforce those lengths; Pydantic checks them when the reply is
 parsed, and a failure costs the run its one validation retry.
 
@@ -189,3 +190,133 @@ class CodeArchaeologyOutput(BaseModel):
     execution_paths: list[ExecutionPath] = Field(
         max_length=14, description="The paths of calls that start at the entry point."
     )
+
+
+Prose = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
+Line = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+
+
+class FeatureSymbol(BaseModel):
+    """One function, class, method or constant that belongs to the feature and moves with it."""
+
+    model_config = _STRICT
+
+    symbol: Symbol = Field(description="The symbol, as path::Qualified.name.")
+    role: Line = Field(description="One line: what it does for the feature.")
+
+
+class OutsideUse(BaseModel):
+    """One symbol outside the feature that the feature's code uses and must still reach."""
+
+    model_config = _STRICT
+
+    symbol: Symbol = Field(
+        description="The outside symbol, as path::Qualified.name; the method, not its class."
+    )
+    used_by: Symbol = Field(description="The feature symbol whose code uses it.")
+    need: Line = Field(description="One line: what the feature needs from it.")
+
+
+class OutsideCall(BaseModel):
+    """One place outside the feature that calls into it: a tie to cut and reconnect."""
+
+    model_config = _STRICT
+
+    caller: Symbol = Field(description="The outside symbol whose code makes the call.")
+    callee: Symbol = Field(description="The feature symbol it calls.")
+    expects: Line = Field(description="One line: what the caller relies on.")
+
+
+class SharedState(BaseModel):
+    """One place where the feature reads or changes state that other code shares."""
+
+    model_config = _STRICT
+
+    symbol: Symbol = Field(description="The feature symbol whose code touches the state.")
+    state: Line = Field(description="The shared state, in words.")
+    access: Literal["reads", "writes", "reads_and_writes"] = Field(
+        description="What the feature does to it."
+    )
+    cut: Line = Field(description="One line: how the tie can be cut without changing behaviour.")
+
+
+class PinningTest(BaseModel):
+    """One test file that fixes the feature's behaviour today."""
+
+    model_config = _STRICT
+
+    path: RepoPath = Field(description="Path of the test file, relative to the repository root.")
+    pins: Line = Field(description="One line: the behaviour it fixes.")
+
+
+def _within(symbol: str, inside: set[str]) -> bool:
+    """Whether `symbol` is in `inside`, or the class or module that holds it is."""
+    return any(
+        symbol == listed or symbol.startswith((f"{listed}::", f"{listed}.")) for listed in inside
+    )
+
+
+class ExtractionBlueprint(BaseModel):
+    """One feature's boundary: what it does, what belongs to it, and the ties to cut to move it."""
+
+    model_config = _STRICT
+
+    feature: Line = Field(description="The feature's name, as the input gives it.")
+    start: Symbol = Field(description="The symbol the feature starts at, as the input gives it.")
+    summary: str = Field(
+        min_length=1, max_length=800, description="What the feature does, in a short paragraph."
+    )
+    inputs: list[Prose] = Field(
+        max_length=10, description="What the feature takes in, one entry in plain words each."
+    )
+    outputs: list[Prose] = Field(
+        max_length=10,
+        description="What the feature returns, stores or sends, one entry in plain words each.",
+    )
+    invariants: list[Prose] = Field(
+        min_length=1,
+        max_length=12,
+        description="Rules that hold before and after the move, each one a test can check.",
+    )
+    symbols: list[FeatureSymbol] = Field(
+        min_length=1, max_length=24, description="What belongs to the feature."
+    )
+    uses: list[OutsideUse] = Field(
+        max_length=20, description="What the feature uses that does not belong to it."
+    )
+    called_from: list[OutsideCall] = Field(
+        max_length=10, description="Where code outside the feature calls into it."
+    )
+    state: list[SharedState] = Field(
+        max_length=10, description="Where the feature touches state that other code shares."
+    )
+    pinning_tests: list[PinningTest] = Field(
+        max_length=8, description="The test files that fix the feature's behaviour."
+    )
+    open_questions: list[Prose] = Field(
+        max_length=6, description="What reading could not settle; empty when nothing is open."
+    )
+
+    @model_validator(mode="after")
+    def _the_boundary_is_one_line(self) -> Self:
+        inside = {entry.symbol for entry in self.symbols}
+        if not _within(self.start, inside):
+            raise ValueError("start must be one of symbols")
+        uses = {entry.symbol for entry in self.uses}
+        callers = {entry.caller for entry in self.called_from}
+        if both := sorted(symbol for symbol in uses | callers if _within(symbol, inside)):
+            raise ValueError(
+                f"listed in symbols and also as outside the feature: {', '.join(both)}"
+            )
+        ties = {entry.used_by for entry in self.uses}
+        ties |= {entry.callee for entry in self.called_from}
+        ties |= {entry.symbol for entry in self.state}
+        if unknown := sorted(symbol for symbol in ties if not _within(symbol, inside)):
+            raise ValueError(
+                f"used_by, callee and the symbols of state must be in symbols: {', '.join(unknown)}"
+            )
+        paths = [entry.path for entry in self.pinning_tests]
+        paths += [symbol.partition("::")[0] for symbol in inside]
+        if any(".." in path.split("/") for path in paths):
+            raise ValueError("paths must stay inside the repository")
+        return self

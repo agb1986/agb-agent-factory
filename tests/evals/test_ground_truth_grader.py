@@ -2,7 +2,8 @@
 
 The rules are tested on the ground truth of `legacy-billing`, with an answer built from it and then
 changed one entry at a time. `truth_answer` is also what `tests/agents/test_code_archaeology.py`
-grades the agent's cases with. Nothing here calls a model.
+grades the agent's cases with, and `truth_blueprint` does the same for
+`tests/agents/test_extraction_modularization.py`. Nothing here calls a model.
 """
 
 import copy
@@ -18,8 +19,8 @@ from evals.graders.ground_truth import check_ground_truth, load_truth
 from evals.graders.llm_judge import JudgeVerdict
 from factory.exit import UsageError
 from fixtures.build import discover
-from fixtures.ground_truth import GroundTruth
-from registry.decomposition_schemas import CodeArchaeologyOutput
+from fixtures.ground_truth import Feature, GroundTruth
+from registry.decomposition_schemas import CodeArchaeologyOutput, ExtractionBlueprint
 
 FIXTURE = "legacy-billing"
 HOOKS = {"dynamic_calls": ["dynamic-hooks"]}
@@ -91,6 +92,39 @@ def truth_answer(truth: GroundTruth) -> dict[str, Any]:
         ],
     }
     return CodeArchaeologyOutput.model_validate(answer).model_dump(mode="json")
+
+
+def truth_blueprint(feature: Feature) -> dict[str, Any]:
+    """Return the blueprint that says everything `feature` says, as the agent would have to say it."""
+    start = feature.symbols[0]
+    blueprint = {
+        "feature": feature.title,
+        "start": start,
+        "summary": "Everything the ground truth says about the feature.",
+        "inputs": ["The day the run is for."],
+        "outputs": ["How many customers it changed."],
+        "invariants": ["Running it twice for the same day changes nothing the second time."],
+        "symbols": [{"symbol": symbol, "role": "Part of it."} for symbol in feature.symbols],
+        "uses": [
+            {"symbol": symbol, "used_by": start, "need": "Its result."} for symbol in feature.uses
+        ],
+        "called_from": [
+            {"caller": site.symbol, "callee": start, "expects": "The count."}
+            for site in feature.called_from
+        ],
+        "state": [
+            {
+                "symbol": site.symbol,
+                "state": "The counters of the run.",
+                "access": "reads_and_writes",
+                "cut": "Return the count and let the caller add it.",
+            }
+            for site in feature.state
+        ],
+        "pinning_tests": [{"path": path, "pins": "Its amounts."} for path in feature.tests],
+        "open_questions": [],
+    }
+    return ExtractionBlueprint.model_validate(blueprint).model_dump(mode="json")
 
 
 @pytest.fixture(scope="module")
@@ -523,3 +557,163 @@ def test_a_rubric_case_is_judged_only_when_the_checks_pass(
     result = grade(case, answer, _no_judge, rubric_judge=judge)
     assert result.passed is (spoil is None)
     assert len(asked) == (1 if spoil is None else 0)
+
+
+# Features, which a blueprint answers instead of an archaeology output.
+
+PARTS = {
+    "symbols": ("symbols", "symbol", "is missing from symbols"),
+    "uses": ("uses", "symbol", "is missing from uses"),
+    "called_from": ("called_from", "caller", "is missing from the callers of called_from"),
+    "state": ("state", "symbol", "is missing from state"),
+    "tests": ("pinning_tests", "path", "is missing from pinning_tests"),
+}
+
+
+@pytest.fixture(params=["feature-late-fees", "feature-discounts"])
+def feature(request: pytest.FixtureRequest, truth: GroundTruth) -> Feature:
+    return next(entry for entry in truth.features if entry.id == request.param)
+
+
+@pytest.fixture
+def blueprint(feature: Feature) -> dict[str, Any]:
+    return truth_blueprint(feature)
+
+
+def _features(feature: Feature, blueprint: object, truth: GroundTruth) -> tuple[str, ...]:
+    assert isinstance(blueprint, dict)
+    return check_ground_truth(ExpectedGroundTruth(features=(feature.id,)), blueprint, truth)
+
+
+def _wanted(feature: Feature, part: str) -> list[str]:
+    """Return what `feature` lists under `part`, a site by its symbol."""
+    entries = getattr(feature, part)
+    return [entry if isinstance(entry, str) else entry.symbol for entry in entries]
+
+
+def test_the_parametrized_features_are_all_of_them(truth: GroundTruth) -> None:
+    assert [entry.id for entry in truth.features] == ["feature-late-fees", "feature-discounts"]
+
+
+def test_a_blueprint_built_from_the_ground_truth_agrees(
+    feature: Feature, blueprint: dict[str, Any], truth: GroundTruth
+) -> None:
+    assert _features(feature, blueprint, truth) == ()
+
+
+def test_a_blueprint_passes_the_checks_that_need_no_id(
+    blueprint: dict[str, Any], truth: GroundTruth
+) -> None:
+    """It lists no dead code and no calls, so the decoy and the not-guessed checks find nothing."""
+    assert not {"dead_code", "execution_paths"} & set(ExtractionBlueprint.model_fields)
+    assert check_ground_truth(ExpectedGroundTruth.model_construct(), blueprint, truth) == ()
+
+
+def test_the_blueprint_of_another_feature_fails(
+    feature: Feature, blueprint: dict[str, Any], truth: GroundTruth
+) -> None:
+    other = next(entry for entry in truth.features if entry.id != feature.id)
+    (failure,) = _features(other, blueprint, truth)
+    assert failure.startswith(f"feature {other.id}: ")
+
+
+@pytest.mark.parametrize("part", [part for part in PARTS if part != "uses"])
+def test_each_entry_of_a_feature_is_required(
+    part: str, feature: Feature, blueprint: dict[str, Any], truth: GroundTruth
+) -> None:
+    field, key, message = PARTS[part]
+    wanted = _wanted(feature, part)
+    assert wanted
+    for value in wanted:
+        rest = [item for item in blueprint[field] if item[key] != value]
+        failures = _features(feature, blueprint | {field: rest}, truth)
+        assert failures == (f"feature {feature.id}: {value} {message}",)
+
+
+def test_uses_may_miss_one_symbol_and_not_two(
+    feature: Feature, blueprint: dict[str, Any], truth: GroundTruth
+) -> None:
+    first, second, *_ = feature.uses
+    for gone in feature.uses:
+        rest = [item for item in blueprint["uses"] if item["symbol"] != gone]
+        assert _features(feature, blueprint | {"uses": rest}, truth) == ()
+    rest = [item for item in blueprint["uses"] if item["symbol"] not in (first, second)]
+    assert _features(feature, blueprint | {"uses": rest}, truth) == (
+        f"feature {feature.id}: {first} is missing from uses; {second} is missing from uses",
+    )
+
+
+def test_everything_a_blueprint_misses_is_in_one_failure(
+    feature: Feature, blueprint: dict[str, Any], truth: GroundTruth
+) -> None:
+    (failure,) = _features(feature, blueprint | {"state": [], "pinning_tests": []}, truth)
+    named = [*_wanted(feature, "state"), *_wanted(feature, "tests")]
+    assert all(f"{value} is missing from " in failure for value in named)
+
+
+@pytest.mark.parametrize("part", ["uses", "called_from"])
+def test_what_is_outside_a_feature_may_not_be_in_its_symbols(
+    part: str, feature: Feature, blueprint: dict[str, Any], truth: GroundTruth
+) -> None:
+    for symbol in _wanted(feature, part):
+        symbols = [*blueprint["symbols"], {"symbol": symbol, "role": "Part of it."}]
+        (failure,) = _features(feature, blueprint | {"symbols": symbols}, truth)
+        claim = f"{symbol} is listed in symbols, but {symbol} is outside the feature"
+        assert failure == f"feature {feature.id}: {claim}"
+
+
+@pytest.mark.parametrize(
+    "claim", ["legacy_billing/money.py", "legacy_billing/invoices.py::Invoice"]
+)
+def test_a_module_or_a_class_holds_what_is_outside_a_feature(
+    claim: str, truth: GroundTruth
+) -> None:
+    feature = next(entry for entry in truth.features if entry.id == "feature-discounts")
+    blueprint = truth_blueprint(feature)
+    blueprint["symbols"].append({"symbol": claim, "role": "Part of it."})
+    (failure,) = _features(feature, blueprint, truth)
+    assert f"{claim} is listed in symbols, but {claim}" in failure
+
+
+def test_a_class_is_not_the_method_a_feature_uses(truth: GroundTruth) -> None:
+    feature = next(entry for entry in truth.features if entry.id == "feature-discounts")
+    blueprint = truth_blueprint(feature)
+    for item in blueprint["uses"]:
+        if "::Invoice." in item["symbol"]:
+            item["symbol"] = "legacy_billing/invoices.py::Invoice"
+    (failure,) = _features(feature, blueprint, truth)
+    assert "legacy_billing/invoices.py::Invoice.charges is missing from uses" in failure
+
+
+@pytest.mark.parametrize("part", list(PARTS))
+def test_other_extra_entries_are_not_compared(
+    part: str, feature: Feature, blueprint: dict[str, Any], truth: GroundTruth
+) -> None:
+    field, key, _ = PARTS[part]
+    blueprint[field] = [{**blueprint[field][0], key: "legacy_billing/reports.py::x"}] + (
+        blueprint[field][::-1]
+    )
+    assert _features(feature, blueprint, truth) == ()
+
+
+def test_the_prose_of_a_blueprint_is_not_compared(
+    feature: Feature, blueprint: dict[str, Any], truth: GroundTruth
+) -> None:
+    blueprint |= {"summary": "Other.", "invariants": ["Other."], "inputs": [], "outputs": []}
+    assert _features(feature, blueprint, truth) == ()
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {},
+        {"symbols": None, "uses": "none", "called_from": 3, "state": {}, "pinning_tests": True},
+        {"symbols": ["x"], "uses": [None], "called_from": [{"caller": 1}], "state": [{}]},
+        {"symbols": [{"symbol": None}], "pinning_tests": [{"path": ["tests"]}]},
+    ],
+)
+def test_a_malformed_blueprint_fails_and_never_raises(
+    broken: dict[str, Any], feature: Feature, truth: GroundTruth
+) -> None:
+    (failure,) = _features(feature, broken, truth)
+    assert failure.startswith(f"feature {feature.id}: ")

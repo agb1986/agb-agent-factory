@@ -2,10 +2,11 @@
 
 A case names entries of the fixture's `ground-truth.yaml` by id (`evals.cases.ExpectedGroundTruth`)
 and copies none of their text. `load_truth` loads the file by the case's fixture name, and
-`check_ground_truth` compares the answer, a `registry.decomposition_schemas.CodeArchaeologyOutput`
-as a dict, with the entries named. Only symbols, kinds and call expressions are compared: no prose,
-no line numbers, no order inside a list except the ends of a data flow. An answer that does not
-hold the expected fields fails the checks and never raises.
+`check_ground_truth` compares the answer with the entries named. The answer is a
+`registry.decomposition_schemas.CodeArchaeologyOutput` or, for `features`, an
+`ExtractionBlueprint`, as a dict. Only symbols, kinds, paths and call expressions are compared: no
+prose, no line numbers, no order inside a list except the ends of a data flow. An answer that does
+not hold the expected fields fails the checks and never raises.
 
 Two checks need no id, because they say what no answer about the fixture may claim: no decoy may be
 listed as dead code, and no dynamic call may be reported as resolved to one of its targets.
@@ -21,13 +22,24 @@ from typing import Any, Protocol
 from evals.cases import ExpectedGroundTruth
 from factory.exit import UsageError
 from fixtures.build import discover
-from fixtures.ground_truth import CallChain, DataFlow, DeadCode, Decoy, DynamicCall, GroundTruth
+from fixtures.ground_truth import (
+    CallChain,
+    DataFlow,
+    DeadCode,
+    Decoy,
+    DynamicCall,
+    Feature,
+    GroundTruth,
+)
 
 _MAY_MISS = 1
 """How many steps of a data flow an answer may leave out and still describe it."""
 
 _EXACT_STEPS = 2
 """A flow of this many steps is only its two ends, so none may be missing."""
+
+_MAY_MISS_USES = 1
+"""How many outside symbols a blueprint may leave out: a missing one shows when the code is moved."""
 
 
 class _Entry(Protocol):
@@ -70,6 +82,7 @@ def check_ground_truth(
             _named("dynamic_calls", expected.dynamic_calls, truth.dynamic_calls), calls
         ),
         *_check_not_guessed(truth.dynamic_calls, calls),
+        *_check_features(_named("features", expected.features, truth.features), actual),
     )
 
 
@@ -201,8 +214,56 @@ def _check_not_guessed(dynamic: Iterable[DynamicCall], calls: list[Mapping[str, 
     ]
 
 
+def _check_features(wanted: list[Feature], actual: Mapping[str, Any]) -> list[str]:
+    """A feature is found when the blueprint's boundary and ties cover the entry's.
+
+    Everything the entry lists must be there, except that `uses` may miss `_MAY_MISS_USES`. What the
+    entry puts outside the feature may not be among the blueprint's `symbols`, by itself or through
+    its class or module. Other extra entries are not compared.
+    """
+    symbols = _symbols(actual, "symbols", "symbol")
+    uses = _symbols(actual, "uses", "symbol")
+    callers = _symbols(actual, "called_from", "caller")
+    state = _symbols(actual, "state", "symbol")
+    tests = _symbols(actual, "pinning_tests", "path")
+    failures: list[str] = []
+    for entry in wanted:
+        outside = dict.fromkeys((*entry.uses, *(site.symbol for site in entry.called_from)))
+        unused = _absent(entry.uses, uses)
+        misses = [
+            *(f"{symbol} is missing from symbols" for symbol in _absent(entry.symbols, symbols)),
+            *(
+                f"{claim} is listed in symbols, but {symbol} is outside the feature"
+                for symbol in outside
+                for claim in symbols
+                if _holds(claim, symbol)
+            ),
+            *(
+                f"{symbol} is missing from uses"
+                for symbol in (unused if len(unused) > _MAY_MISS_USES else ())
+            ),
+            *(
+                f"{symbol} is missing from the callers of called_from"
+                for symbol in _absent((site.symbol for site in entry.called_from), callers)
+            ),
+            *(
+                f"{symbol} is missing from state"
+                for symbol in _absent((site.symbol for site in entry.state), state)
+            ),
+            *(f"{path} is missing from pinning_tests" for path in _absent(entry.tests, tests)),
+        ]
+        if misses:
+            failures.append(f"feature {entry.id}: {'; '.join(misses)}")
+    return failures
+
+
+def _absent(wanted: Iterable[str], given: Sequence[str]) -> list[str]:
+    """Return what is in `wanted` and not in `given`, each once."""
+    return [item for item in dict.fromkeys(wanted) if item not in given]
+
+
 def _holds(claim: str, symbol: str) -> bool:
-    """Whether calling `claim` dead also calls `symbol` dead: itself, its class or its module."""
+    """Whether a claim about `claim` covers `symbol`: the symbol itself, its class or its module."""
     return symbol == claim or symbol.startswith((f"{claim}::", f"{claim}."))
 
 

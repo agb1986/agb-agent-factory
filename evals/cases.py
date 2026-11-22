@@ -255,6 +255,7 @@ class ExpectedGroundTruth(_Strict):
     data_flows: tuple[str, ...] = ()
     call_chains: tuple[str, ...] = ()
     dynamic_calls: tuple[str, ...] = ()
+    features: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _names_entries(self) -> ExpectedGroundTruth:
