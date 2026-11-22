@@ -246,7 +246,7 @@ data_flows:
         snippet: storage.append_row(
         does: Saves each reading in the usage table.
       - symbol: legacy_billing/usage.py::usage_for
-        snippet: for row in storage.read_rows("usage"):
+        snippet: 'for row in storage.read_rows("usage")'
         does: Adds up the readings of a customer per meter.
       - symbol: legacy_billing/billing.py::price_usage
         snippet: totals = usage.usage_for(customer["id"], invoice.period)
@@ -258,7 +258,7 @@ data_flows:
     data: The late fee on an overdue invoice
     steps:
       - symbol: legacy_billing/billing.py::overdue_invoices
-        snippet: for row in storage.read_rows("invoices"):
+        snippet: 'for row in storage.read_rows("invoices")'
         does: Reads the unpaid invoices that are past due.
       - symbol: legacy_billing/billing.py::late_fee_for
         snippet: owed = row["total"] - row["paid"]

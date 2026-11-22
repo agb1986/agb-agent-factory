@@ -26,7 +26,7 @@ from fixtures.schema import DefectManifest, FixtureManifestError, Slug, _Model
 DEAD_CODE_CATEGORY = "dead-code"
 """The category in `defects.yaml` that marks an entry as planted dead code."""
 
-SYMBOL_PATTERN = r"^(?!/)[^:\s\\]+\.py(::[A-Za-z_]\w*(\.[A-Za-z_]\w*)*)?$"
+SYMBOL_PATTERN = r"^[^/:\s\\][^:\s\\]*\.py(::[A-Za-z_]\w*(\.[A-Za-z_]\w*)*)?$"
 
 type Symbol = Annotated[str, Field(pattern=SYMBOL_PATTERN)]
 type Text = Annotated[str, Field(min_length=1)]
