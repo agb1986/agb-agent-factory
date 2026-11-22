@@ -206,6 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="stop the run once it has spent this many dollars (default: the pipeline default)",
     )
     _add_incident_parser(sub)
+    _add_decompose_parser(sub)
     run_parser = sub.add_parser(
         "run",
         help="run one LLM agent once on a JSON payload and print its output",
@@ -330,6 +331,56 @@ def _add_incident_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser
         help="also use agent versions that have not passed `factory publish-check`",
     )
     incident_parser.add_argument(
+        "--budget-usd",
+        type=float,
+        help="stop the run once it has spent this many dollars (default: the pipeline default)",
+    )
+
+
+def _add_decompose_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add `factory decompose` to `sub`."""
+    decompose_parser = sub.add_parser(
+        "decompose",
+        help="draw the boundary of one feature of a repository and file a refactor ticket",
+        epilog="example: factory decompose ./repo --entry-point app/cli.py::main "
+        '--feature "late fees" --start app/billing.py::apply_late_fees --json',
+    )
+    decompose_parser.add_argument(
+        "repo_path", metavar="repo", help="path of the git repository to read; never changed"
+    )
+    decompose_parser.add_argument(
+        "--entry-point",
+        required=True,
+        metavar="SYMBOL_OR_PATH",
+        help="where the reading starts: `path.py::name`, or the path of a module",
+    )
+    decompose_parser.add_argument(
+        "--feature", required=True, metavar="NAME", help="name of the feature to extract"
+    )
+    decompose_parser.add_argument(
+        "--start",
+        required=True,
+        metavar="SYMBOL",
+        help="the symbol the feature starts at: `path.py::name`",
+    )
+    decompose_parser.add_argument(
+        "--ref",
+        help="git ref to read; leaves out uncommitted changes (default: the commit of HEAD, and "
+        "uncommitted changes are refused)",
+    )
+    decompose_parser.add_argument(
+        "--repository",
+        help="name the ticket gives the repository (default: its absolute path)",
+    )
+    decompose_parser.add_argument(
+        "--json", action="store_true", help="print one JSON document on stdout instead of text"
+    )
+    decompose_parser.add_argument(
+        "--allow-unpublished",
+        action="store_true",
+        help="also use agent versions that have not passed `factory publish-check`",
+    )
+    decompose_parser.add_argument(
         "--budget-usd",
         type=float,
         help="stop the run once it has spent this many dollars (default: the pipeline default)",
@@ -573,6 +624,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _hotfix(args)
         if args.command == "incident":
             return _incident(args)
+        if args.command == "decompose":
+            return _decompose(args)
         if args.command == "run":
             return _run(args)
         if args.command == "cost":
@@ -743,6 +796,23 @@ def _incident(args: argparse.Namespace) -> int:
         repository=args.repository,
         out_dir=args.out_dir,
         work_dir=args.work_dir,
+        budget_usd=args.budget_usd,
+        as_json=args.json,
+        allow_unpublished=args.allow_unpublished,
+    )
+
+
+def _decompose(args: argparse.Namespace) -> int:
+    """Draw the boundary of one feature of a repository and file a refactor ticket."""
+    from pipelines.decompose import command  # imported here: it pulls in the Anthropic SDK
+
+    return command(
+        args.repo_path,
+        entry_point=args.entry_point,
+        feature=args.feature,
+        start=args.start,
+        ref=args.ref,
+        repository=args.repository,
         budget_usd=args.budget_usd,
         as_json=args.json,
         allow_unpublished=args.allow_unpublished,

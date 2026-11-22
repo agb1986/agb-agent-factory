@@ -19,7 +19,9 @@ is one line and cannot open a code fence; the JSON keeps the text as it was give
 """
 
 import json
+import os
 import re
+import sys
 import time
 import uuid
 from collections.abc import Callable, Iterable
@@ -30,7 +32,7 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from factory.exit import NotFoundError, UsageError
+from factory.exit import AuthOrConfigError, ExitCode, NotFoundError, UsageError
 from pipelines.ids import new_pipeline_run_id
 from pipelines.sandbox import DirtyRepositoryError, checkout, require_clean
 from registry.common_schemas import Ticket
@@ -38,7 +40,7 @@ from registry.decomposition_schemas import ExtractionBlueprint
 from registry.resolver import resolve
 from registry.spec import LLMSpec
 from runtime.budget import DEFAULT_BUDGET_USD, Budget
-from runtime.runner import run
+from runtime.runner import API_KEY_ENV, run
 from runtime.trace import Trace
 from runtime.work_items import WorkItem, WorkItems
 from tools._common import git, resolve_commit, resolve_root
@@ -317,6 +319,54 @@ def run_decompose(
         total_cost_usd=trace.cost_by_pipeline_run(run_id),
         duration_ms=round((time.monotonic() - started) * 1000),
     )
+
+
+def command(
+    repo_path: str,
+    *,
+    entry_point: str,
+    feature: str,
+    start: str,
+    ref: str | None = None,
+    repository: str | None = None,
+    budget_usd: float | None = None,
+    as_json: bool = False,
+    allow_unpublished: bool = False,
+) -> int:
+    """Run `factory decompose`: file the refactor ticket that extracts one feature of `repo_path`.
+
+    The agents, the budget and the request are checked before the API key is looked for and before
+    a model is called; a missing key is `AuthOrConfigError` (exit 4). Prose goes to stderr under
+    `as_json`, where stdout gets exactly one JSON document. Without it the text report goes to
+    stdout. Returns 0 once the ticket is filed.
+    """
+    agents = resolve_decompose_agents(allow_unpublished=allow_unpublished)
+    budget = Budget(DEFAULT_BUDGET_USD if budget_usd is None else budget_usd)
+    check_request(agents, repo_path, entry_point, feature, start, ref=ref, repository=repository)
+    if not os.environ.get(API_KEY_ENV):
+        raise AuthOrConfigError(
+            f"{API_KEY_ENV} is not set",
+            hint=f"store it with `agb sys secrets set {API_KEY_ENV}` and export it",
+        )
+    with Trace() as trace:
+        result = run_decompose(
+            agents,
+            repo_path,
+            entry_point,
+            feature,
+            start,
+            trace,
+            ref=ref,
+            repository=repository,
+            runner=run,
+            budget=budget,
+        )
+    if as_json:
+        print(result.text(), file=sys.stderr)
+        print(json.dumps(result.to_json()))
+    else:
+        print(result.text())
+    return ExitCode.OK
 
 
 # --- the ticket --------------------------------------------------------------------------------

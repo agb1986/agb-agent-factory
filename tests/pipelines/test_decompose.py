@@ -5,6 +5,7 @@ ground truth of `legacy-billing`, and they read the built fixture. The store is 
 `tmp_path`.
 """
 
+import json
 import shutil
 from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
@@ -16,6 +17,7 @@ import pytest
 from pydantic import BaseModel
 
 from evals.graders.ground_truth import load_truth
+from factory.cli import main
 from factory.exit import ExitCode, FactoryError, NotFoundError, UsageError
 from fixtures.build import BuiltFixture, build
 from pipelines import decompose
@@ -679,3 +681,122 @@ class TestRequest:
         result = decompose_repo(agents, repo, trace, runner, repository=REPO, feature=f"  {NAME} ")
         assert result.item.repo == REPO
         assert runner.calls[1]["payload"]["feature"]["name"] == NAME
+
+
+@pytest.fixture
+def cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> DecomposeRunner:
+    """Point `factory decompose` at a temporary store, a fake key and the fake runner."""
+    runner = DecomposeRunner()
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(tmp_path / "traces.duckdb"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(decompose, "run", runner)
+    return runner
+
+
+def _argv(repo: Path, *extra: str, **changes: str) -> list[str]:
+    asked = {"entry-point": ENTRY_POINT, "feature": NAME, "start": START} | {
+        name.replace("_", "-"): value for name, value in changes.items()
+    }
+    flags = [part for name, value in asked.items() for part in (f"--{name}", value)]
+    return ["decompose", str(repo), *flags, "--allow-unpublished", *extra]
+
+
+class TestCommand:
+    def test_json_is_one_document_on_stdout_and_the_text_is_on_stderr(
+        self,
+        cli: DecomposeRunner,
+        repo: Path,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        argv = _argv(repo, "--json", "--repository", REPO, "--ref", "HEAD")
+        assert main(argv) == ExitCode.OK
+        captured = capsys.readouterr()
+        document = json.loads(captured.out)
+        assert captured.err.startswith("decompose run ")
+        assert (document["ticket"]["kind"], document["ticket"]["status"]) == ("refactor", "todo")
+        assert document["ticket"]["repo"] == REPO
+        with Trace(tmp_path / "traces.duckdb") as trace:
+            (item,) = WorkItems(trace).list()
+        assert item.id == document["ticket"]["id"]
+        assert blueprint_of(item.ticket().body) == blueprint()
+
+    def test_text_without_json_and_the_budget_flag(
+        self, cli: DecomposeRunner, repo: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(_argv(repo, "--budget-usd", "1.5")) == ExitCode.OK
+        out = capsys.readouterr().out
+        assert out.startswith("decompose run ") and "filed wi-1 (todo)" in out
+        assert [call["budget"].usd for call in cli.calls] == [1.5, 1.5]
+
+    def test_it_needs_the_api_key(
+        self,
+        cli: DecomposeRunner,
+        repo: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.delenv("ANTHROPIC_API_KEY")
+        assert main(_argv(repo)) == ExitCode.AUTH_OR_CONFIG
+        assert "ANTHROPIC_API_KEY" in capsys.readouterr().err
+        assert cli.calls == []
+
+    @pytest.mark.parametrize("key", ["set", "missing"])
+    @pytest.mark.parametrize(
+        ("extra", "changes", "code"),
+        [
+            ([], {"entry_point": "main"}, ExitCode.USAGE),
+            ([], {"entry_point": "legacy_billing/nope.py"}, ExitCode.NOT_FOUND),
+            ([], {"feature": " "}, ExitCode.USAGE),
+            ([], {"start": "apply_late_fees"}, ExitCode.USAGE),
+            (["--ref", "no-such-ref"], {}, ExitCode.NOT_FOUND),
+            (["--repository", "billing"], {}, ExitCode.USAGE),
+            (["--budget-usd", "0"], {}, ExitCode.USAGE),
+        ],
+    )
+    def test_bad_input_is_refused_before_the_key_and_the_agents(
+        self,
+        cli: DecomposeRunner,
+        repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        key: str,
+        extra: list[str],
+        changes: dict[str, str],
+        code: ExitCode,
+    ) -> None:
+        if key == "missing":
+            monkeypatch.delenv("ANTHROPIC_API_KEY")
+        assert main(_argv(repo, *extra, **changes)) == code
+        assert cli.calls == []
+
+    def test_a_repository_that_does_not_exist_and_a_dirty_one_are_refused(
+        self, cli: DecomposeRunner, repo: Path, tmp_path: Path
+    ) -> None:
+        assert main(_argv(tmp_path / "nope")) == ExitCode.NOT_FOUND
+        make_dirty(repo, "modified")
+        assert main(_argv(repo)) == ExitCode.USAGE
+        assert cli.calls == []
+
+    @pytest.mark.parametrize("flag", ["--entry-point", "--feature", "--start"])
+    def test_the_three_questions_are_required(
+        self, cli: DecomposeRunner, repo: Path, flag: str
+    ) -> None:
+        argv = _argv(repo)
+        at = argv.index(flag)
+        assert main(argv[:at] + argv[at + 2 :]) == ExitCode.USAGE
+        assert cli.calls == []
+
+    def test_an_unpublished_agent_needs_the_flag(self, cli: DecomposeRunner, repo: Path) -> None:
+        argv = [part for part in _argv(repo) if part != "--allow-unpublished"]
+        assert main(argv) == ExitCode.NOT_FOUND
+        assert cli.calls == []
+
+    def test_a_failing_agent_passes_its_exit_code_on(
+        self, cli: DecomposeRunner, repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        cli.failing[EXTRACTION[0]] = BudgetExceeded(1.0, 1.25)
+        assert main(_argv(repo, "--json")) == ExitCode.ERROR
+        assert capsys.readouterr().out == ""
+        with Trace(tmp_path / "traces.duckdb") as trace:
+            assert WorkItems(trace).list() == []
