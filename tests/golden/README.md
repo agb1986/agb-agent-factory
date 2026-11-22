@@ -14,6 +14,7 @@ fixed values, and compares the result to `tests/golden/<name>.json`.
 | `triage.json` | `factory triage <repo> --json` |
 | `fix.json` | `factory fix <repo> --finding <json> --json` |
 | `incident.json` | `factory incident <repo> --event <json> --json` |
+| `decompose.json` | `factory decompose <repo> --entry-point <symbol> --feature <name> --start <symbol> --json` |
 | `build.json` | `factory build wi-1 --repo <repo> --json`, on a ready item |
 | `hotfix.json` | `factory hotfix wi-1 --repo <repo> --json`, on a ready incident item |
 | `plan.json` | `factory plan <repo> --prd @file --approve --json`, after a first `--idea` run |
@@ -60,6 +61,12 @@ replaces the repository path, the two output paths and the fix commit, which cha
 the `empty-ratings-divide-by-zero` eval case, a fake triage-diagnostics and test-writer and a fake
 sandbox (`IncidentRunner` and `FakeSandbox` in `tests/pipelines/test_incident.py`). Its test also
 replaces the repository path, which appears twice, and the report path.
+
+`decompose.json` runs `factory decompose` on the `legacy-billing` fixture for its late fees feature,
+with a fake code-archaeology and extraction-modularization (`DecomposeRunner` in
+`tests/pipelines/test_decompose.py`) that answer from the fixture's ground truth. Its test also
+replaces the repository path, which appears twice. The commit is kept: a built fixture has the same
+commit id every time.
 
 `build.json` runs `factory build` on a one-commit repository whose `origin` is the fake
 `acme/widgets`, with the fake coder of `tests/pipelines/test_build_loop.py` (`BuildRunner`), the

@@ -23,7 +23,16 @@ from factory import cli
 from factory.cli import main
 from factory.exit import ExitCode
 from fixtures.build import build
-from pipelines import build_loop, fix_loop, hotfix, incident, plan_loop, review_panel, triage
+from pipelines import (
+    build_loop,
+    decompose,
+    fix_loop,
+    hotfix,
+    incident,
+    plan_loop,
+    review_panel,
+    triage,
+)
 from registry import AgentRef
 from registry.common_schemas import Ticket
 from registry.spec import LLMSpec
@@ -34,6 +43,7 @@ from runtime.work_items import WorkItems
 from tests.gh_fake import FakeGh, github_repo
 from tests.pipelines.test_build_loop import FULL, PULL_JSON, REPO_JSON, BuildRunner
 from tests.pipelines.test_build_loop import _ticket as build_ticket
+from tests.pipelines.test_decompose import DecomposeRunner
 from tests.pipelines.test_fix_loop import FINDING, FakeSandbox, FixRunner
 from tests.pipelines.test_hotfix import SequencedSandbox, hotfix_repo, hotfix_ticket, route_gh
 from tests.pipelines.test_hotfix import _runner as hotfix_runner
@@ -333,6 +343,27 @@ def test_incident_json(
     document["repo_path"] = document["ticket"]["repo"] = "<repo>"
     document["report_path"] = "<out-dir>/<pipeline-run-id>.json"
     golden("incident", document)
+
+
+# --- decompose
+
+
+def test_decompose_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    golden: Golden,
+) -> None:
+    monkeypatch.setenv("FACTORY_TRACE_DB", str(tmp_path / "traces.duckdb"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(decompose, "run", DecomposeRunner())
+    (fixture,) = build(["legacy-billing"], dest=tmp_path / "repos")
+    argv = ["decompose", str(fixture.path), "--entry-point", "legacy_billing/cli.py::main"]
+    argv += ["--feature", "late fees", "--start", "legacy_billing/billing.py::apply_late_fees"]
+    document = _run([*argv, "--allow-unpublished", "--json"], capsys)
+    # The path is under tmp_path.
+    document["repo_path"] = document["ticket"]["repo"] = "<repo>"
+    golden("decompose", document)
 
 
 # --- build
