@@ -33,6 +33,7 @@ ADR_TEAMS: dict[str, str | None] = {
     "benchmark": "research",
     "spike": "research",
     "code-archaeology": "decomp",
+    "extraction-modularization": "decomp",
     "action-guard": None,
 }
 """Each agent's team, from the table in docs/decisions/0002-work-items.md. Spike and story-breakdown,
