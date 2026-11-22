@@ -14,6 +14,7 @@ tree with `ast` and shares no code with the tools, so it can judge them.
 from __future__ import annotations
 
 import ast
+import re
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
@@ -223,8 +224,9 @@ def check_ground_truth(
     `files` are the relative POSIX paths of the tree and `read_file(path)` returns the text of one,
     or None. Raises `FixtureManifestError` listing every problem: a symbol that is not defined, a
     snippet that is not in the source of its symbol, a call or a feature use whose name is not at
-    the place given, a module missing from the map or with other imports, and a `dead-code` entry
-    of `defects.yaml` whose symbol is missing here, has another window, or the other way round.
+    the place given, a decoy whose evidence does not fit its kind or that is listed as dead, a
+    module missing from the map or with other imports, and a `dead-code` entry of `defects.yaml`
+    whose symbol is missing here, has another kind or window, or the other way round.
     """
     tree = _Tree(set(files), read_file)
     problems: list[str] = []
@@ -237,6 +239,7 @@ def check_ground_truth(
             problems.append(f"{owner}: snippet {site.snippet!r} is not in {site.symbol}")
     problems += _check_modules(truth, tree)
     problems += _check_dead_code(truth, defects, tree)
+    problems += _check_decoys(truth)
     problems += _check_calls(truth)
     problems += _check_features(truth, tree)
     if problems:
@@ -252,8 +255,21 @@ def _path(symbol: str) -> str:
 
 
 def _name(symbol: str) -> str:
-    """Return the last name of a symbol, or the empty string for a module."""
-    return symbol.partition("::")[2].rpartition(".")[2]
+    """Return the last name of a symbol: for a module, the name it is imported by."""
+    path, _, name = symbol.partition("::")
+    if name:
+        return name.rpartition(".")[2]
+    parts = PurePosixPath(path).with_suffix("").parts
+    return parts[-2] if parts[-1] == "__init__" and len(parts) > 1 else parts[-1]
+
+
+def _names(text: str, symbol: str) -> bool:
+    """Tell whether `text` holds the last name of `symbol` as a whole word."""
+    return re.search(rf"\b{re.escape(_name(symbol))}\b", text) is not None
+
+
+type _Definition = tuple[str, tuple[int, int]]
+"""The kind of a definition, and its first and last line."""
 
 
 class _Tree:
@@ -263,7 +279,7 @@ class _Tree:
         self.files = files
         self._read = read_file
         self._parsed: dict[str, tuple[list[str], ast.Module] | None] = {}
-        self._spans: dict[str, dict[str, tuple[int, int]]] = {}
+        self._defined: dict[str, dict[str, _Definition]] = {}
 
     def module(self, path: str) -> ast.Module | None:
         """Return the parsed module at `path`, or None when it is missing or does not parse."""
@@ -278,9 +294,19 @@ class _Tree:
             return None
         if not name:
             return 1, max(1, len(loaded[0]))
-        if path not in self._spans:
-            self._spans[path] = dict(_spans(loaded[1].body, ""))
-        return self._spans[path].get(name)
+        defined = self._definitions(path, loaded[1]).get(name)
+        return None if defined is None else defined[1]
+
+    def kind(self, symbol: str) -> str | None:
+        """Return function, class, method, name or module, or None when it is not defined."""
+        path, _, name = symbol.partition("::")
+        loaded = self._load(path)
+        if loaded is None:
+            return None
+        if not name:
+            return "module"
+        defined = self._definitions(path, loaded[1]).get(name)
+        return None if defined is None else defined[0]
 
     def source(self, symbol: str) -> str | None:
         """Return the source lines of `symbol`, or None when it is not defined."""
@@ -289,6 +315,11 @@ class _Tree:
         if span is None or loaded is None:
             return None
         return "\n".join(loaded[0][span[0] - 1 : span[1]])
+
+    def _definitions(self, path: str, module: ast.Module) -> dict[str, _Definition]:
+        if path not in self._defined:
+            self._defined[path] = dict(_definitions(module.body, "", in_class=False))
+        return self._defined[path]
 
     def _load(self, path: str) -> tuple[list[str], ast.Module] | None:
         if path not in self._parsed:
@@ -303,19 +334,23 @@ class _Tree:
         return self._parsed[path]
 
 
-def _spans(body: list[ast.stmt], prefix: str) -> Iterator[tuple[str, tuple[int, int]]]:
-    """Yield the qualified name and the lines, decorators included, of what `body` defines."""
+def _definitions(
+    body: list[ast.stmt], prefix: str, *, in_class: bool
+) -> Iterator[tuple[str, _Definition]]:
+    """Yield the qualified name, kind and lines, decorators included, of what `body` defines."""
     for node in body:
         end = node.end_lineno or node.lineno
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            is_class = isinstance(node, ast.ClassDef)
+            kind = "class" if is_class else "method" if in_class else "function"
             first = min([node.lineno, *(d.lineno for d in node.decorator_list)])
-            yield prefix + node.name, (first, end)
-            yield from _spans(node.body, f"{prefix}{node.name}.")
+            yield prefix + node.name, (kind, (first, end))
+            yield from _definitions(node.body, f"{prefix}{node.name}.", in_class=is_class)
         elif not prefix and isinstance(node, ast.Assign | ast.AnnAssign):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             for target in targets:
                 if isinstance(target, ast.Name):
-                    yield target.id, (node.lineno, end)
+                    yield target.id, ("name", (node.lineno, end))
 
 
 def _symbols(truth: GroundTruth) -> Iterator[tuple[str, str]]:
@@ -411,15 +446,32 @@ def _check_dead_code(truth: GroundTruth, defects: DefectManifest, tree: _Tree) -
             span,
         ):
             yield f"{key}: {listed[key].symbol} is at lines {span[0]}-{span[1]}, not at its defect"
-        if (listed[key].kind == "module") == ("::" in listed[key].symbol):
+        if tree.kind(listed[key].symbol) != listed[key].kind:
             yield f"{key}: {listed[key].symbol} is not a {listed[key].kind}"
+
+
+def _check_decoys(truth: GroundTruth) -> Iterator[str]:
+    """Yield a problem for every decoy that is listed as dead or whose evidence does not fit."""
+    dead = {entry.symbol for entry in truth.dead_code}
+    for decoy in truth.decoys:
+        if decoy.symbol in dead:
+            yield f"{decoy.id}: {decoy.symbol} is listed as dead code"
+        place = PurePosixPath(_path(decoy.evidence.symbol))
+        if decoy.kind == "test_only" and place.is_relative_to(truth.package):
+            yield f"{decoy.id}: the evidence of a test_only decoy is outside {truth.package}"
+        if decoy.kind == "reexport" and place.name != "__init__.py":
+            yield f"{decoy.id}: the evidence of a reexport decoy is in an __init__.py"
+        named = _names(decoy.evidence.snippet, decoy.symbol)
+        if named == (decoy.kind == "dynamic_lookup"):
+            verb = "names" if named else "does not name"
+            yield f"{decoy.id}: snippet {decoy.evidence.snippet!r} {verb} {decoy.symbol}"
 
 
 def _check_calls(truth: GroundTruth) -> Iterator[str]:
     """Yield a problem for every call whose snippet does not name its callee."""
     for chain in truth.call_chains:
         for call in chain.calls:
-            if _name(call.callee) not in call.snippet:
+            if not _names(call.snippet, call.callee):
                 yield f"{chain.id}: snippet {call.snippet!r} does not name {call.callee}"
 
 
@@ -428,8 +480,8 @@ def _check_features(truth: GroundTruth, tree: _Tree) -> Iterator[str]:
     for feature in truth.features:
         own = "\n".join(tree.source(symbol) or "" for symbol in feature.symbols)
         for symbol in feature.uses:
-            if _name(symbol) not in own:
+            if not _names(own, symbol):
                 yield f"{feature.id}: none of its symbols names {symbol}"
         for site in feature.called_from:
-            if not any(_name(symbol) in site.snippet for symbol in feature.symbols):
+            if not any(_names(site.snippet, symbol) for symbol in feature.symbols):
                 yield f"{feature.id}: {site.snippet!r} calls none of its symbols"
