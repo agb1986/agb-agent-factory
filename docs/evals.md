@@ -294,8 +294,9 @@ numbers, module roles or, except where a rule says so, the extra entries an answ
   targets. This too is checked in every case, for every dynamic call of the fixture.
 - `features`: the blueprint's `symbols`, the callers in its `called_from`, the symbols in its
   `state` and the paths in its `pinning_tests` hold every one the entry lists, and its `uses` hold
-  every one but at most one. Nothing in the entry's `uses` or `called_from` may be in the blueprint's
-  `symbols`, by itself or through its class or module. Other extra entries are no failure.
+  every one but at most one. Nothing in the entry's `uses` or `called_from` may be in the
+  blueprint's `symbols`, by itself or through its class or module. Other extra entries are no
+  failure.
 
 A `rubric` case may carry `expected.ground_truth` as well. The same checks then run before its judge,
 and a failed one ends the case; the cases of extraction-modularization name a feature this way. No
