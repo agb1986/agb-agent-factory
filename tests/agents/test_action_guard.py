@@ -46,7 +46,7 @@ def _input(**overrides: Any) -> dict[str, Any]:
 
 
 def test_manifest_resolves_to_the_documented_version(spec: LLMSpec) -> None:
-    assert spec.address == "action-guard@0.1.1"
+    assert spec.address == "action-guard@0.1.2"
     assert spec.kind == "llm"
     assert spec.model == "claude-haiku-5-5"
     assert spec.effort == "low"

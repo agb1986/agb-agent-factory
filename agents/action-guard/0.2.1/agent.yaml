@@ -1,5 +1,5 @@
 name: action-guard
-version: 0.2.0
+version: 0.2.1
 kind: llm
 description: Decides whether one tool call that changes something is safe to run inside the worktree, under the offline or the networked spike sandbox.
 model: claude-haiku-5-5 # verified by tests/live/test_action_guard_live.py

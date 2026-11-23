@@ -11,7 +11,7 @@ from registry.spec import LLMSpec
 from runtime.guard import render_call
 from runtime.hooks import ToolCall
 
-AGENT_DIR = AGENTS_DIR / "action-guard" / "0.2.0"
+AGENT_DIR = AGENTS_DIR / "action-guard" / "0.2.1"
 
 
 @pytest.fixture(scope="module")
@@ -37,7 +37,7 @@ def _input(**overrides: Any) -> dict[str, Any]:
 
 
 def test_manifest_resolves_to_0_2_with_the_same_model(spec: LLMSpec) -> None:
-    assert spec.address == "action-guard@0.2.0"
+    assert spec.address == "action-guard@0.2.1"
     assert spec.model == "claude-haiku-5-5"
     assert spec.effort == "low"
     assert spec.guard is None

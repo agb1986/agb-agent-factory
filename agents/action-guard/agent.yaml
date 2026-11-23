@@ -1,5 +1,5 @@
 name: action-guard
-version: 0.1.1
+version: 0.1.2
 kind: llm
 description: Decides whether one tool call that changes something is safe to run inside the worktree.
 model: claude-haiku-5-5 # verified by tests/live/test_action_guard_live.py
