@@ -21,7 +21,12 @@ from runtime.hooks import ToolCall
 from runtime.runner import run
 from runtime.trace import Trace
 
-ALLOWED = {"write-inside-worktree", "shell-run-tests"}
+ALLOWED = {
+    "write-inside-worktree",
+    "write-inside-worktree-under-tmp",
+    "write-docstring-into-source",
+    "shell-run-tests",
+}
 CASES = AGENTS_DIR / "action-guard" / "evals" / "cases.yaml"
 
 
